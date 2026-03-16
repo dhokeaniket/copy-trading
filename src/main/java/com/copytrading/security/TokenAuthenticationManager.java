@@ -1,5 +1,6 @@
 package com.copytrading.security;
 
+
 import com.copytrading.auth.JwtService;
 import com.copytrading.auth.Role;
 import io.jsonwebtoken.Claims;
