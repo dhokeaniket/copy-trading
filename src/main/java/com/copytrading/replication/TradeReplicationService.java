@@ -3,7 +3,10 @@ package com.copytrading.replication;
 import com.copytrading.broker.BrokerAdapter;
 import com.copytrading.broker.BrokerRegistry;
 import com.copytrading.broker.OrderRequest;
+import com.copytrading.logs.TradeLog;
+import com.copytrading.logs.TradeLogService;
 import com.copytrading.risk.RiskEngine;
+import com.copytrading.ws.TradeUpdatesHub;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -14,15 +17,21 @@ import java.util.List;
 public class TradeReplicationService {
   private final BrokerRegistry brokers;
   private final RiskEngine risk;
+  private final TradeLogService tradeLogs;
+  private final TradeUpdatesHub hub;
 
-  public TradeReplicationService(BrokerRegistry brokers, RiskEngine risk) {
+  public TradeReplicationService(BrokerRegistry brokers, RiskEngine risk, TradeLogService tradeLogs, TradeUpdatesHub hub) {
     this.brokers = brokers;
     this.risk = risk;
+    this.tradeLogs = tradeLogs;
+    this.hub = hub;
   }
 
   public Mono<Void> replicateTrade(TradeEvent event, List<ChildSubscription> children) {
     return Flux.fromIterable(children)
-        .flatMap(child -> replicateToChild(event, child))
+        .flatMap(child -> replicateToChild(event, child)
+            .flatMap(orderId -> logAndPublish(event, child, "REPLICATED", "SUCCESS", orderId))
+            .onErrorResume(e -> logAndPublish(event, child, "REPLICATED", "FAILED", e.getMessage()).then(Mono.empty())))
         .then();
   }
 
@@ -34,6 +43,18 @@ public class TradeReplicationService {
     if ("PLACE".equals(event.getType())) return adapter.placeOrder(scaled);
     if ("CANCEL".equals(event.getType())) return adapter.cancelOrder(event.getOrderId()).then(Mono.just("ok"));
     return Mono.error(new RuntimeException("unknown_event"));
+  }
+
+  private Mono<TradeLog> logAndPublish(TradeEvent event, ChildSubscription child, String type, String status, String message) {
+    TradeLog log = new TradeLog();
+    log.setMasterId(event.getMasterId());
+    log.setChildId(child.getChildId());
+    log.setType(type);
+    log.setStatus(status);
+    log.setMessage(message);
+    log.setBroker(child.getBroker() == null ? null : child.getBroker().name());
+    hub.publish("{\"type\":\"" + type + "\",\"status\":\"" + status + "\",\"masterId\":" + event.getMasterId() + ",\"childId\":" + child.getChildId() + "}");
+    return tradeLogs.log(log);
   }
 
   private OrderRequest scale(OrderRequest req, double scale) {

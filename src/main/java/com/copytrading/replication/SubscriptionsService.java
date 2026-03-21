@@ -1,12 +1,18 @@
 package com.copytrading.replication;
 
+import com.copytrading.subscription.SubscriptionService;
 import org.springframework.stereotype.Service;
-
-import java.util.List;
+import reactor.core.publisher.Mono;
 
 @Service
 public class SubscriptionsService {
-  public List<ChildSubscription> findSubscribedChildren(Long masterId) {
-    return List.of();
+  private final SubscriptionService subscriptions;
+
+  public SubscriptionsService(SubscriptionService subscriptions) {
+    this.subscriptions = subscriptions;
+  }
+
+  public Mono<java.util.List<ChildSubscription>> findSubscribedChildren(Long masterId) {
+    return subscriptions.findSubscribedChildren(masterId);
   }
 }

@@ -1,11 +1,13 @@
 package com.copytrading.auth;
 
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
@@ -31,6 +33,7 @@ public class AuthController {
         .filter(UserAccount::isActive)
         .filter(u -> encoder.matches(password, u.getPasswordHash()))
         .map(u -> Map.of("token", jwtService.generateToken(u.getUsername(), u.getRole(), Map.of())))
-        .switchIfEmpty(Mono.error(new RuntimeException("invalid_credentials")));
+        .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "invalid_credentials")))
+        .onErrorMap(e -> e instanceof ResponseStatusException ? e : new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "db_unavailable", e));
   }
 }

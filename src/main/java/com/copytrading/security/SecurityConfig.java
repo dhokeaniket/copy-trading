@@ -20,6 +20,7 @@ public class SecurityConfig {
         .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
         .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
         .authorizeExchange(ex -> ex
+            .pathMatchers("/", "/health").permitAll()
             .pathMatchers("/api/auth/**").permitAll()
             .pathMatchers("/actuator/**").hasRole("ADMIN")
             .anyExchange().authenticated()

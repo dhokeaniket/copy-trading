@@ -1,13 +1,18 @@
 package com.copytrading.logs;
 
 import org.springframework.data.annotation.Id;
+import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
 
 @Table("trade_logs")
 public class TradeLog {
   @Id
   private Long id;
+
+  @Column("masterid")
   private Long masterId;
+
+  @Column("childid")
   private Long childId;
   private String type;
   private String status;

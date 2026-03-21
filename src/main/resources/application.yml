@@ -1,18 +1,38 @@
 server:
-  port: 8080
+  port: 8081
+
+app:
+  kafka:
+    enabled: ${APP_KAFKA_ENABLED:true}
 
 spring:
   application:
     name: copy-trading-backend
   r2dbc:
-    url: r2dbc:postgresql://localhost:5432/copytrading
-    username: ${DB_USER:postgres}
-    password: ${DB_PASS:postgres}
+    url: r2dbc:postgresql://127.0.0.1:5432/copytrading
+    username: postgres
+    password: Password
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
     consumer:
       group-id: copy-trading-consumer
       auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring:
+          json:
+            use:
+              type:
+                headers: true
+            value:
+              default:
+                type: com.copytrading.replication.TradeEvent
+            trusted:
+              packages: com.copytrading.replication
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
   data:
     redis:
       host: ${REDIS_HOST:localhost}
