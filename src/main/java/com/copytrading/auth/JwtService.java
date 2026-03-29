@@ -14,62 +14,93 @@ import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Date;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class JwtService {
-  private final SecretKey key;
-  private final String issuer;
-  private final long expirationSeconds;
 
-  public JwtService(
-      @Value("${jwt.secret}") String secret,
-      @Value("${jwt.issuer}") String issuer,
-      @Value("${jwt.expirationSeconds}") long expirationSeconds
-  ) {
-    this.key = buildKey(secret);
-    this.issuer = issuer;
-    this.expirationSeconds = expirationSeconds;
-  }
+    private final SecretKey key;
+    private final String issuer;
+    private final long accessTokenExpSeconds;
+    private final long refreshTokenExpSeconds;
 
-  private static SecretKey buildKey(String secret) {
-    byte[] raw;
-    try {
-      raw = Decoders.BASE64.decode(secret);
-    } catch (Exception e) {
-      raw = secret.getBytes(StandardCharsets.UTF_8);
+    public JwtService(
+            @Value("${jwt.secret}") String secret,
+            @Value("${jwt.issuer}") String issuer,
+            @Value("${jwt.accessTokenExpirationSeconds}") long accessTokenExpSeconds,
+            @Value("${jwt.refreshTokenExpirationSeconds}") long refreshTokenExpSeconds) {
+        this.key = buildKey(secret);
+        this.issuer = issuer;
+        this.accessTokenExpSeconds = accessTokenExpSeconds;
+        this.refreshTokenExpSeconds = refreshTokenExpSeconds;
     }
 
-    byte[] keyBytes = sha256(raw);
-    return Keys.hmacShaKeyFor(keyBytes);
-  }
-
-  private static byte[] sha256(byte[] data) {
-    try {
-      MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      return digest.digest(data);
-    } catch (Exception e) {
-      throw new IllegalStateException("sha256_unavailable", e);
+    public String generateAccessToken(UUID userId, String email, String role) {
+        Instant now = Instant.now();
+        return Jwts.builder()
+                .setSubject(userId.toString())
+                .setIssuer(issuer)
+                .setIssuedAt(Date.from(now))
+                .setExpiration(Date.from(now.plusSeconds(accessTokenExpSeconds)))
+                .claim("email", email)
+                .claim("role", role)
+                .signWith(key, SignatureAlgorithm.HS256)
+                .compact();
     }
-  }
 
-  public String generateToken(String subject, Role role, Map<String, Object> claims) {
-    Instant now = Instant.now();
-    return Jwts.builder()
-        .setClaims(claims)
-        .setSubject(subject)
-        .setIssuer(issuer)
-        .setIssuedAt(Date.from(now))
-        .setExpiration(Date.from(now.plusSeconds(expirationSeconds)))
-        .claim("role", role.name())
-        .signWith(key, SignatureAlgorithm.HS256)
-        .compact();
-  }
+    /** Short-lived token (5 min) that only allows 2FA verification. */
+    public String generatePending2FAToken(UUID userId, String role) {
+        Instant now = Instant.now();
+        return Jwts.builder()
+                .setSubject(userId.toString())
+                .setIssuer(issuer)
+                .setIssuedAt(Date.from(now))
+                .setExpiration(Date.from(now.plusSeconds(300)))
+                .claim("role", role)
+                .claim("pending2fa", true)
+                .signWith(key, SignatureAlgorithm.HS256)
+                .compact();
+    }
 
-  public Claims parse(String token) {
-    return Jwts.parserBuilder()
-        .setSigningKey(key)
-        .build()
-        .parseClaimsJws(token)
-        .getBody();
-  }
+    public String generateRefreshToken(UUID userId) {
+        Instant now = Instant.now();
+        return Jwts.builder()
+                .setSubject(userId.toString())
+                .setIssuer(issuer)
+                .setIssuedAt(Date.from(now))
+                .setExpiration(Date.from(now.plusSeconds(refreshTokenExpSeconds)))
+                .claim("type", "refresh")
+                .signWith(key, SignatureAlgorithm.HS256)
+                .compact();
+    }
+
+    public long getRefreshTokenExpSeconds() {
+        return refreshTokenExpSeconds;
+    }
+
+    public Claims parse(String token) {
+        return Jwts.parserBuilder()
+                .setSigningKey(key)
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
+    }
+
+    private static SecretKey buildKey(String secret) {
+        byte[] raw;
+        try {
+            raw = Decoders.BASE64.decode(secret);
+        } catch (Exception e) {
+            raw = secret.getBytes(StandardCharsets.UTF_8);
+        }
+        return Keys.hmacShaKeyFor(sha256(raw));
+    }
+
+    private static byte[] sha256(byte[] data) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(data);
+        } catch (Exception e) {
+            throw new IllegalStateException("sha256_unavailable", e);
+        }
+    }
 }

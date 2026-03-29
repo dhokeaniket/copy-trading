@@ -5,25 +5,26 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.UUID;
 
 @Service
 public class BrokerTokenCache {
-  private final ReactiveStringRedisTemplate redis;
 
-  public BrokerTokenCache(ReactiveStringRedisTemplate redis) {
-    this.redis = redis;
-  }
+    private final ReactiveStringRedisTemplate redis;
 
-  public Mono<Boolean> putToken(long userId, String broker, String token, Duration ttl) {
-    String key = key(userId, broker);
-    return redis.opsForValue().set(key, token, ttl);
-  }
+    public BrokerTokenCache(ReactiveStringRedisTemplate redis) {
+        this.redis = redis;
+    }
 
-  public Mono<String> getToken(long userId, String broker) {
-    return redis.opsForValue().get(key(userId, broker));
-  }
+    public Mono<Boolean> putToken(UUID userId, String broker, String token, Duration ttl) {
+        return redis.opsForValue().set(key(userId, broker), token, ttl);
+    }
 
-  private String key(long userId, String broker) {
-    return "broker:token:" + broker + ":" + userId;
-  }
+    public Mono<String> getToken(UUID userId, String broker) {
+        return redis.opsForValue().get(key(userId, broker));
+    }
+
+    private String key(UUID userId, String broker) {
+        return "broker:token:" + broker + ":" + userId;
+    }
 }

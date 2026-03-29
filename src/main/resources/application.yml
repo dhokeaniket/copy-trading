@@ -3,9 +3,11 @@ server:
 
 app:
   kafka:
-    enabled: ${APP_KAFKA_ENABLED:true}
+    enabled: ${APP_KAFKA_ENABLED:false}
 
 spring:
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
   application:
     name: copy-trading-backend
   r2dbc:
@@ -41,4 +43,5 @@ spring:
 jwt:
   issuer: copy-trading
   secret: ${JWT_SECRET:change-me}
-  expirationSeconds: 86400
+  accessTokenExpirationSeconds: 900
+  refreshTokenExpirationSeconds: 604800

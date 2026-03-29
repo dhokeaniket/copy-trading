@@ -4,6 +4,7 @@ C:\Users\Aniket Dhoke\OneDrive\Desktop\Copy-Trading\Copy-Trading\src\main\java\c
 C:\Users\Aniket Dhoke\OneDrive\Desktop\Copy-Trading\Copy-Trading\src\main\java\com\copytrading\subscription\SubscriptionController.java
 C:\Users\Aniket Dhoke\OneDrive\Desktop\Copy-Trading\Copy-Trading\src\main\java\com\copytrading\ws\TradeWebSocketHandler.java
 C:\Users\Aniket Dhoke\OneDrive\Desktop\Copy-Trading\Copy-Trading\src\main\java\com\copytrading\kafka\KafkaTopicsConfig.java
+C:\Users\Aniket Dhoke\OneDrive\Desktop\Copy-Trading\Copy-Trading\src\main\java\com\copytrading\broker\MockGrowwAdapter.java
 C:\Users\Aniket Dhoke\OneDrive\Desktop\Copy-Trading\Copy-Trading\src\main\java\com\copytrading\cache\RedisConfig.java
 C:\Users\Aniket Dhoke\OneDrive\Desktop\Copy-Trading\Copy-Trading\src\main\java\com\copytrading\replication\TradeReplicationService.java
 C:\Users\Aniket Dhoke\OneDrive\Desktop\Copy-Trading\Copy-Trading\src\main\java\com\copytrading\security\TokenAuthenticationManager.java
