@@ -45,3 +45,9 @@ jwt:
   secret: ${JWT_SECRET:change-me}
   accessTokenExpirationSeconds: 900
   refreshTokenExpirationSeconds: 604800
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs

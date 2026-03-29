@@ -32,6 +32,8 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/auth/refresh-token").permitAll()
                         .pathMatchers("/api/v1/auth/forgot-password").permitAll()
                         .pathMatchers("/api/v1/auth/reset-password").permitAll()
+                        // Swagger UI
+                        .pathMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**").permitAll()
                         // Legacy auth path
                         .pathMatchers("/api/auth/**").permitAll()
                         // Admin-only endpoints
