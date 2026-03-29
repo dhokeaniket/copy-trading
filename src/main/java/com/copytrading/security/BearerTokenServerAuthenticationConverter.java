@@ -10,13 +10,15 @@ import reactor.core.publisher.Mono;
 
 @Component
 public class BearerTokenServerAuthenticationConverter implements ServerAuthenticationConverter {
-  @Override
-  public Mono<Authentication> convert(ServerWebExchange exchange) {
-    String header = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-    if (header != null && header.startsWith("Bearer ")) {
-      String token = header.substring(7);
-      return Mono.just(new UsernamePasswordAuthenticationToken(null, token));
+
+    @Override
+    public Mono<Authentication> convert(ServerWebExchange exchange) {
+        String header = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+        if (header != null && header.startsWith("Bearer ")) {
+            String token = header.substring(7);
+            return Mono.just(new UsernamePasswordAuthenticationToken(null, token));
+        }
+        // No token present — return empty so the filter skips (permitAll paths pass through)
+        return Mono.empty();
     }
-    return Mono.empty();
-  }
 }
