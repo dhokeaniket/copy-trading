@@ -7,6 +7,9 @@ import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.authentication.AuthenticationWebFilter;
+import org.springframework.security.web.server.util.matcher.NegatedServerWebExchangeMatcher;
+import org.springframework.security.web.server.util.matcher.OrServerWebExchangeMatcher;
+import org.springframework.security.web.server.util.matcher.PathPatternParserServerWebExchangeMatcher;
 import reactor.core.publisher.Mono;
 
 @Configuration
@@ -21,6 +24,24 @@ public class SecurityConfig {
         AuthenticationWebFilter filter = new AuthenticationWebFilter(authManager);
         filter.setServerAuthenticationConverter(converter);
 
+        // Don't run JWT filter on public/swagger paths
+        filter.setRequiresAuthenticationMatcher(new NegatedServerWebExchangeMatcher(
+                new OrServerWebExchangeMatcher(
+                        new PathPatternParserServerWebExchangeMatcher("/"),
+                        new PathPatternParserServerWebExchangeMatcher("/health"),
+                        new PathPatternParserServerWebExchangeMatcher("/swagger-ui.html"),
+                        new PathPatternParserServerWebExchangeMatcher("/swagger-ui/**"),
+                        new PathPatternParserServerWebExchangeMatcher("/v3/api-docs/**"),
+                        new PathPatternParserServerWebExchangeMatcher("/webjars/**"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/register"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/login"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/refresh-token"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/forgot-password"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/reset-password"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/auth/**")
+                )
+        ));
+
         return http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
                 .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
@@ -32,20 +53,12 @@ public class SecurityConfig {
                         })
                 )
                 .authorizeExchange(ex -> ex
-                        // Public endpoints
                         .pathMatchers("/", "/health").permitAll()
-                        .pathMatchers("/api/v1/auth/register").permitAll()
-                        .pathMatchers("/api/v1/auth/login").permitAll()
-                        .pathMatchers("/api/v1/auth/refresh-token").permitAll()
-                        .pathMatchers("/api/v1/auth/forgot-password").permitAll()
-                        .pathMatchers("/api/v1/auth/reset-password").permitAll()
-                        // Swagger UI
                         .pathMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**").permitAll()
-                        // Legacy auth path
+                        .pathMatchers("/api/v1/auth/register", "/api/v1/auth/login").permitAll()
+                        .pathMatchers("/api/v1/auth/refresh-token", "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password").permitAll()
                         .pathMatchers("/api/auth/**").permitAll()
-                        // Admin-only endpoints
                         .pathMatchers("/api/v1/admin/**").hasRole("ADMIN")
-                        // All other endpoints require authentication
                         .anyExchange().authenticated()
                 )
                 .addFilterAt(filter, SecurityWebFiltersOrder.AUTHENTICATION)
