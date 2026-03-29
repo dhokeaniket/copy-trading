@@ -311,8 +311,9 @@ public class AuthService {
     }
 
     private boolean verifyTotp(String secret, String code) {
-        CodeVerifier verifier = new DefaultCodeVerifier(
+        DefaultCodeVerifier verifier = new DefaultCodeVerifier(
                 new DefaultCodeGenerator(), new SystemTimeProvider());
+        verifier.setAllowedTimePeriodDiscrepancy(2); // allow ±60 seconds window
         return verifier.isValidCode(secret, code);
     }
 
