@@ -7,9 +7,6 @@ plugins {
 group = 'com.copytrading'
 version = '0.1.0'
 
-def localBuildRoot = System.getenv('LOCALAPPDATA') ?: System.getProperty('java.io.tmpdir')
-buildDir = new File(localBuildRoot, 'copy-trading-backend/build')
-
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
