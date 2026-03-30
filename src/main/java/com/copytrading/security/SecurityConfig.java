@@ -10,21 +10,38 @@ import org.springframework.security.web.server.authentication.AuthenticationWebF
 import org.springframework.security.web.server.util.matcher.NegatedServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.OrServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.PathPatternParserServerWebExchangeMatcher;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.reactive.CorsConfigurationSource;
+import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 import reactor.core.publisher.Mono;
+
+import java.util.List;
 
 @Configuration
 public class SecurityConfig {
 
     @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOriginPatterns(List.of("*"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("*"));
+        config.setAllowCredentials(true);
+        config.setMaxAge(3600L);
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
+    @Bean
     public SecurityWebFilterChain securityWebFilterChain(
             ServerHttpSecurity http,
             TokenAuthenticationManager authManager,
-            BearerTokenServerAuthenticationConverter converter) {
+            BearerTokenServerAuthenticationConverter converter,
+            CorsConfigurationSource corsSource) {
 
         AuthenticationWebFilter filter = new AuthenticationWebFilter(authManager);
         filter.setServerAuthenticationConverter(converter);
-
-        // Don't run JWT filter on public/swagger paths
         filter.setRequiresAuthenticationMatcher(new NegatedServerWebExchangeMatcher(
                 new OrServerWebExchangeMatcher(
                         new PathPatternParserServerWebExchangeMatcher("/"),
@@ -43,6 +60,7 @@ public class SecurityConfig {
         ));
 
         return http
+                .cors(cors -> cors.configurationSource(corsSource))
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
                 .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
                 .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
