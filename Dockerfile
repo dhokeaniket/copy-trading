@@ -9,6 +9,5 @@ RUN ./gradlew bootJar -x test --no-daemon
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY --from=build /app/build/libs/*.jar app.jar
-ENV PORT=8081
 EXPOSE 8081
-CMD java -Dserver.port=${PORT} -jar app.jar
+ENTRYPOINT ["java", "-jar", "app.jar"]
