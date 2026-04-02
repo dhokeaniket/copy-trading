@@ -80,3 +80,22 @@ CREATE INDEX IF NOT EXISTS idx_trade_logs_master ON trade_logs(master_id);
 CREATE INDEX IF NOT EXISTS idx_trade_logs_child ON trade_logs(child_id);
 CREATE INDEX IF NOT EXISTS idx_trade_logs_status ON trade_logs(status);
 CREATE INDEX IF NOT EXISTS idx_trade_logs_created ON trade_logs(created_at);
+
+-- Broker accounts (linked demat accounts)
+CREATE TABLE IF NOT EXISTS broker_accounts (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  broker_id       VARCHAR(30) NOT NULL,
+  client_id       VARCHAR(100) NOT NULL,
+  api_key         TEXT NOT NULL,
+  api_secret      TEXT NOT NULL,
+  access_token    TEXT,
+  nickname        VARCHAR(100),
+  status          VARCHAR(30) NOT NULL DEFAULT 'LINKED' CHECK (status IN ('LINKED','ACTIVE','INACTIVE','AUTH_REQUIRED')),
+  session_active  BOOLEAN NOT NULL DEFAULT FALSE,
+  session_expires TIMESTAMPTZ,
+  linked_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_broker_accounts_user ON broker_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_broker_accounts_broker ON broker_accounts(broker_id);
