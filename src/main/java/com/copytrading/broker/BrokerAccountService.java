@@ -126,23 +126,37 @@ public class BrokerAccountService {
         } else {
             tokenMono = growwClient.generateTokenWithSecret(a.getApiKey(), a.getApiSecret());
         }
-        return tokenMono.flatMap(resp -> {
-            Object payload = resp.get("payload");
-            if (payload instanceof Map p) {
-                String token = (String) p.get("token");
-                a.setAccessToken(token);
-                a.setSessionActive(true);
-                a.setStatus("ACTIVE");
-                a.setSessionExpires(Instant.now().plusSeconds(86400));
-                return repo.save(a).map(s -> {
-                    Map<String, Object> r = new LinkedHashMap<>();
-                    r.put("status", "SESSION_ACTIVE");
-                    r.put("expiresAt", s.getSessionExpires().toString());
-                    return r;
+        return tokenMono
+                .flatMap(resp -> {
+                    log.info("GROWW_LOGIN_RESPONSE raw={}", resp);
+                    // Groww returns token directly or inside payload
+                    String token = null;
+                    if (resp.containsKey("payload") && resp.get("payload") instanceof Map p) {
+                        token = (String) p.get("token");
+                    } else if (resp.containsKey("token")) {
+                        token = (String) resp.get("token");
+                    }
+                    if (token == null || token.isBlank()) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                                "Groww login failed: " + resp.getOrDefault("error", resp)));
+                    }
+                    a.setAccessToken(token);
+                    a.setSessionActive(true);
+                    a.setStatus("ACTIVE");
+                    a.setSessionExpires(Instant.now().plusSeconds(86400));
+                    return repo.save(a).map(s -> {
+                        Map<String, Object> r = new LinkedHashMap<>();
+                        r.put("status", "SESSION_ACTIVE");
+                        r.put("expiresAt", s.getSessionExpires().toString());
+                        return r;
+                    });
+                })
+                .onErrorResume(e -> {
+                    if (e instanceof ResponseStatusException) return Mono.error(e);
+                    log.error("GROWW_LOGIN_FAILED error={}", e.getMessage(), e);
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                            "Groww API error: " + e.getMessage()));
                 });
-            }
-            return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Broker login failed: " + resp));
-        });
     }
 
     // 3.8 Check session status

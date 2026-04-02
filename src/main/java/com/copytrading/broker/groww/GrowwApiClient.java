@@ -51,11 +51,18 @@ public class GrowwApiClient {
         body.put("key_type", "approval");
         body.put("checksum", checksum);
         body.put("timestamp", timestamp);
+        log.info("GROWW_TOKEN_REQUEST timestamp={} checksum={}", timestamp, checksum);
         return client.post()
                 .uri("/v1/api/login/token")
                 .header("Authorization", apiKey)
                 .bodyValue(body)
                 .retrieve()
+                .onStatus(status -> status.isError(), response ->
+                        response.bodyToMono(String.class)
+                                .flatMap(err -> {
+                                    log.error("GROWW_TOKEN_ERROR status={} body={}", response.statusCode(), err);
+                                    return Mono.error(new RuntimeException("Groww API error " + response.statusCode() + ": " + err));
+                                }))
                 .bodyToMono(Map.class)
                 .doOnNext(r -> log.info("GROWW_TOKEN_RESPONSE status={}", r.get("status")));
     }
