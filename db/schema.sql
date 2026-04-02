@@ -49,19 +49,20 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id);
 
--- Subscriptions table
+-- Subscriptions table (master-child copy trading links)
 CREATE TABLE IF NOT EXISTS subscriptions (
-  id         BIGSERIAL PRIMARY KEY,
-  master_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  child_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  broker     VARCHAR(30) NOT NULL,
-  scale      DOUBLE PRECISION NOT NULL DEFAULT 1,
-  active     BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                BIGSERIAL PRIMARY KEY,
+  master_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  child_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  broker_account_id UUID REFERENCES broker_accounts(id),
+  scaling_factor    DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+  copying_status    VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (copying_status IN ('ACTIVE','PAUSED','INACTIVE')),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_master ON subscriptions(master_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_child ON subscriptions(child_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_unique ON subscriptions(master_id, child_id);
 
 -- Trade logs table
 CREATE TABLE IF NOT EXISTS trade_logs (

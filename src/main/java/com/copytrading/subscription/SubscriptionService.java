@@ -23,24 +23,23 @@ public class SubscriptionService {
 
     public Mono<Subscription> create(Subscription subscription) {
         subscription.setId(null);
-        subscription.setActive(true);
+        subscription.setCopyingStatus("ACTIVE");
         subscription.setCreatedAt(Instant.now());
         return repository.save(subscription)
-                .doOnSuccess(s -> log.info("SUBSCRIPTION_CREATED id={} master={} child={} broker={} scale={}",
-                        s.getId(), s.getMasterId(), s.getChildId(), s.getBroker(), s.getScale()));
+                .doOnSuccess(s -> log.info("SUBSCRIPTION_CREATED id={} master={} child={}",
+                        s.getId(), s.getMasterId(), s.getChildId()));
     }
 
     public Flux<Subscription> listByMaster(UUID masterId) {
-        return repository.findByMasterIdAndActive(masterId, true);
+        return repository.findByMasterIdAndCopyingStatus(masterId, "ACTIVE");
     }
 
     public Mono<List<ChildSubscription>> findSubscribedChildren(UUID masterId) {
-        return repository.findByMasterIdAndActive(masterId, true)
+        return repository.findByMasterIdAndCopyingStatus(masterId, "ACTIVE")
                 .map(s -> {
                     ChildSubscription c = new ChildSubscription();
                     c.setChildId(s.getChildId());
-                    c.setBroker(s.getBroker());
-                    c.setScale(s.getScale());
+                    c.setScale(s.getScalingFactor());
                     return c;
                 })
                 .collectList()

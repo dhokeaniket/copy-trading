@@ -1,6 +1,5 @@
 package com.copytrading.subscription;
 
-import com.copytrading.broker.BrokerType;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
@@ -20,14 +19,14 @@ public class Subscription {
     @Column("child_id")
     private UUID childId;
 
-    @Column("broker")
-    private BrokerType broker;
+    @Column("broker_account_id")
+    private UUID brokerAccountId;
 
-    @Column("scale")
-    private double scale;
+    @Column("scaling_factor")
+    private double scalingFactor;
 
-    @Column("active")
-    private boolean active;
+    @Column("copying_status")
+    private String copyingStatus;
 
     @Column("created_at")
     private Instant createdAt;
@@ -38,12 +37,12 @@ public class Subscription {
     public void setMasterId(UUID masterId) { this.masterId = masterId; }
     public UUID getChildId() { return childId; }
     public void setChildId(UUID childId) { this.childId = childId; }
-    public BrokerType getBroker() { return broker; }
-    public void setBroker(BrokerType broker) { this.broker = broker; }
-    public double getScale() { return scale; }
-    public void setScale(double scale) { this.scale = scale; }
-    public boolean isActive() { return active; }
-    public void setActive(boolean active) { this.active = active; }
+    public UUID getBrokerAccountId() { return brokerAccountId; }
+    public void setBrokerAccountId(UUID brokerAccountId) { this.brokerAccountId = brokerAccountId; }
+    public double getScalingFactor() { return scalingFactor; }
+    public void setScalingFactor(double scalingFactor) { this.scalingFactor = scalingFactor; }
+    public String getCopyingStatus() { return copyingStatus; }
+    public void setCopyingStatus(String copyingStatus) { this.copyingStatus = copyingStatus; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }

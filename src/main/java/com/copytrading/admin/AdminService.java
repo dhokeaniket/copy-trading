@@ -165,7 +165,7 @@ public class AdminService {
 
             var subs = tuple.getT4();
             var logs = tuple.getT5();
-            long activeSubs = subs.stream().filter(s -> s.isActive()).count();
+            long activeSubs = subs.stream().filter(s -> "ACTIVE".equals(s.getCopyingStatus())).count();
             long totalTrades = logs.stream().filter(l -> "EXECUTED".equals(l.getStatus())).count();
             long totalReplications = logs.stream().filter(l -> "REPLICATED".equals(l.getType())).count();
 
@@ -200,7 +200,7 @@ public class AdminService {
     public Mono<Map<String, Object>> getSubscriptions(UUID masterId, String status) {
         Flux<com.copytrading.subscription.Subscription> flux;
         if (masterId != null) {
-            flux = subscriptionRepo.findByMasterIdAndActive(masterId, !"INACTIVE".equalsIgnoreCase(status));
+            flux = subscriptionRepo.findByMasterId(masterId);
         } else {
             flux = subscriptionRepo.findAll();
         }
