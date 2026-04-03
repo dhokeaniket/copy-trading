@@ -5,6 +5,109 @@
 
 ---
 
+# SECTION 1: AUTHENTICATION (11 endpoints)
+
+## Public Endpoints (no token needed)
+
+### POST /api/v1/auth/register
+```json
+Request:  { "name": "string", "email": "string", "password": "string", "role": "MASTER|CHILD", "phone": "string" }
+Response: { "userId": "uuid", "message": "Registration successful" }
+```
+
+### POST /api/v1/auth/login
+```json
+Request:  { "email": "string", "password": "string" }
+Response: { "accessToken": "jwt (15 min)", "refreshToken": "jwt (7 days)", "user": { "userId", "name", "email", "role", "status", "phone", "twoFactorEnabled", "createdAt", "brokerAccounts" }, "requires2FA": false }
+```
+If `requires2FA: true` → use the returned `accessToken` (temporary 5 min) to call `/auth/2fa/verify`
+
+### POST /api/v1/auth/refresh-token
+```json
+Request:  { "refreshToken": "string" }
+Response: { "accessToken": "new jwt", "refreshToken": "new refresh (old one revoked)" }
+```
+
+### POST /api/v1/auth/forgot-password
+```json
+Request:  { "email": "string" }
+Response: { "message": "If the email exists, a reset link has been sent" }
+```
+
+### POST /api/v1/auth/reset-password
+```json
+Request:  { "token": "string (from email)", "newPassword": "string" }
+Response: { "message": "Password reset successful" }
+```
+
+## Authenticated Endpoints (need `Authorization: Bearer <token>`)
+
+### GET /api/v1/auth/me
+```
+Response: { "userId", "name", "email", "role", "status", "phone", "twoFactorEnabled", "createdAt", "brokerAccounts" }
+```
+
+### PUT /api/v1/auth/me
+```json
+Request: { "name": "string", "phone": "string", "currentPassword": "string", "newPassword": "string" }
+Response: updated user object
+```
+
+### POST /api/v1/auth/logout
+```json
+Request:  { "refreshToken": "string" }
+Response: { "message": "Logged out successfully" }
+```
+
+### POST /api/v1/auth/2fa/enable
+```
+Response: { "qrCodeUri": "otpauth://totp/...", "secret": "base32_secret" }
+```
+Frontend: show QR code for user to scan with authenticator app
+
+### POST /api/v1/auth/2fa/verify
+```json
+Request:  { "otp": "6 digit code" }
+Response: { "accessToken": "jwt", "refreshToken": "jwt", "message": "2FA enabled and verified" }
+```
+
+### DELETE /api/v1/auth/2fa/disable
+```json
+Request:  { "password": "string", "otp": "6 digit code" }
+Response: { "message": "2FA disabled successfully" }
+```
+
+## Frontend Auth Flow:
+```
+1. User registers → POST /auth/register
+2. User logs in → POST /auth/login → store accessToken + refreshToken
+3. All API calls include: Authorization: Bearer <accessToken>
+4. When accessToken expires (15 min) → POST /auth/refresh-token with refreshToken
+5. When refreshToken expires (7 days) → user must login again
+```
+
+---
+
+# SECTION 2: ADMIN (12 endpoints)
+All require `Authorization: Bearer <admin_token>` with role ADMIN.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | /api/v1/admin/users | List users (filters: role, status, page, limit) |
+| POST | /api/v1/admin/users/master | Create master: `{ "name", "email", "password", "phone" }` |
+| POST | /api/v1/admin/users/child | Create child: `{ "name", "email", "password", "phone" }` |
+| GET | /api/v1/admin/users/{userId} | Get user details |
+| PUT | /api/v1/admin/users/{userId} | Update user: `{ "name", "email", "phone" }` |
+| PATCH | /api/v1/admin/users/{userId}/activate | Activate user |
+| PATCH | /api/v1/admin/users/{userId}/deactivate | Deactivate user |
+| DELETE | /api/v1/admin/users/{userId} | Delete user permanently |
+| GET | /api/v1/admin/analytics | Platform analytics |
+| GET | /api/v1/admin/system-health | System health metrics |
+| GET | /api/v1/admin/subscriptions | All subscriptions |
+| GET | /api/v1/admin/trade-logs | All trade logs |
+
+---
+
 # HOW BROKER INTEGRATION WORKS
 
 ## What is it?

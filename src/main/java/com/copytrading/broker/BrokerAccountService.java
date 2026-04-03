@@ -114,6 +114,7 @@ public class BrokerAccountService {
                     // Mock login for other brokers
                     a.setSessionActive(true);
                     a.setStatus("ACTIVE");
+                    a.setAccessToken("mock-session-token");
                     a.setSessionExpires(Instant.now().plusSeconds(86400));
                     return repo.save(a).map(s -> mockSessionResponse(s));
                 });
