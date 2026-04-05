@@ -148,7 +148,13 @@ public class BrokerAccountService {
                 r -> {
                     if (r.containsKey("payload") && r.get("payload") instanceof Map p) return (String) p.get("token");
                     return (String) r.get("token");
-                }));
+                }))
+                .onErrorResume(e -> {
+                    if (e instanceof ResponseStatusException) return Mono.error(e);
+                    log.error("GROWW_LOGIN_FAILED error={}", e.getMessage(), e);
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                            "Groww API error: " + e.getMessage()));
+                });
     }
 
     // --- ZERODHA LOGIN ---
@@ -162,7 +168,12 @@ public class BrokerAccountService {
                         r -> {
                             if (r.containsKey("data") && r.get("data") instanceof Map d) return (String) d.get("access_token");
                             return (String) r.get("access_token");
-                        }));
+                        }))
+                .onErrorResume(e -> {
+                    if (e instanceof ResponseStatusException) return Mono.error(e);
+                    log.error("ZERODHA_LOGIN_FAILED error={}", e.getMessage(), e);
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Zerodha API error: " + e.getMessage()));
+                });
     }
 
     // --- FYERS LOGIN ---
@@ -173,7 +184,12 @@ public class BrokerAccountService {
         }
         return fyersClient.generateToken(a.getApiKey(), a.getApiSecret(), req.getAuthCode())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Fyers",
-                        r -> (String) r.get("access_token")));
+                        r -> (String) r.get("access_token")))
+                .onErrorResume(e -> {
+                    if (e instanceof ResponseStatusException) return Mono.error(e);
+                    log.error("FYERS_LOGIN_FAILED error={}", e.getMessage(), e);
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Fyers API error: " + e.getMessage()));
+                });
     }
 
     // --- UPSTOX LOGIN ---
@@ -184,14 +200,22 @@ public class BrokerAccountService {
         }
         return upstoxClient.generateToken(a.getApiKey(), a.getApiSecret(), req.getAuthCode(), null)
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
-                        r -> (String) r.get("access_token")));
+                        r -> (String) r.get("access_token")))
+                .onErrorResume(e -> {
+                    if (e instanceof ResponseStatusException) return Mono.error(e);
+                    log.error("UPSTOX_LOGIN_FAILED error={}", e.getMessage(), e);
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Upstox API error: " + e.getMessage()));
+                });
     }
 
     /** Common helper: extract token from response, save session, return status */
     private Mono<Map<String, Object>> extractAndSaveSession(BrokerAccount a, Map resp, String brokerName,
                                                              java.util.function.Function<Map, String> tokenExtractor) {
         log.info("{}_LOGIN_RESPONSE raw={}", brokerName.toUpperCase(), resp);
-        String token = tokenExtractor.apply(resp);
+        String token = null;
+        try { token = tokenExtractor.apply(resp); } catch (Exception e) {
+            log.error("{}_TOKEN_EXTRACT_FAILED: {}", brokerName.toUpperCase(), e.getMessage());
+        }
         if (token == null || token.isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     brokerName + " login failed: " + resp));
