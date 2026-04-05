@@ -64,6 +64,33 @@ public class ChildService {
                 }));
     }
 
+    // 5.2b Bulk subscribe to multiple masters
+    public Mono<Map<String, Object>> bulkSubscribe(UUID childId, List<Map<String, Object>> masters) {
+        return reactor.core.publisher.Flux.fromIterable(masters)
+                .flatMap(m -> {
+                    UUID masterId = UUID.fromString(m.get("masterId").toString());
+                    UUID brokerAccountId = m.containsKey("brokerAccountId") && m.get("brokerAccountId") != null
+                            ? UUID.fromString(m.get("brokerAccountId").toString()) : null;
+                    double factor = m.containsKey("scalingFactor") && m.get("scalingFactor") != null
+                            ? ((Number) m.get("scalingFactor")).doubleValue() : 1.0;
+                    return subs.findByMasterIdAndChildId(masterId, childId)
+                            .map(existing -> Map.<String, Object>of("masterId", masterId.toString(), "status", "ALREADY_SUBSCRIBED"))
+                            .switchIfEmpty(Mono.defer(() -> {
+                                Subscription s = new Subscription();
+                                s.setMasterId(masterId);
+                                s.setChildId(childId);
+                                s.setBrokerAccountId(brokerAccountId);
+                                s.setScalingFactor(factor);
+                                s.setCopyingStatus("ACTIVE");
+                                s.setCreatedAt(Instant.now());
+                                return subs.save(s).map(saved -> Map.<String, Object>of(
+                                        "masterId", masterId.toString(), "status", "SUBSCRIBED", "subscriptionId", saved.getId()));
+                            }));
+                })
+                .collectList()
+                .map(results -> Map.<String, Object>of("results", results));
+    }
+
     // 5.3 Unsubscribe
     public Mono<Map<String, String>> unsubscribe(UUID childId, UUID masterId) {
         return subs.findByMasterIdAndChildId(masterId, childId)

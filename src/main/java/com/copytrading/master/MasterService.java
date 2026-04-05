@@ -59,6 +59,53 @@ public class MasterService {
                 }));
     }
 
+    // 4.2b Bulk link children
+    public Mono<Map<String, Object>> bulkLinkChildren(UUID masterId, List<Map<String, Object>> children) {
+        return reactor.core.publisher.Flux.fromIterable(children)
+                .flatMap(c -> {
+                    UUID childId = UUID.fromString(c.get("childId").toString());
+                    Double factor = c.containsKey("scalingFactor") && c.get("scalingFactor") != null
+                            ? ((Number) c.get("scalingFactor")).doubleValue() : 1.0;
+                    return subs.findByMasterIdAndChildId(masterId, childId)
+                            .map(existing -> Map.<String, Object>of("childId", childId.toString(), "status", "ALREADY_LINKED"))
+                            .switchIfEmpty(Mono.defer(() -> {
+                                Subscription s = new Subscription();
+                                s.setMasterId(masterId);
+                                s.setChildId(childId);
+                                s.setScalingFactor(factor);
+                                s.setCopyingStatus("ACTIVE");
+                                s.setCreatedAt(Instant.now());
+                                return subs.save(s).map(saved -> Map.<String, Object>of(
+                                        "childId", childId.toString(), "status", "LINKED", "subscriptionId", saved.getId()));
+                            }));
+                })
+                .collectList()
+                .map(results -> Map.<String, Object>of("results", results));
+    }
+
+    // 4.2c Master subscribes to a child (master follows child's trades)
+    public Mono<Map<String, Object>> subscribeToChild(UUID masterId, UUID childId, Double scalingFactor) {
+        // Here the master becomes the follower: masterId in child_id column, childId in master_id column
+        // This means the "child" user is the trade source, and the "master" user copies their trades
+        return subs.findByMasterIdAndChildId(childId, masterId)
+                .flatMap(e -> Mono.<Map<String, Object>>error(
+                        new ResponseStatusException(HttpStatus.CONFLICT, "Already subscribed to this child")))
+                .switchIfEmpty(Mono.defer(() -> {
+                    Subscription s = new Subscription();
+                    s.setMasterId(childId);   // child is the trade source
+                    s.setChildId(masterId);   // master is the follower
+                    s.setScalingFactor(scalingFactor != null ? scalingFactor : 1.0);
+                    s.setCopyingStatus("ACTIVE");
+                    s.setCreatedAt(Instant.now());
+                    return subs.save(s).map(saved -> {
+                        Map<String, Object> r = new LinkedHashMap<>();
+                        r.put("subscriptionId", saved.getId());
+                        r.put("message", "Subscribed to child successfully");
+                        return r;
+                    });
+                }));
+    }
+
     // 4.3 Unlink child
     public Mono<Map<String, String>> unlinkChild(UUID masterId, UUID childId) {
         return subs.findByMasterIdAndChildId(masterId, childId)

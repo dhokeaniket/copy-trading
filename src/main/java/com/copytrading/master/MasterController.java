@@ -1,7 +1,9 @@
 package com.copytrading.master;
 
+import com.copytrading.master.dto.BulkLinkRequest;
 import com.copytrading.master.dto.LinkChildRequest;
 import com.copytrading.master.dto.UpdateScalingRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -28,6 +30,27 @@ public class MasterController {
                                                 @PathVariable UUID childId,
                                                 @RequestBody(required = false) LinkChildRequest req) {
         return service.linkChild(UUID.fromString(userId), childId, req != null ? req.getScalingFactor() : null);
+    }
+
+    @PostMapping(value = "/children/bulk-link", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> bulkLinkChildren(@AuthenticationPrincipal String userId,
+                                                       @RequestBody BulkLinkRequest req) {
+        var children = req.getChildren().stream().map(c -> {
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("childId", c.getChildId().toString());
+            if (c.getScalingFactor() != null) m.put("scalingFactor", c.getScalingFactor());
+            return m;
+        }).toList();
+        return service.bulkLinkChildren(UUID.fromString(userId), children);
+    }
+
+    @PostMapping(value = "/subscribe/{childId}", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    public Mono<Map<String, Object>> subscribeToChild(@AuthenticationPrincipal String userId,
+                                                       @PathVariable UUID childId,
+                                                       @RequestBody(required = false) LinkChildRequest req) {
+        return service.subscribeToChild(UUID.fromString(userId), childId,
+                req != null ? req.getScalingFactor() : null);
     }
 
     @DeleteMapping("/children/{childId}/unlink")

@@ -1,5 +1,6 @@
 package com.copytrading.child;
 
+import com.copytrading.child.dto.BulkSubscribeRequest;
 import com.copytrading.child.dto.ChildScalingRequest;
 import com.copytrading.child.dto.MasterIdRequest;
 import com.copytrading.child.dto.SubscribeRequest;
@@ -28,6 +29,20 @@ public class ChildController {
     public Mono<Map<String, Object>> subscribe(@AuthenticationPrincipal String userId,
                                                 @RequestBody SubscribeRequest req) {
         return service.subscribe(UUID.fromString(userId), req.getMasterId(), req.getBrokerAccountId());
+    }
+
+    @PostMapping(value = "/subscriptions/bulk", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    public Mono<Map<String, Object>> bulkSubscribe(@AuthenticationPrincipal String userId,
+                                                    @RequestBody BulkSubscribeRequest req) {
+        var masters = req.getMasters().stream().map(m -> {
+            Map<String, Object> map = new java.util.LinkedHashMap<>();
+            map.put("masterId", m.getMasterId().toString());
+            if (m.getBrokerAccountId() != null) map.put("brokerAccountId", m.getBrokerAccountId().toString());
+            if (m.getScalingFactor() != null) map.put("scalingFactor", m.getScalingFactor());
+            return map;
+        }).toList();
+        return service.bulkSubscribe(UUID.fromString(userId), masters);
     }
 
     @DeleteMapping("/subscriptions/{masterId}")
