@@ -24,6 +24,24 @@ public class ZerodhaApiClient {
     }
 
     /**
+     * Direct login using api_key + api_secret (generates a session token using checksum).
+     * checksum = SHA-256(api_key + api_secret)
+     */
+    public Mono<Map> generateSessionWithSecret(String apiKey, String apiSecret) {
+        String checksum = sha256Hex(apiKey + apiSecret);
+        log.info("ZERODHA_SECRET_LOGIN apiKey={}...", apiKey.substring(0, Math.min(6, apiKey.length())));
+        return client.post()
+                .uri("/session/token")
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .bodyValue("api_key=" + apiKey + "&checksum=" + checksum)
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Zerodha secret login " + r.statusCode() + ": " + e))))
+                .bodyToMono(Map.class)
+                .doOnNext(r -> log.info("ZERODHA_SECRET_RESP keys={}", r.keySet()));
+    }
+
+    /**
      * Exchange request_token for access_token.
      * checksum = SHA-256(api_key + request_token + api_secret)
      */

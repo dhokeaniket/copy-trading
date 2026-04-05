@@ -40,12 +40,12 @@ public class BrokerAccountService {
     // 3.1 List supported brokers
     public Mono<Map<String, Object>> listBrokers() {
         List<Map<String, Object>> brokers = List.of(
-            brokerInfo("GROWW", "Groww", true, List.of("apiKey", "apiSecret", "clientId")),
-            brokerInfo("ZERODHA", "Zerodha", true, List.of("apiKey", "apiSecret", "clientId")),
-            brokerInfo("FYERS", "Fyers", true, List.of("apiKey", "apiSecret", "clientId")),
-            brokerInfo("UPSTOX", "Upstox", true, List.of("apiKey", "apiSecret", "clientId")),
-            brokerInfo("ANGELONE", "Angel One", false, List.of("apiKey", "apiSecret", "clientId")),
-            brokerInfo("DHAN", "Dhan", false, List.of("apiKey", "apiSecret", "clientId"))
+            brokerInfo("GROWW", "Groww", true, List.of("apiKey", "apiSecret", "clientId"), "secret", null),
+            brokerInfo("ZERODHA", "Zerodha", true, List.of("apiKey", "apiSecret", "clientId"), "oauth", "requestToken"),
+            brokerInfo("FYERS", "Fyers", true, List.of("apiKey", "apiSecret", "clientId"), "oauth", "authCode"),
+            brokerInfo("UPSTOX", "Upstox", true, List.of("apiKey", "apiSecret", "clientId"), "oauth", "authCode"),
+            brokerInfo("ANGELONE", "Angel One", false, List.of("apiKey", "apiSecret", "clientId"), "oauth", "authCode"),
+            brokerInfo("DHAN", "Dhan", false, List.of("apiKey", "apiSecret", "clientId"), "oauth", "authCode")
         );
         return Mono.just(Map.of("brokers", brokers));
     }
@@ -160,8 +160,9 @@ public class BrokerAccountService {
     // --- ZERODHA LOGIN ---
     private Mono<Map<String, Object>> loginZerodha(BrokerAccount a, BrokerLoginRequest req) {
         if (req == null || req.getRequestToken() == null || req.getRequestToken().isBlank()) {
+            String loginUrl = "https://kite.zerodha.com/connect/login?v=3&api_key=" + a.getApiKey();
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "requestToken is required for Zerodha login. Get it from: https://kite.zerodha.com/connect/login?v=3&api_key=" + a.getApiKey()));
+                    "requestToken required. Open this URL to login: " + loginUrl));
         }
         return zerodhaClient.generateSession(a.getApiKey(), a.getApiSecret(), req.getRequestToken())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Zerodha",
@@ -180,7 +181,7 @@ public class BrokerAccountService {
     private Mono<Map<String, Object>> loginFyers(BrokerAccount a, BrokerLoginRequest req) {
         if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "authCode is required for Fyers login. Get it from Fyers OAuth flow with app_id=" + a.getApiKey()));
+                    "authCode required. Complete Fyers OAuth flow with app_id=" + a.getApiKey()));
         }
         return fyersClient.generateToken(a.getApiKey(), a.getApiSecret(), req.getAuthCode())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Fyers",
@@ -195,8 +196,9 @@ public class BrokerAccountService {
     // --- UPSTOX LOGIN ---
     private Mono<Map<String, Object>> loginUpstox(BrokerAccount a, BrokerLoginRequest req) {
         if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
+            String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + a.getApiKey() + "&redirect_uri=https://localhost";
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "authCode is required for Upstox login. Get it from: https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + a.getApiKey() + "&redirect_uri=https://localhost"));
+                    "authCode required. Open this URL to login: " + loginUrl));
         }
         return upstoxClient.generateToken(a.getApiKey(), a.getApiSecret(), req.getAuthCode(), null)
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
@@ -231,6 +233,45 @@ public class BrokerAccountService {
             r.put("expiresAt", s.getSessionExpires().toString());
             return r;
         });
+    }
+
+    // 3.7b Get OAuth URL for browser-based login
+    public Mono<Map<String, Object>> getOAuthUrl(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
+                .map(a -> {
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("broker", a.getBrokerId());
+                    switch (a.getBrokerId()) {
+                        case "GROWW":
+                            r.put("loginMethod", "secret");
+                            r.put("message", "No OAuth needed. Call login with empty body {}");
+                            break;
+                        case "ZERODHA":
+                            r.put("loginMethod", "oauth");
+                            r.put("loginField", "requestToken");
+                            r.put("oauthUrl", "https://kite.zerodha.com/connect/login?v=3&api_key=" + a.getApiKey());
+                            r.put("message", "Open oauthUrl in browser. After login, capture request_token from redirect URL and POST it as {\"requestToken\":\"...\"}");
+                            break;
+                        case "FYERS":
+                            r.put("loginMethod", "oauth");
+                            r.put("loginField", "authCode");
+                            r.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id=" + a.getApiKey() + "&redirect_uri=https://localhost&response_type=code&state=ok");
+                            r.put("message", "Open oauthUrl in browser. After login, capture auth_code from redirect URL and POST it as {\"authCode\":\"...\"}");
+                            break;
+                        case "UPSTOX":
+                            r.put("loginMethod", "oauth");
+                            r.put("loginField", "authCode");
+                            r.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + a.getApiKey() + "&redirect_uri=https://localhost");
+                            r.put("message", "Open oauthUrl in browser. After login, capture code from redirect URL and POST it as {\"authCode\":\"...\"}");
+                            break;
+                        default:
+                            r.put("loginMethod", "mock");
+                            r.put("message", "Mock broker. Call login with empty body {}");
+                    }
+                    return r;
+                });
     }
 
     // 3.8 Check session status
@@ -430,12 +471,14 @@ public class BrokerAccountService {
         return r;
     }
 
-    private Map<String, Object> brokerInfo(String id, String name, boolean active, List<String> fields) {
+    private Map<String, Object> brokerInfo(String id, String name, boolean active, List<String> fields, String loginMethod, String loginField) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("brokerId", id);
         m.put("name", name);
         m.put("requiredFields", fields);
         m.put("isActive", active);
+        m.put("loginMethod", loginMethod);  // "secret" = just api key+secret, "oauth" = needs browser redirect
+        if (loginField != null) m.put("loginField", loginField);  // field name to send in login request
         return m;
     }
 

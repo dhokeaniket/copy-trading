@@ -22,6 +22,26 @@ public class UpstoxApiClient {
     }
 
     /**
+     * Direct login using api_key + api_secret (client_credentials grant).
+     */
+    public Mono<Map> generateTokenWithSecret(String apiKey, String apiSecret) {
+        String body = "client_id=" + apiKey
+                + "&client_secret=" + apiSecret
+                + "&redirect_uri=https://localhost"
+                + "&grant_type=client_credentials";
+        log.info("UPSTOX_SECRET_LOGIN apiKey={}...", apiKey.substring(0, Math.min(8, apiKey.length())));
+        return client.post()
+                .uri("/v2/login/authorization/token")
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .bodyValue(body)
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Upstox secret login " + r.statusCode() + ": " + e))))
+                .bodyToMono(Map.class)
+                .doOnNext(r -> log.info("UPSTOX_SECRET_RESP keys={}", r.keySet()));
+    }
+
+    /**
      * Exchange auth_code for access_token via OAuth.
      */
     public Mono<Map> generateToken(String apiKey, String apiSecret, String authCode, String redirectUri) {

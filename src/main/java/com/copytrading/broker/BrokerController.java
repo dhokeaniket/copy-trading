@@ -69,6 +69,13 @@ public class BrokerController {
         return service.loginToBroker(accountId, UUID.fromString(userId), req);
     }
 
+    // 3.7b GET /brokers/accounts/:accountId/oauth-url (get OAuth login URL for browser redirect)
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/oauth-url")
+    public Mono<Map<String, Object>> getOAuthUrl(@PathVariable UUID accountId,
+                                                  @AuthenticationPrincipal String userId) {
+        return service.getOAuthUrl(accountId, UUID.fromString(userId));
+    }
+
     // 3.8 GET /brokers/accounts/:accountId/status
     @GetMapping("/api/v1/brokers/accounts/{accountId}/status")
     public Mono<Map<String, Object>> getSessionStatus(@PathVariable UUID accountId,

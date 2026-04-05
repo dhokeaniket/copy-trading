@@ -24,6 +24,28 @@ public class FyersApiClient {
     }
 
     /**
+     * Direct login using app_id + secret_key (no auth_code needed).
+     * appIdHash = SHA-256(app_id + ":" + secret_key)
+     */
+    public Mono<Map> generateTokenWithSecret(String appId, String secretKey) {
+        String appIdHash = sha256Hex(appId + ":" + secretKey);
+        log.info("FYERS_SECRET_LOGIN appId={}", appId);
+        return client.post()
+                .uri("/validate-authcode")
+                .header("Content-Type", "application/json")
+                .bodyValue(Map.of(
+                        "grant_type", "client_credentials",
+                        "appIdHash", appIdHash,
+                        "code", appIdHash
+                ))
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Fyers secret login " + r.statusCode() + ": " + e))))
+                .bodyToMono(Map.class)
+                .doOnNext(r -> log.info("FYERS_SECRET_RESP keys={}", r.keySet()));
+    }
+
+    /**
      * Exchange auth_code for access_token.
      * appIdHash = SHA-256(app_id + ":" + secret_key)
      */
