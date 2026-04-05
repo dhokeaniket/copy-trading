@@ -6,6 +6,7 @@ public enum BrokerType {
   ZERODHA,
   GROWW,
   UPSTOX,
+  FYERS,
   ANGEL_ONE,
   DHAN;
 
@@ -17,6 +18,9 @@ public enum BrokerType {
     String normalized = raw.trim().toUpperCase().replace('-', '_');
     if ("GROW".equals(normalized) || "GROWW".equals(normalized)) {
       return GROWW;
+    }
+    if ("FYER".equals(normalized) || "FYERS".equals(normalized)) {
+      return FYERS;
     }
     return BrokerType.valueOf(normalized);
   }

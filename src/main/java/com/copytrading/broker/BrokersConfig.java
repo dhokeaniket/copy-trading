@@ -20,5 +20,6 @@ public class BrokersConfig {
   public void register() {
     registry.register(BrokerType.ZERODHA, zerodhaAdapter);
     registry.register(BrokerType.GROWW, mockGrowwAdapter);
+    // Fyers, Upstox are handled directly in BrokerAccountService via API clients
   }
 }

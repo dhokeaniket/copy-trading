@@ -1,7 +1,10 @@
 package com.copytrading.broker;
 
 import com.copytrading.broker.dto.*;
+import com.copytrading.broker.fyers.FyersApiClient;
 import com.copytrading.broker.groww.GrowwApiClient;
+import com.copytrading.broker.upstox.UpstoxApiClient;
+import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -16,23 +19,32 @@ import java.util.*;
 public class BrokerAccountService {
 
     private static final Logger log = LoggerFactory.getLogger(BrokerAccountService.class);
-    private static final Set<String> SUPPORTED = Set.of("GROWW", "ZERODHA", "ANGELONE", "UPSTOX", "DHAN");
+    private static final Set<String> SUPPORTED = Set.of("GROWW", "ZERODHA", "ANGELONE", "UPSTOX", "DHAN", "FYERS");
 
     private final BrokerAccountRepository repo;
     private final GrowwApiClient growwClient;
+    private final ZerodhaApiClient zerodhaClient;
+    private final FyersApiClient fyersClient;
+    private final UpstoxApiClient upstoxClient;
 
-    public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient) {
+    public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
+                                ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
+                                UpstoxApiClient upstoxClient) {
         this.repo = repo;
         this.growwClient = growwClient;
+        this.zerodhaClient = zerodhaClient;
+        this.fyersClient = fyersClient;
+        this.upstoxClient = upstoxClient;
     }
 
     // 3.1 List supported brokers
     public Mono<Map<String, Object>> listBrokers() {
         List<Map<String, Object>> brokers = List.of(
             brokerInfo("GROWW", "Groww", true, List.of("apiKey", "apiSecret", "clientId")),
-            brokerInfo("ZERODHA", "Zerodha", false, List.of("apiKey", "apiSecret", "clientId")),
+            brokerInfo("ZERODHA", "Zerodha", true, List.of("apiKey", "apiSecret", "clientId")),
+            brokerInfo("FYERS", "Fyers", true, List.of("apiKey", "apiSecret", "clientId")),
+            brokerInfo("UPSTOX", "Upstox", true, List.of("apiKey", "apiSecret", "clientId")),
             brokerInfo("ANGELONE", "Angel One", false, List.of("apiKey", "apiSecret", "clientId")),
-            brokerInfo("UPSTOX", "Upstox", false, List.of("apiKey", "apiSecret", "clientId")),
             brokerInfo("DHAN", "Dhan", false, List.of("apiKey", "apiSecret", "clientId"))
         );
         return Mono.just(Map.of("brokers", brokers));
@@ -108,18 +120,23 @@ public class BrokerAccountService {
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
                 .flatMap(a -> {
-                    if ("GROWW".equals(a.getBrokerId())) {
-                        return loginGroww(a, req);
+                    switch (a.getBrokerId()) {
+                        case "GROWW":    return loginGroww(a, req);
+                        case "ZERODHA":  return loginZerodha(a, req);
+                        case "FYERS":    return loginFyers(a, req);
+                        case "UPSTOX":   return loginUpstox(a, req);
+                        default:
+                            // Mock login for unsupported brokers
+                            a.setSessionActive(true);
+                            a.setStatus("ACTIVE");
+                            a.setAccessToken("mock-session-token");
+                            a.setSessionExpires(Instant.now().plusSeconds(86400));
+                            return repo.save(a).map(this::mockSessionResponse);
                     }
-                    // Mock login for other brokers
-                    a.setSessionActive(true);
-                    a.setStatus("ACTIVE");
-                    a.setAccessToken("mock-session-token");
-                    a.setSessionExpires(Instant.now().plusSeconds(86400));
-                    return repo.save(a).map(s -> mockSessionResponse(s));
                 });
     }
 
+    // --- GROWW LOGIN ---
     private Mono<Map<String, Object>> loginGroww(BrokerAccount a, BrokerLoginRequest req) {
         Mono<Map> tokenMono;
         if (req != null && req.getTotpCode() != null && !req.getTotpCode().isBlank()) {
@@ -127,37 +144,69 @@ public class BrokerAccountService {
         } else {
             tokenMono = growwClient.generateTokenWithSecret(a.getApiKey(), a.getApiSecret());
         }
-        return tokenMono
-                .flatMap(resp -> {
-                    log.info("GROWW_LOGIN_RESPONSE raw={}", resp);
-                    // Groww returns token directly or inside payload
-                    String token = null;
-                    if (resp.containsKey("payload") && resp.get("payload") instanceof Map p) {
-                        token = (String) p.get("token");
-                    } else if (resp.containsKey("token")) {
-                        token = (String) resp.get("token");
-                    }
-                    if (token == null || token.isBlank()) {
-                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                                "Groww login failed: " + resp.getOrDefault("error", resp)));
-                    }
-                    a.setAccessToken(token);
-                    a.setSessionActive(true);
-                    a.setStatus("ACTIVE");
-                    a.setSessionExpires(Instant.now().plusSeconds(86400));
-                    return repo.save(a).map(s -> {
-                        Map<String, Object> r = new LinkedHashMap<>();
-                        r.put("status", "SESSION_ACTIVE");
-                        r.put("expiresAt", s.getSessionExpires().toString());
-                        return r;
-                    });
-                })
-                .onErrorResume(e -> {
-                    if (e instanceof ResponseStatusException) return Mono.error(e);
-                    log.error("GROWW_LOGIN_FAILED error={}", e.getMessage(), e);
-                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                            "Groww API error: " + e.getMessage()));
-                });
+        return tokenMono.flatMap(resp -> extractAndSaveSession(a, resp, "Groww",
+                r -> {
+                    if (r.containsKey("payload") && r.get("payload") instanceof Map p) return (String) p.get("token");
+                    return (String) r.get("token");
+                }));
+    }
+
+    // --- ZERODHA LOGIN ---
+    private Mono<Map<String, Object>> loginZerodha(BrokerAccount a, BrokerLoginRequest req) {
+        if (req == null || req.getRequestToken() == null || req.getRequestToken().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "requestToken is required for Zerodha login. Get it from: https://kite.zerodha.com/connect/login?v=3&api_key=" + a.getApiKey()));
+        }
+        return zerodhaClient.generateSession(a.getApiKey(), a.getApiSecret(), req.getRequestToken())
+                .flatMap(resp -> extractAndSaveSession(a, resp, "Zerodha",
+                        r -> {
+                            if (r.containsKey("data") && r.get("data") instanceof Map d) return (String) d.get("access_token");
+                            return (String) r.get("access_token");
+                        }));
+    }
+
+    // --- FYERS LOGIN ---
+    private Mono<Map<String, Object>> loginFyers(BrokerAccount a, BrokerLoginRequest req) {
+        if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "authCode is required for Fyers login. Get it from Fyers OAuth flow with app_id=" + a.getApiKey()));
+        }
+        return fyersClient.generateToken(a.getApiKey(), a.getApiSecret(), req.getAuthCode())
+                .flatMap(resp -> extractAndSaveSession(a, resp, "Fyers",
+                        r -> (String) r.get("access_token")));
+    }
+
+    // --- UPSTOX LOGIN ---
+    private Mono<Map<String, Object>> loginUpstox(BrokerAccount a, BrokerLoginRequest req) {
+        if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "authCode is required for Upstox login. Get it from: https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + a.getApiKey() + "&redirect_uri=https://localhost"));
+        }
+        return upstoxClient.generateToken(a.getApiKey(), a.getApiSecret(), req.getAuthCode(), null)
+                .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
+                        r -> (String) r.get("access_token")));
+    }
+
+    /** Common helper: extract token from response, save session, return status */
+    private Mono<Map<String, Object>> extractAndSaveSession(BrokerAccount a, Map resp, String brokerName,
+                                                             java.util.function.Function<Map, String> tokenExtractor) {
+        log.info("{}_LOGIN_RESPONSE raw={}", brokerName.toUpperCase(), resp);
+        String token = tokenExtractor.apply(resp);
+        if (token == null || token.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    brokerName + " login failed: " + resp));
+        }
+        a.setAccessToken(token);
+        a.setSessionActive(true);
+        a.setStatus("ACTIVE");
+        a.setSessionExpires(Instant.now().plusSeconds(86400));
+        return repo.save(a).map(s -> {
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("status", "SESSION_ACTIVE");
+            r.put("broker", brokerName);
+            r.put("expiresAt", s.getSessionExpires().toString());
+            return r;
+        });
     }
 
     // 3.8 Check session status
@@ -170,45 +219,61 @@ public class BrokerAccountService {
                             && a.getSessionExpires().isAfter(Instant.now());
                     Map<String, Object> r = new LinkedHashMap<>();
                     r.put("sessionActive", active);
+                    r.put("broker", a.getBrokerId());
                     r.put("expiresAt", a.getSessionExpires() != null ? a.getSessionExpires().toString() : null);
                     return r;
                 });
     }
 
-    // 3.9 Get margin (real for Groww, mock for others)
+    // 3.9 Get margin (real for all live brokers)
     public Mono<Map<String, Object>> getMargin(UUID accountId, UUID userId) {
         return getActiveAccount(accountId, userId).flatMap(a -> {
-            if ("GROWW".equals(a.getBrokerId())) {
-                return growwClient.getMargin(a.getAccessToken())
-                        .map(resp -> {
-                            Object payload = resp.get("payload");
-                            if (payload instanceof Map p) {
-                                Map<String, Object> r = new LinkedHashMap<>();
-                                r.put("availableMargin", p.getOrDefault("clear_cash", 0));
-                                r.put("usedMargin", p.getOrDefault("net_margin_used", 0));
-                                r.put("totalFunds", ((Number) p.getOrDefault("clear_cash", 0)).doubleValue()
-                                        + ((Number) p.getOrDefault("net_margin_used", 0)).doubleValue());
-                                r.put("collateral", p.getOrDefault("collateral_available", 0));
-                                return r;
-                            }
-                            return Map.<String, Object>of("raw", resp);
-                        });
+            switch (a.getBrokerId()) {
+                case "GROWW":
+                    return growwClient.getMargin(a.getAccessToken()).map(resp -> parseGrowwMargin(resp));
+                case "ZERODHA":
+                    return zerodhaClient.getMargins(a.getApiKey(), a.getAccessToken()).map(resp -> parseZerodhaMargin(resp));
+                case "FYERS":
+                    return fyersClient.getFunds(a.getAccessToken()).map(resp -> parseFyersMargin(resp));
+                case "UPSTOX":
+                    return upstoxClient.getFundsMargin(a.getAccessToken()).map(resp -> parseUpstoxMargin(resp));
+                default:
+                    return Mono.just(mockMargin());
             }
-            return Mono.just(mockMargin());
         });
     }
 
-    // 3.10 Get positions (real for Groww, mock for others)
+    // 3.10 Get positions (real for all live brokers)
     public Mono<Map<String, Object>> getPositions(UUID accountId, UUID userId) {
         return getActiveAccount(accountId, userId).flatMap(a -> {
-            if ("GROWW".equals(a.getBrokerId())) {
-                return growwClient.getPositions(a.getAccessToken(), null)
-                        .map(resp -> {
-                            Object payload = resp.get("payload");
-                            return Map.<String, Object>of("positions", payload != null ? payload : List.of());
-                        });
+            switch (a.getBrokerId()) {
+                case "GROWW":
+                    return growwClient.getPositions(a.getAccessToken(), null)
+                            .map(resp -> {
+                                Object payload = resp.get("payload");
+                                return Map.<String, Object>of("positions", payload != null ? payload : List.of());
+                            });
+                case "ZERODHA":
+                    return zerodhaClient.getPositions(a.getApiKey(), a.getAccessToken())
+                            .map(resp -> {
+                                Object data = resp.get("data");
+                                return Map.<String, Object>of("positions", data != null ? data : List.of());
+                            });
+                case "FYERS":
+                    return fyersClient.getPositions(a.getAccessToken())
+                            .map(resp -> {
+                                Object netPositions = resp.get("netPositions");
+                                return Map.<String, Object>of("positions", netPositions != null ? netPositions : List.of());
+                            });
+                case "UPSTOX":
+                    return upstoxClient.getPositions(a.getAccessToken())
+                            .map(resp -> {
+                                Object data = resp.get("data");
+                                return Map.<String, Object>of("positions", data != null ? data : List.of());
+                            });
+                default:
+                    return Mono.just(Map.<String, Object>of("positions", List.of()));
             }
-            return Mono.just(Map.<String, Object>of("positions", List.of()));
         });
     }
 
@@ -232,15 +297,92 @@ public class BrokerAccountService {
     public Mono<Map<String, Object>> adminBrokerStatus() {
         List<Map<String, Object>> statuses = List.of(
             Map.of("brokerId", "GROWW", "name", "Groww", "apiStatus", "UP", "latencyMs", 45, "lastChecked", Instant.now().toString()),
-            Map.of("brokerId", "ZERODHA", "name", "Zerodha", "apiStatus", "MOCK", "latencyMs", 0, "lastChecked", Instant.now().toString()),
+            Map.of("brokerId", "ZERODHA", "name", "Zerodha", "apiStatus", "UP", "latencyMs", 0, "lastChecked", Instant.now().toString()),
+            Map.of("brokerId", "FYERS", "name", "Fyers", "apiStatus", "UP", "latencyMs", 0, "lastChecked", Instant.now().toString()),
+            Map.of("brokerId", "UPSTOX", "name", "Upstox", "apiStatus", "UP", "latencyMs", 0, "lastChecked", Instant.now().toString()),
             Map.of("brokerId", "ANGELONE", "name", "Angel One", "apiStatus", "MOCK", "latencyMs", 0, "lastChecked", Instant.now().toString()),
-            Map.of("brokerId", "UPSTOX", "name", "Upstox", "apiStatus", "MOCK", "latencyMs", 0, "lastChecked", Instant.now().toString()),
             Map.of("brokerId", "DHAN", "name", "Dhan", "apiStatus", "MOCK", "latencyMs", 0, "lastChecked", Instant.now().toString())
         );
         return Mono.just(Map.of("brokers", statuses));
     }
 
-    // Helpers
+    // --- Margin parsers ---
+    private Map<String, Object> parseGrowwMargin(Map resp) {
+        Object payload = resp.get("payload");
+        if (payload instanceof Map p) {
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("availableMargin", p.getOrDefault("clear_cash", 0));
+            r.put("usedMargin", p.getOrDefault("net_margin_used", 0));
+            r.put("totalFunds", toDouble(p.getOrDefault("clear_cash", 0)) + toDouble(p.getOrDefault("net_margin_used", 0)));
+            r.put("collateral", p.getOrDefault("collateral_available", 0));
+            return r;
+        }
+        return Map.of("raw", resp);
+    }
+
+    private Map<String, Object> parseZerodhaMargin(Map resp) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        Object data = resp.get("data");
+        if (data instanceof Map d) {
+            Object equity = d.get("equity");
+            if (equity instanceof Map eq) {
+                Object avail = eq.get("available");
+                Object util = eq.get("utilised");
+                double cash = avail instanceof Map a ? toDouble(((Map) a).getOrDefault("cash", 0)) : 0;
+                double debits = util instanceof Map u ? toDouble(((Map) u).getOrDefault("debits", 0)) : 0;
+                r.put("availableMargin", cash - debits);
+                r.put("usedMargin", debits);
+                r.put("totalFunds", cash);
+                r.put("collateral", avail instanceof Map a2 ? toDouble(((Map) a2).getOrDefault("collateral", 0)) : 0);
+                return r;
+            }
+        }
+        r.put("raw", resp);
+        return r;
+    }
+
+    private Map<String, Object> parseFyersMargin(Map resp) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        Object fundLimit = resp.get("fund_limit");
+        if (fundLimit instanceof List fl) {
+            double available = 0, used = 0, total = 0;
+            for (Object item : fl) {
+                if (item instanceof Map m) {
+                    String title = (String) m.getOrDefault("title", "");
+                    double val = toDouble(m.getOrDefault("equityAmount", 0));
+                    if ("Total Balance".equalsIgnoreCase(title)) total = val;
+                    if ("Available Balance".equalsIgnoreCase(title)) available = val;
+                    if ("Utilized Amount".equalsIgnoreCase(title)) used = val;
+                }
+            }
+            r.put("availableMargin", available);
+            r.put("usedMargin", used);
+            r.put("totalFunds", total);
+            r.put("collateral", 0);
+            return r;
+        }
+        r.put("raw", resp);
+        return r;
+    }
+
+    private Map<String, Object> parseUpstoxMargin(Map resp) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        Object data = resp.get("data");
+        if (data instanceof Map d) {
+            Object equity = d.get("equity");
+            if (equity instanceof Map eq) {
+                r.put("availableMargin", toDouble(eq.getOrDefault("available_margin", 0)));
+                r.put("usedMargin", toDouble(eq.getOrDefault("used_margin", 0)));
+                r.put("totalFunds", toDouble(eq.getOrDefault("available_margin", 0)) + toDouble(eq.getOrDefault("used_margin", 0)));
+                r.put("collateral", toDouble(eq.getOrDefault("collateral", 0)));
+                return r;
+            }
+        }
+        r.put("raw", resp);
+        return r;
+    }
+
+    // --- Helpers ---
     private Mono<BrokerAccount> getActiveAccount(UUID accountId, UUID userId) {
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
@@ -271,5 +413,10 @@ public class BrokerAccountService {
         m.put("requiredFields", fields);
         m.put("isActive", active);
         return m;
+    }
+
+    private static double toDouble(Object val) {
+        if (val instanceof Number n) return n.doubleValue();
+        try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return 0; }
     }
 }
