@@ -388,3 +388,201 @@ All errors follow this format:
 | 404 | Account not found |
 | 502 | Broker API error (login failed, API down) |
 | 500 | Internal server error |
+
+
+---
+
+# SUBSCRIPTION ENDPOINTS (Master ↔ Child)
+
+---
+
+## MASTER ENDPOINTS (`/api/v1/master`)
+
+### POST /api/v1/master/children/{childId}/link — Link a child
+```json
+Request (optional):  { "scalingFactor": 1.5 }
+Response 200:        { "message": "Child linked successfully" }
+```
+
+### POST /api/v1/master/children/bulk-link — Bulk link multiple children
+```json
+Request:
+{
+  "children": [
+    { "childId": "uuid-1", "scalingFactor": 1.0 },
+    { "childId": "uuid-2", "scalingFactor": 0.5 },
+    { "childId": "uuid-3" }
+  ]
+}
+
+Response 200:
+{
+  "results": [
+    { "childId": "uuid-1", "status": "LINKED", "subscriptionId": 1 },
+    { "childId": "uuid-2", "status": "LINKED", "subscriptionId": 2 },
+    { "childId": "uuid-3", "status": "ALREADY_LINKED" }
+  ]
+}
+```
+
+### POST /api/v1/master/subscribe/{childId} — Master subscribes to a child (follows child's trades)
+```json
+Request (optional):  { "scalingFactor": 1.0 }
+Response 201:        { "subscriptionId": 5, "message": "Subscribed to child successfully" }
+```
+This reverses the normal flow — the master copies the child's trades.
+
+### DELETE /api/v1/master/children/{childId}/unlink — Unlink a child
+```json
+Response 200: { "message": "Child unlinked" }
+```
+
+### GET /api/v1/master/children — List linked children
+```json
+Response 200:
+{
+  "children": [
+    {
+      "childId": "uuid",
+      "name": "Child Name",
+      "email": "child@email.com",
+      "scalingFactor": 1.0,
+      "copyingStatus": "ACTIVE",
+      "subscribedAt": "2026-04-05T20:00:00Z"
+    }
+  ]
+}
+```
+
+### GET /api/v1/master/children/{childId}/scaling — Get child's scaling
+```json
+Response 200: { "childId": "uuid", "scalingFactor": 1.5 }
+```
+
+### PUT /api/v1/master/children/{childId}/scaling — Update child's scaling
+```json
+Request:  { "scalingFactor": 2.0 }
+Response 200: { "childId": "uuid", "scalingFactor": 2.0 }
+```
+
+### GET /api/v1/master/analytics
+```json
+Response 200:
+{
+  "totalPnl": 0,
+  "winRate": 0,
+  "totalTrades": 15,
+  "totalReplications": 12,
+  "childPerformance": [
+    { "childId": "uuid", "scalingFactor": 1.0, "copyingStatus": "ACTIVE" }
+  ]
+}
+```
+
+### GET /api/v1/master/trade-history
+```json
+Response 200: { "trades": [ ... ] }
+```
+
+---
+
+## CHILD ENDPOINTS (`/api/v1/child`)
+
+### GET /api/v1/child/masters — List available masters
+```json
+Response 200:
+{
+  "masters": [
+    { "masterId": "uuid", "name": "Master Name", "winRate": 0, "totalTrades": 0, "avgPnl": 0, "subscribers": 0 }
+  ]
+}
+```
+
+### POST /api/v1/child/subscriptions — Subscribe to a master
+```json
+Request:  { "masterId": "uuid", "brokerAccountId": "uuid" }
+Response 201: { "subscriptionId": 1, "message": "Subscribed successfully" }
+```
+
+### POST /api/v1/child/subscriptions/bulk — Bulk subscribe to multiple masters
+```json
+Request:
+{
+  "masters": [
+    { "masterId": "uuid-1", "brokerAccountId": "uuid-broker", "scalingFactor": 1.0 },
+    { "masterId": "uuid-2", "brokerAccountId": "uuid-broker" },
+    { "masterId": "uuid-3", "brokerAccountId": "uuid-broker", "scalingFactor": 0.5 }
+  ]
+}
+
+Response 201:
+{
+  "results": [
+    { "masterId": "uuid-1", "status": "SUBSCRIBED", "subscriptionId": 1 },
+    { "masterId": "uuid-2", "status": "SUBSCRIBED", "subscriptionId": 2 },
+    { "masterId": "uuid-3", "status": "ALREADY_SUBSCRIBED" }
+  ]
+}
+```
+
+### DELETE /api/v1/child/subscriptions/{masterId} — Unsubscribe
+```json
+Response 200: { "message": "Unsubscribed" }
+```
+
+### GET /api/v1/child/subscriptions — List subscriptions
+```json
+Response 200:
+{
+  "subscriptions": [
+    {
+      "masterId": "uuid",
+      "masterName": "Master Name",
+      "scalingFactor": 1.0,
+      "copyingStatus": "ACTIVE",
+      "subscribedAt": "2026-04-05T20:00:00Z",
+      "brokerAccountId": "uuid"
+    }
+  ]
+}
+```
+
+### GET /api/v1/child/scaling?masterId=uuid — Get scaling factor
+```json
+Response 200: { "scalingFactor": 1.5 }
+```
+
+### PUT /api/v1/child/scaling — Update scaling factor
+```json
+Request:  { "masterId": "uuid", "scalingFactor": 2.0 }
+Response 200: { "scalingFactor": 2.0 }
+```
+Scaling factor range: 0.01 to 10.0
+
+### POST /api/v1/child/copying/pause — Pause copying
+```json
+Request:  { "masterId": "uuid" }
+Response 200: { "message": "Copying paused" }
+```
+
+### POST /api/v1/child/copying/resume — Resume copying
+```json
+Request:  { "masterId": "uuid" }
+Response 200: { "message": "Copying resumed" }
+```
+
+### GET /api/v1/child/copied-trades
+```json
+Response 200: { "trades": [ ... ] }
+```
+
+### GET /api/v1/child/analytics
+```json
+Response 200:
+{
+  "totalPnl": 0,
+  "copiedTrades": 10,
+  "failedReplications": 1,
+  "masterPnlComparison": {}
+}
+```
