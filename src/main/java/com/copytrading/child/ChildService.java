@@ -126,11 +126,14 @@ public class ChildService {
                 .map(results -> Map.<String, Object>of("results", results));
     }
 
-    // 5.3 Unsubscribe
+    // 5.3 Unsubscribe (set INACTIVE, keep record for re-subscribe auto-approval)
     public Mono<Map<String, String>> unsubscribe(UUID childId, UUID masterId) {
         return subs.findByMasterIdAndChildId(masterId, childId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Subscription not found")))
-                .flatMap(s -> subs.delete(s).thenReturn(Map.of("message", "Unsubscribed")));
+                .flatMap(s -> {
+                    s.setCopyingStatus("INACTIVE");
+                    return subs.save(s).thenReturn(Map.of("message", "Unsubscribed"));
+                });
     }
 
     // 5.4 List subscriptions

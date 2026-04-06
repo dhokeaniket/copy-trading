@@ -159,11 +159,14 @@ public class MasterService {
                 }));
     }
 
-    // 4.3 Unlink child
+    // 4.3 Unlink child (set INACTIVE, keep record for re-subscribe auto-approval)
     public Mono<Map<String, String>> unlinkChild(UUID masterId, UUID childId) {
         return subs.findByMasterIdAndChildId(masterId, childId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Link not found")))
-                .flatMap(s -> subs.delete(s).thenReturn(Map.of("message", "Child unlinked")));
+                .flatMap(s -> {
+                    s.setCopyingStatus("INACTIVE");
+                    return subs.save(s).thenReturn(Map.of("message", "Child unlinked"));
+                });
     }
 
     // 4.4 Get scaling
