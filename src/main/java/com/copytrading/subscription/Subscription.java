@@ -28,6 +28,9 @@ public class Subscription {
     @Column("copying_status")
     private String copyingStatus;
 
+    @Column("approved_once")
+    private boolean approvedOnce;
+
     @Column("created_at")
     private Instant createdAt;
 
@@ -43,6 +46,8 @@ public class Subscription {
     public void setScalingFactor(double scalingFactor) { this.scalingFactor = scalingFactor; }
     public String getCopyingStatus() { return copyingStatus; }
     public void setCopyingStatus(String copyingStatus) { this.copyingStatus = copyingStatus; }
+    public boolean isApprovedOnce() { return approvedOnce; }
+    public void setApprovedOnce(boolean approvedOnce) { this.approvedOnce = approvedOnce; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }

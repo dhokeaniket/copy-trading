@@ -43,22 +43,57 @@ public class ChildService {
     }
 
     // 5.2 Subscribe to master
+    // New child → PENDING_APPROVAL (master must approve)
+    // Previously approved child (unsubscribed & re-subscribing) → ACTIVE directly
     public Mono<Map<String, Object>> subscribe(UUID childId, UUID masterId, UUID brokerAccountId) {
         return subs.findByMasterIdAndChildId(masterId, childId)
-                .flatMap(e -> Mono.<Map<String, Object>>error(
-                        new ResponseStatusException(HttpStatus.CONFLICT, "Already subscribed")))
+                .flatMap(existing -> {
+                    // If already exists and active/paused → conflict
+                    if ("ACTIVE".equals(existing.getCopyingStatus()) || "PAUSED".equals(existing.getCopyingStatus())
+                            || "PENDING_APPROVAL".equals(existing.getCopyingStatus())) {
+                        return Mono.<Map<String, Object>>error(
+                                new ResponseStatusException(HttpStatus.CONFLICT, "Already subscribed or pending approval"));
+                    }
+                    // If previously approved (INACTIVE/REJECTED but approvedOnce=true) → reactivate directly
+                    if (existing.isApprovedOnce()) {
+                        existing.setCopyingStatus("ACTIVE");
+                        existing.setBrokerAccountId(brokerAccountId);
+                        existing.setCreatedAt(Instant.now());
+                        return subs.save(existing).map(saved -> {
+                            Map<String, Object> r = new LinkedHashMap<>();
+                            r.put("subscriptionId", saved.getId());
+                            r.put("status", "ACTIVE");
+                            r.put("message", "Re-subscribed successfully (previously approved)");
+                            return r;
+                        });
+                    }
+                    // Never approved before → set to pending
+                    existing.setCopyingStatus("PENDING_APPROVAL");
+                    existing.setBrokerAccountId(brokerAccountId);
+                    existing.setCreatedAt(Instant.now());
+                    return subs.save(existing).map(saved -> {
+                        Map<String, Object> r = new LinkedHashMap<>();
+                        r.put("subscriptionId", saved.getId());
+                        r.put("status", "PENDING_APPROVAL");
+                        r.put("message", "Subscription request sent. Waiting for master approval.");
+                        return r;
+                    });
+                })
                 .switchIfEmpty(Mono.defer(() -> {
+                    // Brand new subscription → PENDING_APPROVAL
                     Subscription s = new Subscription();
                     s.setMasterId(masterId);
                     s.setChildId(childId);
                     s.setBrokerAccountId(brokerAccountId);
                     s.setScalingFactor(1.0);
-                    s.setCopyingStatus("ACTIVE");
+                    s.setCopyingStatus("PENDING_APPROVAL");
+                    s.setApprovedOnce(false);
                     s.setCreatedAt(Instant.now());
                     return subs.save(s).map(saved -> {
                         Map<String, Object> r = new LinkedHashMap<>();
                         r.put("subscriptionId", saved.getId());
-                        r.put("message", "Subscribed successfully");
+                        r.put("status", "PENDING_APPROVAL");
+                        r.put("message", "Subscription request sent. Waiting for master approval.");
                         return r;
                     });
                 }));

@@ -43,20 +43,73 @@ public class MasterService {
                 .map(list -> Map.of("children", (Object) list));
     }
 
-    // 4.2 Link child
+    // 4.2 Link child (master-initiated, bypasses approval)
     public Mono<Map<String, String>> linkChild(UUID masterId, UUID childId, Double scalingFactor) {
         return subs.findByMasterIdAndChildId(masterId, childId)
-                .flatMap(existing -> Mono.<Map<String, String>>error(
-                        new ResponseStatusException(HttpStatus.CONFLICT, "Child already linked")))
+                .flatMap(existing -> {
+                    // If pending, approve it
+                    if ("PENDING_APPROVAL".equals(existing.getCopyingStatus())) {
+                        existing.setCopyingStatus("ACTIVE");
+                        existing.setApprovedOnce(true);
+                        if (scalingFactor != null) existing.setScalingFactor(scalingFactor);
+                        return subs.save(existing).thenReturn(Map.of("message", "Child approved and linked"));
+                    }
+                    return Mono.<Map<String, String>>error(
+                            new ResponseStatusException(HttpStatus.CONFLICT, "Child already linked"));
+                })
                 .switchIfEmpty(Mono.defer(() -> {
                     Subscription s = new Subscription();
                     s.setMasterId(masterId);
                     s.setChildId(childId);
                     s.setScalingFactor(scalingFactor != null ? scalingFactor : 1.0);
                     s.setCopyingStatus("ACTIVE");
+                    s.setApprovedOnce(true);
                     s.setCreatedAt(Instant.now());
                     return subs.save(s).thenReturn(Map.of("message", "Child linked successfully"));
                 }));
+    }
+
+    // 4.2a List pending approval requests
+    public Mono<Map<String, Object>> listPendingApprovals(UUID masterId) {
+        return subs.findByMasterIdAndCopyingStatus(masterId, "PENDING_APPROVAL")
+                .flatMap(s -> users.findById(s.getChildId()).map(u -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("childId", s.getChildId());
+                    m.put("name", u.getName());
+                    m.put("email", u.getEmail());
+                    m.put("requestedAt", s.getCreatedAt());
+                    m.put("subscriptionId", s.getId());
+                    return m;
+                }))
+                .collectList()
+                .map(list -> Map.of("pendingApprovals", (Object) list));
+    }
+
+    // 4.2b Approve child subscription
+    public Mono<Map<String, String>> approveChild(UUID masterId, UUID childId) {
+        return subs.findByMasterIdAndChildId(masterId, childId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Subscription not found")))
+                .flatMap(s -> {
+                    if (!"PENDING_APPROVAL".equals(s.getCopyingStatus())) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Subscription is not pending approval"));
+                    }
+                    s.setCopyingStatus("ACTIVE");
+                    s.setApprovedOnce(true);
+                    return subs.save(s).thenReturn(Map.of("message", "Child approved"));
+                });
+    }
+
+    // 4.2c Reject child subscription
+    public Mono<Map<String, String>> rejectChild(UUID masterId, UUID childId) {
+        return subs.findByMasterIdAndChildId(masterId, childId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Subscription not found")))
+                .flatMap(s -> {
+                    if (!"PENDING_APPROVAL".equals(s.getCopyingStatus())) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Subscription is not pending approval"));
+                    }
+                    s.setCopyingStatus("REJECTED");
+                    return subs.save(s).thenReturn(Map.of("message", "Child rejected"));
+                });
     }
 
     // 4.2b Bulk link children

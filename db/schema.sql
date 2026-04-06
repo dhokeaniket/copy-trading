@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   child_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   broker_account_id UUID REFERENCES broker_accounts(id),
   scaling_factor    DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-  copying_status    VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (copying_status IN ('ACTIVE','PAUSED','INACTIVE')),
+  copying_status    VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (copying_status IN ('ACTIVE','PAUSED','INACTIVE','PENDING_APPROVAL','REJECTED')),
+  approved_once     BOOLEAN NOT NULL DEFAULT FALSE,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

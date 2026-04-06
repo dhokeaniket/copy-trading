@@ -586,3 +586,68 @@ Response 200:
   "masterPnlComparison": {}
 }
 ```
+
+
+---
+
+# SUBSCRIPTION APPROVAL SYSTEM
+
+New child subscribers require master approval. Previously approved children can re-subscribe directly.
+
+## Flow:
+```
+1. Child calls POST /child/subscriptions → status: PENDING_APPROVAL
+2. Master sees it in GET /master/children/pending
+3. Master calls POST /master/children/{childId}/approve → status: ACTIVE
+   OR POST /master/children/{childId}/reject → status: REJECTED
+4. If child unsubscribes and re-subscribes later → status: ACTIVE (auto-approved)
+5. Master can also link directly via POST /master/children/{childId}/link → bypasses approval
+```
+
+### GET /api/v1/master/children/pending — List pending approval requests
+```json
+Response 200:
+{
+  "pendingApprovals": [
+    {
+      "childId": "uuid",
+      "name": "Child Name",
+      "email": "child@email.com",
+      "requestedAt": "2026-04-05T20:00:00Z",
+      "subscriptionId": 1
+    }
+  ]
+}
+```
+
+### POST /api/v1/master/children/{childId}/approve — Approve child
+```json
+Response 200: { "message": "Child approved" }
+```
+
+### POST /api/v1/master/children/{childId}/reject — Reject child
+```json
+Response 200: { "message": "Child rejected" }
+```
+
+### POST /api/v1/child/subscriptions — Subscribe (with approval)
+```json
+Request:  { "masterId": "uuid", "brokerAccountId": "uuid" }
+
+Response 201 (new child):
+{ "subscriptionId": 1, "status": "PENDING_APPROVAL", "message": "Subscription request sent. Waiting for master approval." }
+
+Response 201 (previously approved child re-subscribing):
+{ "subscriptionId": 1, "status": "ACTIVE", "message": "Re-subscribed successfully (previously approved)" }
+
+Response 409 (already subscribed/pending):
+{ "error": "Already subscribed or pending approval", "status": 409 }
+```
+
+| Status | Meaning |
+|--------|---------|
+| PENDING_APPROVAL | Child requested, waiting for master to approve |
+| ACTIVE | Approved and copying trades |
+| PAUSED | Temporarily paused by child |
+| REJECTED | Master rejected the request |
+| INACTIVE | Subscription deactivated |

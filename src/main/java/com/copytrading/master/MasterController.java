@@ -58,6 +58,21 @@ public class MasterController {
         return service.unlinkChild(UUID.fromString(userId), childId);
     }
 
+    @GetMapping("/children/pending")
+    public Mono<Map<String, Object>> listPendingApprovals(@AuthenticationPrincipal String userId) {
+        return service.listPendingApprovals(UUID.fromString(userId));
+    }
+
+    @PostMapping("/children/{childId}/approve")
+    public Mono<Map<String, String>> approveChild(@AuthenticationPrincipal String userId, @PathVariable UUID childId) {
+        return service.approveChild(UUID.fromString(userId), childId);
+    }
+
+    @PostMapping("/children/{childId}/reject")
+    public Mono<Map<String, String>> rejectChild(@AuthenticationPrincipal String userId, @PathVariable UUID childId) {
+        return service.rejectChild(UUID.fromString(userId), childId);
+    }
+
     @GetMapping("/children/{childId}/scaling")
     public Mono<Map<String, Object>> getScaling(@AuthenticationPrincipal String userId, @PathVariable UUID childId) {
         return service.getScaling(UUID.fromString(userId), childId);
