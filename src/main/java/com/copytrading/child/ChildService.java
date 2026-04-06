@@ -45,7 +45,8 @@ public class ChildService {
     // 5.2 Subscribe to master
     // New child → PENDING_APPROVAL (master must approve)
     // Previously approved child (unsubscribed & re-subscribing) → ACTIVE directly
-    public Mono<Map<String, Object>> subscribe(UUID childId, UUID masterId, UUID brokerAccountId) {
+    public Mono<Map<String, Object>> subscribe(UUID childId, UUID masterId, UUID brokerAccountId, Double scalingFactor) {
+        double factor = (scalingFactor != null && scalingFactor >= 0.01 && scalingFactor <= 10.0) ? scalingFactor : 1.0;
         return subs.findByMasterIdAndChildId(masterId, childId)
                 .flatMap(existing -> {
                     // If already exists and active/paused → conflict
@@ -85,7 +86,7 @@ public class ChildService {
                     s.setMasterId(masterId);
                     s.setChildId(childId);
                     s.setBrokerAccountId(brokerAccountId);
-                    s.setScalingFactor(1.0);
+                    s.setScalingFactor(factor);
                     s.setCopyingStatus("PENDING_APPROVAL");
                     s.setApprovedOnce(false);
                     s.setCreatedAt(Instant.now());
@@ -153,9 +154,9 @@ public class ChildService {
                 });
     }
 
-    // 5.4 List subscriptions
+    // 5.4 List subscriptions (exclude INACTIVE)
     public Mono<Map<String, Object>> listSubscriptions(UUID childId) {
-        return subs.findByChildId(childId)
+        return subs.findByChildIdAndCopyingStatusNot(childId, "INACTIVE")
                 .flatMap(s -> users.findById(s.getMasterId()).map(m -> {
                     Map<String, Object> r = new LinkedHashMap<>();
                     r.put("masterId", s.getMasterId());
