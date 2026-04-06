@@ -154,6 +154,19 @@ public class ChildService {
                 });
     }
 
+    // 5.3b Bulk unsubscribe from multiple masters
+    public Mono<Map<String, Object>> bulkUnsubscribe(UUID childId, List<UUID> masterIds) {
+        return reactor.core.publisher.Flux.fromIterable(masterIds)
+                .flatMap(masterId -> subs.findByMasterIdAndChildId(masterId, childId)
+                        .flatMap(s -> {
+                            s.setCopyingStatus("INACTIVE");
+                            return subs.save(s).thenReturn(Map.<String, Object>of("masterId", masterId.toString(), "status", "UNSUBSCRIBED"));
+                        })
+                        .switchIfEmpty(Mono.just(Map.<String, Object>of("masterId", masterId.toString(), "status", "NOT_FOUND"))))
+                .collectList()
+                .map(results -> Map.<String, Object>of("results", results));
+    }
+
     // 5.4 List subscriptions (exclude INACTIVE)
     public Mono<Map<String, Object>> listSubscriptions(UUID childId) {
         return subs.findByChildIdAndCopyingStatusNot(childId, "INACTIVE")

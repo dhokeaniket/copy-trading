@@ -58,6 +58,22 @@ public class MasterController {
         return service.unlinkChild(UUID.fromString(userId), childId);
     }
 
+    @PostMapping(value = "/children/bulk-unlink", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> bulkUnlinkChildren(@AuthenticationPrincipal String userId,
+                                                         @RequestBody Map<String, java.util.List<UUID>> req) {
+        return service.bulkUnlinkChildren(UUID.fromString(userId), req.get("childIds"));
+    }
+
+    @PostMapping("/children/{childId}/pause")
+    public Mono<Map<String, String>> pauseChild(@AuthenticationPrincipal String userId, @PathVariable UUID childId) {
+        return service.pauseChild(UUID.fromString(userId), childId);
+    }
+
+    @PostMapping("/children/{childId}/resume")
+    public Mono<Map<String, String>> resumeChild(@AuthenticationPrincipal String userId, @PathVariable UUID childId) {
+        return service.resumeChild(UUID.fromString(userId), childId);
+    }
+
     @GetMapping("/children/pending")
     public Mono<Map<String, Object>> listPendingApprovals(@AuthenticationPrincipal String userId) {
         return service.listPendingApprovals(UUID.fromString(userId));

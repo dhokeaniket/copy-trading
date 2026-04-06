@@ -50,6 +50,12 @@ public class ChildController {
         return service.unsubscribe(UUID.fromString(userId), masterId);
     }
 
+    @PostMapping(value = "/subscriptions/bulk-unsubscribe", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> bulkUnsubscribe(@AuthenticationPrincipal String userId,
+                                                      @RequestBody Map<String, java.util.List<UUID>> req) {
+        return service.bulkUnsubscribe(UUID.fromString(userId), req.get("masterIds"));
+    }
+
     @GetMapping("/subscriptions")
     public Mono<Map<String, Object>> listSubscriptions(@AuthenticationPrincipal String userId) {
         return service.listSubscriptions(UUID.fromString(userId));

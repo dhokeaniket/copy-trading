@@ -186,6 +186,45 @@ public class MasterService {
                 });
     }
 
+    // 4.3b Bulk unlink children
+    public Mono<Map<String, Object>> bulkUnlinkChildren(UUID masterId, List<UUID> childIds) {
+        return reactor.core.publisher.Flux.fromIterable(childIds)
+                .flatMap(childId -> subs.findByMasterIdAndChildId(masterId, childId)
+                        .flatMap(s -> {
+                            s.setCopyingStatus("INACTIVE");
+                            return subs.save(s).thenReturn(Map.<String, Object>of("childId", childId.toString(), "status", "UNLINKED"));
+                        })
+                        .switchIfEmpty(Mono.just(Map.<String, Object>of("childId", childId.toString(), "status", "NOT_FOUND"))))
+                .collectList()
+                .map(results -> Map.<String, Object>of("results", results));
+    }
+
+    // 4.3c Master pauses a child's copying
+    public Mono<Map<String, String>> pauseChild(UUID masterId, UUID childId) {
+        return subs.findByMasterIdAndChildId(masterId, childId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Link not found")))
+                .flatMap(s -> {
+                    if (!"ACTIVE".equals(s.getCopyingStatus())) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Can only pause ACTIVE subscriptions"));
+                    }
+                    s.setCopyingStatus("PAUSED");
+                    return subs.save(s).thenReturn(Map.of("message", "Child copying paused"));
+                });
+    }
+
+    // 4.3d Master resumes a child's copying
+    public Mono<Map<String, String>> resumeChild(UUID masterId, UUID childId) {
+        return subs.findByMasterIdAndChildId(masterId, childId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Link not found")))
+                .flatMap(s -> {
+                    if (!"PAUSED".equals(s.getCopyingStatus())) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Can only resume PAUSED subscriptions"));
+                    }
+                    s.setCopyingStatus("ACTIVE");
+                    return subs.save(s).thenReturn(Map.of("message", "Child copying resumed"));
+                });
+    }
+
     // 4.4 Get scaling
     public Mono<Map<String, Object>> getScaling(UUID masterId, UUID childId) {
         return subs.findByMasterIdAndChildId(masterId, childId)
