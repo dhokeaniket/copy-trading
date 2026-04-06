@@ -120,13 +120,30 @@ public class MasterService {
                     Double factor = c.containsKey("scalingFactor") && c.get("scalingFactor") != null
                             ? ((Number) c.get("scalingFactor")).doubleValue() : 1.0;
                     return subs.findByMasterIdAndChildId(masterId, childId)
-                            .map(existing -> Map.<String, Object>of("childId", childId.toString(), "status", "ALREADY_LINKED"))
+                            .flatMap(existing -> {
+                                if ("PENDING_APPROVAL".equals(existing.getCopyingStatus())) {
+                                    existing.setCopyingStatus("ACTIVE");
+                                    existing.setApprovedOnce(true);
+                                    existing.setScalingFactor(factor);
+                                    return subs.save(existing).map(s -> Map.<String, Object>of(
+                                            "childId", childId.toString(), "status", "APPROVED", "subscriptionId", s.getId()));
+                                }
+                                if ("INACTIVE".equals(existing.getCopyingStatus()) || "REJECTED".equals(existing.getCopyingStatus())) {
+                                    existing.setCopyingStatus("ACTIVE");
+                                    existing.setApprovedOnce(true);
+                                    existing.setScalingFactor(factor);
+                                    return subs.save(existing).map(s -> Map.<String, Object>of(
+                                            "childId", childId.toString(), "status", "REACTIVATED", "subscriptionId", s.getId()));
+                                }
+                                return Mono.just(Map.<String, Object>of("childId", childId.toString(), "status", "ALREADY_LINKED"));
+                            })
                             .switchIfEmpty(Mono.defer(() -> {
                                 Subscription s = new Subscription();
                                 s.setMasterId(masterId);
                                 s.setChildId(childId);
                                 s.setScalingFactor(factor);
                                 s.setCopyingStatus("ACTIVE");
+                                s.setApprovedOnce(true);
                                 s.setCreatedAt(Instant.now());
                                 return subs.save(s).map(saved -> Map.<String, Object>of(
                                         "childId", childId.toString(), "status", "LINKED", "subscriptionId", saved.getId()));
