@@ -105,6 +105,8 @@ Response 409: { "error": "Already subscribed to this child", "status": 409 }
 
 ## POST /api/v1/master/children/bulk-link — Master bulk links multiple children
 
+Bulk link also approves PENDING children and reactivates INACTIVE ones.
+
 ```json
 Request:
 {
@@ -119,11 +121,20 @@ Response 200:
 {
   "results": [
     { "childId": "uuid-1", "status": "LINKED", "subscriptionId": 1 },
-    { "childId": "uuid-2", "status": "LINKED", "subscriptionId": 2 },
+    { "childId": "uuid-2", "status": "APPROVED", "subscriptionId": 2 },
     { "childId": "uuid-3", "status": "ALREADY_LINKED" }
   ]
 }
 ```
+
+Possible statuses in bulk link response:
+
+| Status | Meaning |
+|--------|---------|
+| LINKED | New child linked directly (bypasses approval) |
+| APPROVED | Pending child approved and activated |
+| REACTIVATED | Inactive/rejected child reactivated |
+| ALREADY_LINKED | Already active for this master |
 
 ## POST /api/v1/child/subscriptions/bulk — Child bulk subscribes to multiple masters
 
@@ -147,7 +158,15 @@ Response 201:
 }
 ```
 
-Note: Bulk subscribe also follows approval rules — new children go to PENDING_APPROVAL.
+Note: Bulk subscribe follows approval rules — new masters go to PENDING_APPROVAL, previously approved masters go to ACTIVE.
+
+Possible statuses in bulk subscribe response:
+
+| Status | Meaning |
+|--------|---------|
+| PENDING_APPROVAL | New subscription, waiting for master approval |
+| RE_SUBSCRIBED | Previously approved, auto-activated |
+| ALREADY_SUBSCRIBED | Already active/pending for this master |
 
 ---
 
@@ -259,3 +278,25 @@ Response 200: { "message": "Unsubscribed" }
 1. Child unsubscribes → status becomes INACTIVE (not deleted)
 2. Child re-subscribes → status becomes ACTIVE immediately (no approval needed)
 ```
+
+---
+
+# 6. MULTI-MASTER SUBSCRIPTION
+
+A child can subscribe to multiple masters simultaneously. Each master-child pair is independent.
+
+Example: Child1 subscribed to Master1 (ACTIVE) + Master2 (PENDING_APPROVAL) at the same time.
+
+```json
+GET /api/v1/child/subscriptions
+
+Response 200:
+{
+  "subscriptions": [
+    { "masterId": "uuid-master1", "masterName": "Aniket Master", "scalingFactor": 1.0, "copyingStatus": "ACTIVE" },
+    { "masterId": "uuid-master2", "masterName": "Master Two", "scalingFactor": 1.0, "copyingStatus": "PENDING_APPROVAL" }
+  ]
+}
+```
+
+Each subscription has its own scaling factor, status, and broker account. Approval is per-master — being approved by Master1 doesn't auto-approve for Master2.
