@@ -236,7 +236,8 @@ public class BrokerAccountService {
     }
 
     // 3.7b Get OAuth URL for browser-based login
-    public Mono<Map<String, Object>> getOAuthUrl(UUID accountId, UUID userId) {
+    public Mono<Map<String, Object>> getOAuthUrl(UUID accountId, UUID userId, String redirectUri) {
+        String redirect = (redirectUri != null && !redirectUri.isBlank()) ? redirectUri : "https://copy-trading-production-3981.up.railway.app/api/v1/brokers/callback";
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
@@ -252,18 +253,19 @@ public class BrokerAccountService {
                             r.put("loginMethod", "oauth");
                             r.put("loginField", "requestToken");
                             r.put("oauthUrl", "https://kite.zerodha.com/connect/login?v=3&api_key=" + a.getApiKey());
+                            r.put("redirectInfo", "Zerodha redirects to the URL registered in your Kite Connect app dashboard with ?request_token=xxx&status=success");
                             r.put("message", "Open oauthUrl in browser. After login, capture request_token from redirect URL and POST it as {\"requestToken\":\"...\"}");
                             break;
                         case "FYERS":
                             r.put("loginMethod", "oauth");
                             r.put("loginField", "authCode");
-                            r.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id=" + a.getApiKey() + "&redirect_uri=https://localhost&response_type=code&state=ok");
+                            r.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id=" + a.getApiKey() + "&redirect_uri=" + redirect + "&response_type=code&state=ok");
                             r.put("message", "Open oauthUrl in browser. After login, capture auth_code from redirect URL and POST it as {\"authCode\":\"...\"}");
                             break;
                         case "UPSTOX":
                             r.put("loginMethod", "oauth");
                             r.put("loginField", "authCode");
-                            r.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + a.getApiKey() + "&redirect_uri=https://localhost");
+                            r.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + a.getApiKey() + "&redirect_uri=" + redirect);
                             r.put("message", "Open oauthUrl in browser. After login, capture code from redirect URL and POST it as {\"authCode\":\"...\"}");
                             break;
                         default:

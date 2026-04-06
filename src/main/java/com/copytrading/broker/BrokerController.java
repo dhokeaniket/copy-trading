@@ -72,8 +72,9 @@ public class BrokerController {
     // 3.7b GET /brokers/accounts/:accountId/oauth-url (get OAuth login URL for browser redirect)
     @GetMapping("/api/v1/brokers/accounts/{accountId}/oauth-url")
     public Mono<Map<String, Object>> getOAuthUrl(@PathVariable UUID accountId,
-                                                  @AuthenticationPrincipal String userId) {
-        return service.getOAuthUrl(accountId, UUID.fromString(userId));
+                                                  @AuthenticationPrincipal String userId,
+                                                  @RequestParam(required = false) String redirectUri) {
+        return service.getOAuthUrl(accountId, UUID.fromString(userId), redirectUri);
     }
 
     // 3.8 GET /brokers/accounts/:accountId/status
@@ -109,5 +110,31 @@ public class BrokerController {
     @GetMapping("/api/v1/admin/brokers/status")
     public Mono<Map<String, Object>> adminBrokerStatus() {
         return service.adminBrokerStatus();
+    }
+
+    // Broker OAuth callback — captures request_token/auth_code from broker redirect
+    @GetMapping("/api/v1/brokers/callback")
+    public Mono<Map<String, Object>> oauthCallback(
+            @RequestParam(required = false) String request_token,
+            @RequestParam(required = false) String auth_code,
+            @RequestParam(required = false) String code,
+            @RequestParam(required = false) String status) {
+        Map<String, Object> r = new java.util.LinkedHashMap<>();
+        r.put("message", "Broker OAuth callback received. Use the token below to call the login API.");
+        if (request_token != null) {
+            r.put("broker", "ZERODHA");
+            r.put("requestToken", request_token);
+            r.put("loginBody", Map.of("requestToken", request_token));
+        } else if (auth_code != null) {
+            r.put("broker", "FYERS");
+            r.put("authCode", auth_code);
+            r.put("loginBody", Map.of("authCode", auth_code));
+        } else if (code != null) {
+            r.put("broker", "UPSTOX");
+            r.put("authCode", code);
+            r.put("loginBody", Map.of("authCode", code));
+        }
+        if (status != null) r.put("status", status);
+        return Mono.just(r);
     }
 }
