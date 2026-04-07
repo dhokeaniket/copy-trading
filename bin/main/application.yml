@@ -54,3 +54,15 @@ springdoc:
   api-docs:
     path: /v3/api-docs
   use-management-port: false
+
+brokers:
+  zerodha:
+    apiKey: ${ZERODHA_API_KEY:rwm7t44pzgqgl1br}
+    apiSecret: ${ZERODHA_API_SECRET:z3hd7wm2yy4vkuqznm54ah0u41owmaa4}
+  fyers:
+    apiKey: ${FYERS_API_KEY:X3OX66WB1J-100}
+    apiSecret: ${FYERS_API_SECRET:SQNAPQKU7M}
+  upstox:
+    apiKey: ${UPSTOX_API_KEY:c7282c93-6b03-4865-8cee-38f2912ea648}
+    apiSecret: ${UPSTOX_API_SECRET:dyc5vwazlr}
+  callbackUrl: ${BROKER_CALLBACK_URL:https://copy-trading-production-3981.up.railway.app/api/v1/brokers/callback}

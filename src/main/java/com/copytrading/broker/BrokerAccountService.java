@@ -26,15 +26,17 @@ public class BrokerAccountService {
     private final ZerodhaApiClient zerodhaClient;
     private final FyersApiClient fyersClient;
     private final UpstoxApiClient upstoxClient;
+    private final PlatformBrokerConfig platformConfig;
 
     public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
                                 ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
-                                UpstoxApiClient upstoxClient) {
+                                UpstoxApiClient upstoxClient, PlatformBrokerConfig platformConfig) {
         this.repo = repo;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
         this.fyersClient = fyersClient;
         this.upstoxClient = upstoxClient;
+        this.platformConfig = platformConfig;
     }
 
     // 3.1 List supported brokers
@@ -59,14 +61,23 @@ public class BrokerAccountService {
         BrokerAccount a = new BrokerAccount();
         a.setUserId(userId);
         a.setBrokerId(broker);
-        a.setClientId(req.getClientId());
-        a.setApiKey(req.getApiKey());
-        a.setApiSecret(req.getApiSecret());
-        a.setAccessToken(req.getAccessToken());
+        a.setClientId(req.getClientId() != null ? req.getClientId() : "");
         a.setNickname(req.getAccountNickname());
-        a.setStatus(req.getAccessToken() != null ? "LINKED" : "AUTH_REQUIRED");
         a.setSessionActive(false);
         a.setLinkedAt(Instant.now());
+
+        // For OAuth brokers, use platform-level keys; for Groww, use per-user keys
+        PlatformBrokerConfig.BrokerCreds platformCreds = platformConfig.getFor(broker);
+        if (platformCreds != null && platformCreds.getApiKey() != null) {
+            a.setApiKey(platformCreds.getApiKey());
+            a.setApiSecret(platformCreds.getApiSecret());
+        } else {
+            a.setApiKey(req.getApiKey() != null ? req.getApiKey() : "");
+            a.setApiSecret(req.getApiSecret() != null ? req.getApiSecret() : "");
+        }
+
+        a.setAccessToken(req.getAccessToken());
+        a.setStatus(req.getAccessToken() != null ? "LINKED" : "AUTH_REQUIRED");
         return repo.save(a).map(saved -> {
             log.info("BROKER_LINKED id={} user={} broker={}", saved.getId(), userId, broker);
             Map<String, Object> r = new LinkedHashMap<>();
@@ -159,12 +170,15 @@ public class BrokerAccountService {
 
     // --- ZERODHA LOGIN ---
     private Mono<Map<String, Object>> loginZerodha(BrokerAccount a, BrokerLoginRequest req) {
+        var creds = platformConfig.getZerodha();
+        String apiKey = creds.getApiKey();
+        String apiSecret = creds.getApiSecret();
         if (req == null || req.getRequestToken() == null || req.getRequestToken().isBlank()) {
-            String loginUrl = "https://kite.zerodha.com/connect/login?v=3&api_key=" + a.getApiKey();
+            String loginUrl = "https://kite.zerodha.com/connect/login?v=3&api_key=" + apiKey;
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "requestToken required. Open this URL to login: " + loginUrl));
         }
-        return zerodhaClient.generateSession(a.getApiKey(), a.getApiSecret(), req.getRequestToken())
+        return zerodhaClient.generateSession(apiKey, apiSecret, req.getRequestToken())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Zerodha",
                         r -> {
                             if (r.containsKey("data") && r.get("data") instanceof Map d) return (String) d.get("access_token");
@@ -179,11 +193,12 @@ public class BrokerAccountService {
 
     // --- FYERS LOGIN ---
     private Mono<Map<String, Object>> loginFyers(BrokerAccount a, BrokerLoginRequest req) {
+        var creds = platformConfig.getFyers();
         if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "authCode required. Complete Fyers OAuth flow with app_id=" + a.getApiKey()));
+                    "authCode required. Complete Fyers OAuth flow with app_id=" + creds.getApiKey()));
         }
-        return fyersClient.generateToken(a.getApiKey(), a.getApiSecret(), req.getAuthCode())
+        return fyersClient.generateToken(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Fyers",
                         r -> (String) r.get("access_token")))
                 .onErrorResume(e -> {
@@ -195,12 +210,13 @@ public class BrokerAccountService {
 
     // --- UPSTOX LOGIN ---
     private Mono<Map<String, Object>> loginUpstox(BrokerAccount a, BrokerLoginRequest req) {
+        var creds = platformConfig.getUpstox();
         if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
-            String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + a.getApiKey() + "&redirect_uri=https://localhost";
+            String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + creds.getApiKey() + "&redirect_uri=" + platformConfig.getCallbackUrl();
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "authCode required. Open this URL to login: " + loginUrl));
         }
-        return upstoxClient.generateToken(a.getApiKey(), a.getApiSecret(), req.getAuthCode(), null)
+        return upstoxClient.generateToken(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode(), platformConfig.getCallbackUrl())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
                         r -> (String) r.get("access_token")))
                 .onErrorResume(e -> {
@@ -237,7 +253,7 @@ public class BrokerAccountService {
 
     // 3.7b Get OAuth URL for browser-based login
     public Mono<Map<String, Object>> getOAuthUrl(UUID accountId, UUID userId, String redirectUri) {
-        String redirect = (redirectUri != null && !redirectUri.isBlank()) ? redirectUri : "https://copy-trading-production-3981.up.railway.app/api/v1/brokers/callback";
+        String redirect = (redirectUri != null && !redirectUri.isBlank()) ? redirectUri : platformConfig.getCallbackUrl();
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
@@ -252,21 +268,20 @@ public class BrokerAccountService {
                         case "ZERODHA":
                             r.put("loginMethod", "oauth");
                             r.put("loginField", "requestToken");
-                            r.put("oauthUrl", "https://kite.zerodha.com/connect/login?v=3&api_key=" + a.getApiKey());
-                            r.put("redirectInfo", "Zerodha redirects to the URL registered in your Kite Connect app dashboard with ?request_token=xxx&status=success");
-                            r.put("message", "Open oauthUrl in browser. After login, capture request_token from redirect URL and POST it as {\"requestToken\":\"...\"}");
+                            r.put("oauthUrl", "https://kite.zerodha.com/connect/login?v=3&api_key=" + platformConfig.getZerodha().getApiKey());
+                            r.put("message", "Open oauthUrl in browser. After login, the callback will receive the requestToken automatically.");
                             break;
                         case "FYERS":
                             r.put("loginMethod", "oauth");
                             r.put("loginField", "authCode");
-                            r.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id=" + a.getApiKey() + "&redirect_uri=" + redirect + "&response_type=code&state=ok");
-                            r.put("message", "Open oauthUrl in browser. After login, capture auth_code from redirect URL and POST it as {\"authCode\":\"...\"}");
+                            r.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id=" + platformConfig.getFyers().getApiKey() + "&redirect_uri=" + redirect + "&response_type=code&state=ok");
+                            r.put("message", "Open oauthUrl in browser. After login, the callback will receive the authCode automatically.");
                             break;
                         case "UPSTOX":
                             r.put("loginMethod", "oauth");
                             r.put("loginField", "authCode");
-                            r.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + a.getApiKey() + "&redirect_uri=" + redirect);
-                            r.put("message", "Open oauthUrl in browser. After login, capture code from redirect URL and POST it as {\"authCode\":\"...\"}");
+                            r.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + platformConfig.getUpstox().getApiKey() + "&redirect_uri=" + redirect);
+                            r.put("message", "Open oauthUrl in browser. After login, the callback will receive the authCode automatically.");
                             break;
                         default:
                             r.put("loginMethod", "mock");
@@ -299,7 +314,7 @@ public class BrokerAccountService {
                 case "GROWW":
                     return growwClient.getMargin(a.getAccessToken()).map(resp -> parseGrowwMargin(resp));
                 case "ZERODHA":
-                    return zerodhaClient.getMargins(a.getApiKey(), a.getAccessToken()).map(resp -> parseZerodhaMargin(resp));
+                    return zerodhaClient.getMargins(platformConfig.getZerodha().getApiKey(), a.getAccessToken()).map(resp -> parseZerodhaMargin(resp));
                 case "FYERS":
                     return fyersClient.getFunds(a.getAccessToken()).map(resp -> parseFyersMargin(resp));
                 case "UPSTOX":
@@ -321,7 +336,7 @@ public class BrokerAccountService {
                                 return Map.<String, Object>of("positions", payload != null ? payload : List.of());
                             });
                 case "ZERODHA":
-                    return zerodhaClient.getPositions(a.getApiKey(), a.getAccessToken())
+                    return zerodhaClient.getPositions(platformConfig.getZerodha().getApiKey(), a.getAccessToken())
                             .map(resp -> {
                                 Object data = resp.get("data");
                                 return Map.<String, Object>of("positions", data != null ? data : List.of());
