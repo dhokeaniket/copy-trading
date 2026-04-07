@@ -1,5 +1,6 @@
 package com.copytrading.broker;
 
+import com.copytrading.broker.dhan.DhanApiClient;
 import com.copytrading.broker.dto.*;
 import com.copytrading.broker.fyers.FyersApiClient;
 import com.copytrading.broker.groww.GrowwApiClient;
@@ -26,16 +27,19 @@ public class BrokerAccountService {
     private final ZerodhaApiClient zerodhaClient;
     private final FyersApiClient fyersClient;
     private final UpstoxApiClient upstoxClient;
+    private final DhanApiClient dhanClient;
     private final PlatformBrokerConfig platformConfig;
 
     public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
                                 ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
-                                UpstoxApiClient upstoxClient, PlatformBrokerConfig platformConfig) {
+                                UpstoxApiClient upstoxClient, DhanApiClient dhanClient,
+                                PlatformBrokerConfig platformConfig) {
         this.repo = repo;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
         this.fyersClient = fyersClient;
         this.upstoxClient = upstoxClient;
+        this.dhanClient = dhanClient;
         this.platformConfig = platformConfig;
     }
 
@@ -47,7 +51,7 @@ public class BrokerAccountService {
             brokerInfo("FYERS", "Fyers", true, List.of(), "oauth", "authCode"),
             brokerInfo("UPSTOX", "Upstox", true, List.of(), "oauth", "authCode"),
             brokerInfo("ANGELONE", "Angel One", false, List.of(), "oauth", "authCode"),
-            brokerInfo("DHAN", "Dhan", false, List.of(), "oauth", "authCode")
+            brokerInfo("DHAN", "Dhan", true, List.of(), "oauth", "tokenId")
         );
         return Mono.just(Map.of("brokers", brokers));
     }
@@ -142,6 +146,7 @@ public class BrokerAccountService {
                         case "ZERODHA":  return loginZerodha(a, req);
                         case "FYERS":    return loginFyers(a, req);
                         case "UPSTOX":   return loginUpstox(a, req);
+                        case "DHAN":     return loginDhan(a, req);
                         default:
                             // Mock login for unsupported brokers
                             a.setSessionActive(true);
@@ -232,6 +237,37 @@ public class BrokerAccountService {
                 });
     }
 
+    // --- DHAN LOGIN (3-step OAuth: consent → browser login → consume) ---
+    private Mono<Map<String, Object>> loginDhan(BrokerAccount a, BrokerLoginRequest req) {
+        var creds = platformConfig.getDhan();
+        // If tokenId provided (from browser callback), exchange for access token
+        if (req != null && req.getAuthCode() != null && !req.getAuthCode().isBlank()) {
+            return dhanClient.consumeConsent(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode())
+                    .flatMap(resp -> extractAndSaveSession(a, resp, "Dhan",
+                            r -> (String) r.get("accessToken")))
+                    .onErrorResume(e -> {
+                        if (e instanceof ResponseStatusException) return Mono.error(e);
+                        log.error("DHAN_LOGIN_FAILED error={}", e.getMessage(), e);
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Dhan API error: " + e.getMessage()));
+                    });
+        }
+        // No tokenId — generate consent and return the login URL
+        return dhanClient.generateConsent(creds.getApiKey(), creds.getApiSecret(), a.getClientId())
+                .map(resp -> {
+                    String consentAppId = (String) resp.get("consentAppId");
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("status", "CONSENT_GENERATED");
+                    r.put("loginUrl", "https://auth.dhan.co/login/consentApp-login?consentAppId=" + consentAppId);
+                    r.put("message", "Open loginUrl in browser. After login, Dhan redirects with tokenId. Call login again with {\"authCode\": \"tokenId\"}");
+                    return r;
+                })
+                .onErrorResume(e -> {
+                    if (e instanceof ResponseStatusException) return Mono.error(e);
+                    log.error("DHAN_CONSENT_FAILED error={}", e.getMessage(), e);
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Dhan API error: " + e.getMessage()));
+                });
+    }
+
     /** Common helper: extract token from response, save session, return status */
     private Mono<Map<String, Object>> extractAndSaveSession(BrokerAccount a, Map resp, String brokerName,
                                                              java.util.function.Function<Map, String> tokenExtractor) {
@@ -289,6 +325,11 @@ public class BrokerAccountService {
                             r.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + platformConfig.getUpstox().getApiKey() + "&redirect_uri=" + redirect);
                             r.put("message", "Open oauthUrl in browser. After login, the callback will receive the authCode automatically.");
                             break;
+                        case "DHAN":
+                            r.put("loginMethod", "oauth");
+                            r.put("loginField", "tokenId");
+                            r.put("message", "Call POST /login with empty body first to get loginUrl. Open it in browser. After login, Dhan redirects with tokenId. Call login again with {\"authCode\": \"tokenId\"}");
+                            break;
                         default:
                             r.put("loginMethod", "mock");
                             r.put("message", "Mock broker. Call login with empty body {}");
@@ -337,6 +378,19 @@ public class BrokerAccountService {
                                 fallback.put("error", e.getMessage());
                                 return Mono.just(fallback);
                             });
+                case "DHAN":
+                    return dhanClient.getFunds(a.getAccessToken())
+                            .map(resp -> parseDhanMargin(resp))
+                            .onErrorResume(e -> {
+                                log.error("DHAN_MARGIN_ERROR: {}", e.getMessage());
+                                Map<String, Object> fallback = new LinkedHashMap<>();
+                                fallback.put("availableMargin", 0);
+                                fallback.put("usedMargin", 0);
+                                fallback.put("totalFunds", 0);
+                                fallback.put("collateral", 0);
+                                fallback.put("error", e.getMessage());
+                                return Mono.just(fallback);
+                            });
                 default:
                     return Mono.just(mockMargin());
             }
@@ -372,6 +426,10 @@ public class BrokerAccountService {
                                 Object data = resp.get("data");
                                 return Map.<String, Object>of("positions", data != null ? data : List.of());
                             });
+                case "DHAN":
+                    return dhanClient.getPositions(a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("positions", resp))
+                            .onErrorResume(e -> Mono.just(Map.of("positions", List.of(), "error", e.getMessage())));
                 default:
                     return Mono.just(Map.<String, Object>of("positions", List.of()));
             }
@@ -495,6 +553,34 @@ public class BrokerAccountService {
         } catch (Exception e) {
             // fallback
         }
+        r.put("availableMargin", 0);
+        r.put("usedMargin", 0);
+        r.put("totalFunds", 0);
+        r.put("collateral", 0);
+        r.put("raw", resp);
+        return r;
+    }
+
+    private Map<String, Object> parseDhanMargin(Map resp) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        try {
+            Object data = resp.get("data");
+            if (data instanceof Map d) {
+                r.put("availableMargin", toDouble(d.getOrDefault("availableBalance", d.getOrDefault("sodLimit", 0))));
+                r.put("usedMargin", toDouble(d.getOrDefault("utilizedAmount", 0)));
+                r.put("totalFunds", toDouble(d.getOrDefault("sodLimit", 0)));
+                r.put("collateral", toDouble(d.getOrDefault("collateralAmount", 0)));
+                return r;
+            }
+            // Dhan might return fund_limit as a list
+            if (resp.containsKey("availableBalance")) {
+                r.put("availableMargin", toDouble(resp.get("availableBalance")));
+                r.put("usedMargin", toDouble(resp.getOrDefault("utilizedAmount", 0)));
+                r.put("totalFunds", toDouble(resp.getOrDefault("sodLimit", 0)));
+                r.put("collateral", toDouble(resp.getOrDefault("collateralAmount", 0)));
+                return r;
+            }
+        } catch (Exception e) { /* fallback */ }
         r.put("availableMargin", 0);
         r.put("usedMargin", 0);
         r.put("totalFunds", 0);

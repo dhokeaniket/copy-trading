@@ -10,6 +10,7 @@ public class PlatformBrokerConfig {
     private BrokerCreds zerodha = new BrokerCreds();
     private BrokerCreds fyers = new BrokerCreds();
     private BrokerCreds upstox = new BrokerCreds();
+    private BrokerCreds dhan = new BrokerCreds();
     private String callbackUrl;
 
     public BrokerCreds getZerodha() { return zerodha; }
@@ -18,6 +19,8 @@ public class PlatformBrokerConfig {
     public void setFyers(BrokerCreds fyers) { this.fyers = fyers; }
     public BrokerCreds getUpstox() { return upstox; }
     public void setUpstox(BrokerCreds upstox) { this.upstox = upstox; }
+    public BrokerCreds getDhan() { return dhan; }
+    public void setDhan(BrokerCreds dhan) { this.dhan = dhan; }
     public String getCallbackUrl() { return callbackUrl; }
     public void setCallbackUrl(String callbackUrl) { this.callbackUrl = callbackUrl; }
 
@@ -26,6 +29,7 @@ public class PlatformBrokerConfig {
             case "ZERODHA" -> zerodha;
             case "FYERS" -> fyers;
             case "UPSTOX" -> upstox;
+            case "DHAN" -> dhan;
             default -> null;
         };
     }
