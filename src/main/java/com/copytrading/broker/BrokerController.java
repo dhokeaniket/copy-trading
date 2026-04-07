@@ -118,6 +118,7 @@ public class BrokerController {
             @RequestParam(required = false) String request_token,
             @RequestParam(required = false) String auth_code,
             @RequestParam(required = false) String code,
+            @RequestParam(required = false) String tokenId,
             @RequestParam(required = false) String status) {
         Map<String, Object> r = new java.util.LinkedHashMap<>();
         r.put("message", "Broker OAuth callback received. Use the token below to call the login API.");
@@ -129,6 +130,10 @@ public class BrokerController {
             r.put("broker", "FYERS");
             r.put("authCode", auth_code);
             r.put("loginBody", Map.of("authCode", auth_code));
+        } else if (tokenId != null) {
+            r.put("broker", "DHAN");
+            r.put("tokenId", tokenId);
+            r.put("loginBody", Map.of("authCode", tokenId));
         } else if (code != null) {
             r.put("broker", "UPSTOX");
             r.put("authCode", code);
