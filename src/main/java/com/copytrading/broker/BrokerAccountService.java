@@ -322,7 +322,8 @@ public class BrokerAccountService {
                 case "ZERODHA":
                     return zerodhaClient.getMargins(platformConfig.getZerodha().getApiKey(), a.getAccessToken()).map(resp -> parseZerodhaMargin(resp));
                 case "FYERS":
-                    return fyersClient.getFunds(a.getAccessToken()).map(resp -> parseFyersMargin(resp));
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    return fyersClient.getFunds(fyersAuth).map(resp -> parseFyersMargin(resp));
                 case "UPSTOX":
                     return upstoxClient.getFundsMargin(a.getAccessToken()).map(resp -> parseUpstoxMargin(resp));
                 default:
@@ -348,7 +349,8 @@ public class BrokerAccountService {
                                 return Map.<String, Object>of("positions", data != null ? data : List.of());
                             });
                 case "FYERS":
-                    return fyersClient.getPositions(a.getAccessToken())
+                    String fyersPosAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    return fyersClient.getPositions(fyersPosAuth)
                             .map(resp -> {
                                 Object netPositions = resp.get("netPositions");
                                 return Map.<String, Object>of("positions", netPositions != null ? netPositions : List.of());
@@ -436,8 +438,8 @@ public class BrokerAccountService {
             double available = 0, used = 0, total = 0;
             for (Object item : fl) {
                 if (item instanceof Map m) {
-                    String title = (String) m.getOrDefault("title", "");
-                    double val = toDouble(m.getOrDefault("equityAmount", 0));
+                    String title = String.valueOf(m.getOrDefault("title", ""));
+                    double val = toDouble(m.getOrDefault("equityAmount", m.getOrDefault("amount", 0)));
                     if ("Total Balance".equalsIgnoreCase(title)) total = val;
                     if ("Available Balance".equalsIgnoreCase(title)) available = val;
                     if ("Utilized Amount".equalsIgnoreCase(title)) used = val;
@@ -449,6 +451,11 @@ public class BrokerAccountService {
             r.put("collateral", 0);
             return r;
         }
+        // Fallback: return raw response as margin info
+        r.put("availableMargin", toDouble(resp.getOrDefault("availableMargin", 0)));
+        r.put("usedMargin", toDouble(resp.getOrDefault("usedMargin", 0)));
+        r.put("totalFunds", toDouble(resp.getOrDefault("totalFunds", 0)));
+        r.put("collateral", 0);
         r.put("raw", resp);
         return r;
     }

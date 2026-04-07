@@ -71,14 +71,20 @@ public class FyersApiClient {
         return client.get()
                 .uri("/funds")
                 .header("Authorization", accessToken)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Fyers funds " + r.statusCode() + ": " + e))))
+                .bodyToMono(Map.class);
     }
 
     public Mono<Map> getPositions(String accessToken) {
         return client.get()
                 .uri("/positions")
                 .header("Authorization", accessToken)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Fyers positions " + r.statusCode() + ": " + e))))
+                .bodyToMono(Map.class);
     }
 
     public Mono<Map> placeOrder(String accessToken, Map<String, Object> body) {
