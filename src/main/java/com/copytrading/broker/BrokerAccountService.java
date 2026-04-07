@@ -502,8 +502,7 @@ public class BrokerAccountService {
         m.put("loginMethod", "token");
         m.put("loginOptions", List.of(
             Map.of("method", "accessToken", "description", "Paste access token from Groww settings (no API key needed)", "requiredFields", List.of("accessToken")),
-            Map.of("method", "apiKeyWithTotp", "description", "API key + TOTP code from authenticator app", "requiredFields", List.of("apiKey", "totpCode")),
-            Map.of("method", "apiKeyWithSecret", "description", "API key + secret (approval type key only)", "requiredFields", List.of("apiKey", "apiSecret"))
+            Map.of("method", "apiKeyWithTotp", "description", "API key + TOTP code from authenticator app", "requiredFields", List.of("apiKey", "totpCode"))
         ));
         m.put("note", "Groww requires per-user credentials. Each user generates their own from Groww settings.");
         return m;
