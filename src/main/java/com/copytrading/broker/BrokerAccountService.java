@@ -462,17 +462,32 @@ public class BrokerAccountService {
 
     private Map<String, Object> parseUpstoxMargin(Map resp) {
         Map<String, Object> r = new LinkedHashMap<>();
-        Object data = resp.get("data");
-        if (data instanceof Map d) {
-            Object equity = d.get("equity");
-            if (equity instanceof Map eq) {
-                r.put("availableMargin", toDouble(eq.getOrDefault("available_margin", 0)));
-                r.put("usedMargin", toDouble(eq.getOrDefault("used_margin", 0)));
-                r.put("totalFunds", toDouble(eq.getOrDefault("available_margin", 0)) + toDouble(eq.getOrDefault("used_margin", 0)));
-                r.put("collateral", toDouble(eq.getOrDefault("collateral", 0)));
+        try {
+            Object data = resp.get("data");
+            if (data instanceof Map d) {
+                // Try equity key first
+                Object equity = d.get("equity");
+                if (equity instanceof Map eq) {
+                    r.put("availableMargin", toDouble(eq.getOrDefault("available_margin", 0)));
+                    r.put("usedMargin", toDouble(eq.getOrDefault("used_margin", 0)));
+                    r.put("totalFunds", toDouble(eq.getOrDefault("available_margin", 0)) + toDouble(eq.getOrDefault("used_margin", 0)));
+                    r.put("collateral", toDouble(eq.getOrDefault("collateral", 0)));
+                    return r;
+                }
+                // Maybe data itself has the margin fields
+                r.put("availableMargin", toDouble(d.getOrDefault("available_margin", 0)));
+                r.put("usedMargin", toDouble(d.getOrDefault("used_margin", 0)));
+                r.put("totalFunds", toDouble(d.getOrDefault("available_margin", 0)) + toDouble(d.getOrDefault("used_margin", 0)));
+                r.put("collateral", 0);
                 return r;
             }
+        } catch (Exception e) {
+            // fallback
         }
+        r.put("availableMargin", 0);
+        r.put("usedMargin", 0);
+        r.put("totalFunds", 0);
+        r.put("collateral", 0);
         r.put("raw", resp);
         return r;
     }
