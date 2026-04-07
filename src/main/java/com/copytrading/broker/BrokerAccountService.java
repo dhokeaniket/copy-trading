@@ -77,7 +77,13 @@ public class BrokerAccountService {
         }
 
         a.setAccessToken(req.getAccessToken());
-        a.setStatus(req.getAccessToken() != null ? "LINKED" : "AUTH_REQUIRED");
+        if (req.getAccessToken() != null) {
+            a.setStatus("ACTIVE");
+            a.setSessionActive(true);
+            a.setSessionExpires(Instant.now().plusSeconds(86400));
+        } else {
+            a.setStatus("AUTH_REQUIRED");
+        }
         return repo.save(a).map(saved -> {
             log.info("BROKER_LINKED id={} user={} broker={}", saved.getId(), userId, broker);
             Map<String, Object> r = new LinkedHashMap<>();
