@@ -42,7 +42,7 @@ public class BrokerAccountService {
     // 3.1 List supported brokers
     public Mono<Map<String, Object>> listBrokers() {
         List<Map<String, Object>> brokers = List.of(
-            brokerInfo("GROWW", "Groww", true, List.of("apiKey", "apiSecret"), "secret", null),
+            growwBrokerInfo(),
             brokerInfo("ZERODHA", "Zerodha", true, List.of(), "oauth", "requestToken"),
             brokerInfo("FYERS", "Fyers", true, List.of(), "oauth", "authCode"),
             brokerInfo("UPSTOX", "Upstox", true, List.of(), "oauth", "authCode"),
@@ -492,6 +492,21 @@ public class BrokerAccountService {
         r.put("totalFunds", 125000);
         r.put("collateral", 0);
         return r;
+    }
+
+    private Map<String, Object> growwBrokerInfo() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("brokerId", "GROWW");
+        m.put("name", "Groww");
+        m.put("isActive", true);
+        m.put("loginMethod", "token");
+        m.put("loginOptions", List.of(
+            Map.of("method", "accessToken", "description", "Paste access token from Groww settings (no API key needed)", "requiredFields", List.of("accessToken")),
+            Map.of("method", "apiKeyWithTotp", "description", "API key + TOTP code from authenticator app", "requiredFields", List.of("apiKey", "totpCode")),
+            Map.of("method", "apiKeyWithSecret", "description", "API key + secret (approval type key only)", "requiredFields", List.of("apiKey", "apiSecret"))
+        ));
+        m.put("note", "Groww requires per-user credentials. Each user generates their own from Groww settings.");
+        return m;
     }
 
     private Map<String, Object> brokerInfo(String id, String name, boolean active, List<String> fields, String loginMethod, String loginField) {
