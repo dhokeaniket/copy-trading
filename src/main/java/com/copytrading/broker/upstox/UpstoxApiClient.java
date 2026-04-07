@@ -64,7 +64,7 @@ public class UpstoxApiClient {
 
     public Mono<Map> getFundsMargin(String accessToken) {
         return client.get()
-                .uri("/v2/user/get-fund-and-margin")
+                .uri("/v2/user/get-funds-and-margin")
                 .header("Authorization", "Bearer " + accessToken)
                 .retrieve()
                 .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
