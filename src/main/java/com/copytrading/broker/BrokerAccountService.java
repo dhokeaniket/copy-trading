@@ -42,12 +42,12 @@ public class BrokerAccountService {
     // 3.1 List supported brokers
     public Mono<Map<String, Object>> listBrokers() {
         List<Map<String, Object>> brokers = List.of(
-            brokerInfo("GROWW", "Groww", true, List.of("apiKey", "apiSecret", "clientId"), "secret", null),
-            brokerInfo("ZERODHA", "Zerodha", true, List.of("apiKey", "apiSecret", "clientId"), "oauth", "requestToken"),
-            brokerInfo("FYERS", "Fyers", true, List.of("apiKey", "apiSecret", "clientId"), "oauth", "authCode"),
-            brokerInfo("UPSTOX", "Upstox", true, List.of("apiKey", "apiSecret", "clientId"), "oauth", "authCode"),
-            brokerInfo("ANGELONE", "Angel One", false, List.of("apiKey", "apiSecret", "clientId"), "oauth", "authCode"),
-            brokerInfo("DHAN", "Dhan", false, List.of("apiKey", "apiSecret", "clientId"), "oauth", "authCode")
+            brokerInfo("GROWW", "Groww", true, List.of("apiKey", "apiSecret"), "secret", null),
+            brokerInfo("ZERODHA", "Zerodha", true, List.of(), "oauth", "requestToken"),
+            brokerInfo("FYERS", "Fyers", true, List.of(), "oauth", "authCode"),
+            brokerInfo("UPSTOX", "Upstox", true, List.of(), "oauth", "authCode"),
+            brokerInfo("ANGELONE", "Angel One", false, List.of(), "oauth", "authCode"),
+            brokerInfo("DHAN", "Dhan", false, List.of(), "oauth", "authCode")
         );
         return Mono.just(Map.of("brokers", brokers));
     }
