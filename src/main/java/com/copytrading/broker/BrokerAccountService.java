@@ -564,22 +564,12 @@ public class BrokerAccountService {
     private Map<String, Object> parseDhanMargin(Map resp) {
         Map<String, Object> r = new LinkedHashMap<>();
         try {
-            Object data = resp.get("data");
-            if (data instanceof Map d) {
-                r.put("availableMargin", toDouble(d.getOrDefault("availableBalance", d.getOrDefault("sodLimit", 0))));
-                r.put("usedMargin", toDouble(d.getOrDefault("utilizedAmount", 0)));
-                r.put("totalFunds", toDouble(d.getOrDefault("sodLimit", 0)));
-                r.put("collateral", toDouble(d.getOrDefault("collateralAmount", 0)));
-                return r;
-            }
-            // Dhan might return fund_limit as a list
-            if (resp.containsKey("availableBalance")) {
-                r.put("availableMargin", toDouble(resp.get("availableBalance")));
-                r.put("usedMargin", toDouble(resp.getOrDefault("utilizedAmount", 0)));
-                r.put("totalFunds", toDouble(resp.getOrDefault("sodLimit", 0)));
-                r.put("collateral", toDouble(resp.getOrDefault("collateralAmount", 0)));
-                return r;
-            }
+            // Dhan returns fields at root level (note: Dhan has typo "availabelBalance")
+            r.put("availableMargin", toDouble(resp.getOrDefault("availabelBalance", resp.getOrDefault("availableBalance", 0))));
+            r.put("usedMargin", toDouble(resp.getOrDefault("utilizedAmount", 0)));
+            r.put("totalFunds", toDouble(resp.getOrDefault("sodLimit", 0)));
+            r.put("collateral", toDouble(resp.getOrDefault("collateralAmount", 0)));
+            return r;
         } catch (Exception e) { /* fallback */ }
         r.put("availableMargin", 0);
         r.put("usedMargin", 0);

@@ -69,7 +69,13 @@ public class DhanApiClient {
                 .retrieve()
                 .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
                         .flatMap(e -> Mono.error(new RuntimeException("Dhan positions " + r.statusCode() + ": " + e))))
-                .bodyToMono(Map.class);
+                .bodyToMono(String.class)
+                .map(body -> {
+                    // Dhan returns an array, wrap it in a map
+                    Map<String, Object> result = new java.util.LinkedHashMap<>();
+                    result.put("raw", body);
+                    return (Map) result;
+                });
     }
 
     public Mono<Map> placeOrder(String accessToken, Map<String, Object> body) {
