@@ -229,6 +229,49 @@ Response: { "message": "Account unlinked" }
 
 ---
 
+## DHAN — 3-Step OAuth Flow
+
+Dhan has 2 login options:
+
+**Option 1: Direct Access Token (user generates from Dhan Web)**
+```
+POST /api/v1/brokers/accounts
+{"brokerId": "dhan", "accessToken": "paste_token_here", "accountNickname": "My Dhan"}
+Response: { "accountId": "uuid", "status": "ACTIVE" }
+Done. Session active immediately.
+```
+
+**Option 2: OAuth (platform handles, user just clicks Connect)**
+
+**Three API calls:**
+```
+Step A: Link account (no user input needed)
+POST /api/v1/brokers/accounts
+{"brokerId": "dhan", "clientId": "1110569575", "accountNickname": "My Dhan"}
+Response: { "accountId": "uuid", "status": "AUTH_REQUIRED" }
+
+Step B: Generate consent (call login with empty body)
+POST /api/v1/brokers/accounts/{accountId}/login
+{}
+Response:
+{
+  "status": "CONSENT_GENERATED",
+  "loginUrl": "https://auth.dhan.co/login/consentApp-login?consentAppId=xxx",
+  "message": "Open loginUrl in browser..."
+}
+
+Step C: Open loginUrl in popup, user logs in on Dhan's page
+Dhan redirects to callback with ?tokenId=xxx
+Frontend captures tokenId
+
+Step D: Login with tokenId
+POST /api/v1/brokers/accounts/{accountId}/login
+{"authCode": "tokenId_from_callback"}
+Response: { "status": "SESSION_ACTIVE", "broker": "Dhan", "expiresAt": "..." }
+```
+
+---
+
 # SUMMARY TABLE
 
 | Broker | User Enters | Steps | Daily Re-login |
@@ -238,6 +281,7 @@ Response: { "message": "Account unlinked" }
 | Zerodha | Nothing (OAuth popup) | 4 calls | Yes (daily) |
 | Fyers | Nothing (OAuth popup) | 4 calls | Yes (daily) |
 | Upstox | Nothing (OAuth popup) | 4 calls | Yes (daily) |
+| Dhan | Nothing (3-step OAuth) | 3 calls | Yes (daily) |
 
 ---
 

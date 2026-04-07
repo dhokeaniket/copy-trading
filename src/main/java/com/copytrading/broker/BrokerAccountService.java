@@ -51,9 +51,23 @@ public class BrokerAccountService {
             brokerInfo("FYERS", "Fyers", true, List.of(), "oauth", "authCode"),
             brokerInfo("UPSTOX", "Upstox", true, List.of(), "oauth", "authCode"),
             brokerInfo("ANGELONE", "Angel One", false, List.of(), "oauth", "authCode"),
-            brokerInfo("DHAN", "Dhan", true, List.of(), "oauth", "tokenId")
+            dhanBrokerInfo()
         );
         return Mono.just(Map.of("brokers", brokers));
+    }
+
+    private Map<String, Object> dhanBrokerInfo() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("brokerId", "DHAN");
+        m.put("name", "Dhan");
+        m.put("isActive", true);
+        m.put("loginMethod", "oauth");
+        m.put("loginField", "tokenId");
+        m.put("loginOptions", List.of(
+            Map.of("method", "accessToken", "description", "Paste access token from Dhan Web (Profile → DhanHQ Trading APIs)", "requiredFields", List.of("accessToken")),
+            Map.of("method", "oauth", "description", "Login via Dhan (platform handles everything, user just clicks Connect)", "requiredFields", List.of())
+        ));
+        return m;
     }
 
     // 3.2 Link account
