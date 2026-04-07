@@ -325,7 +325,18 @@ public class BrokerAccountService {
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
                     return fyersClient.getFunds(fyersAuth).map(resp -> parseFyersMargin(resp));
                 case "UPSTOX":
-                    return upstoxClient.getFundsMargin(a.getAccessToken()).map(resp -> parseUpstoxMargin(resp));
+                    return upstoxClient.getFundsMargin(a.getAccessToken())
+                            .map(resp -> parseUpstoxMargin(resp))
+                            .onErrorResume(e -> {
+                                log.error("UPSTOX_MARGIN_ERROR: {}", e.getMessage());
+                                Map<String, Object> fallback = new LinkedHashMap<>();
+                                fallback.put("availableMargin", 0);
+                                fallback.put("usedMargin", 0);
+                                fallback.put("totalFunds", 0);
+                                fallback.put("collateral", 0);
+                                fallback.put("error", e.getMessage());
+                                return Mono.just(fallback);
+                            });
                 default:
                     return Mono.just(mockMargin());
             }
