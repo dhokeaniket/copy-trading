@@ -16,9 +16,59 @@ import java.util.UUID;
 public class AuthController {
 
     private final AuthService authService;
+    private final OtpService otpService;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, OtpService otpService) {
         this.authService = authService;
+        this.otpService = otpService;
+    }
+
+    @PostMapping(value = "/send-otp", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> sendOtp(@RequestBody SendOtpRequest req) {
+        if (req.getPhone() == null || req.getPhone().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "phone is required"));
+        }
+        if (!otpService.canResend(req.getPhone())) {
+            Map<String, Object> r = new java.util.LinkedHashMap<>();
+            r.put("success", false);
+            r.put("error", "RATE_LIMITED");
+            r.put("message", "Please wait before requesting another OTP");
+            r.put("data", Map.of("retryAfter", otpService.getRetryAfter(req.getPhone())));
+            return Mono.just(r);
+        }
+        return authService.findByPhone(req.getPhone())
+                .flatMap(user -> {
+                    otpService.generateAndStore(req.getPhone());
+                    Map<String, Object> r = new java.util.LinkedHashMap<>();
+                    r.put("success", true);
+                    r.put("data", Map.of("expiresIn", otpService.getExpirySeconds(), "retryAfter", otpService.getRetrySeconds()));
+                    r.put("message", "OTP sent successfully");
+                    return Mono.just(r);
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    Map<String, Object> r = new java.util.LinkedHashMap<>();
+                    r.put("success", false);
+                    r.put("error", "PHONE_NOT_REGISTERED");
+                    r.put("message", "No account found with this phone number");
+                    return Mono.just(r);
+                }));
+    }
+
+    @PostMapping(value = "/verify-otp", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> verifyOtp(@RequestBody VerifyOtpRequest req) {
+        if (req.getPhone() == null || req.getOtp() == null) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "phone and otp are required"));
+        }
+        if (otpService.tooManyAttempts(req.getPhone())) {
+            return Mono.just(Map.<String, Object>of("success", false, "error", "TOO_MANY_ATTEMPTS", "message", "Too many failed attempts. Please request a new OTP."));
+        }
+        if (otpService.isExpired(req.getPhone())) {
+            return Mono.just(Map.<String, Object>of("success", false, "error", "OTP_EXPIRED", "message", "OTP has expired. Please request a new one."));
+        }
+        if (!otpService.verify(req.getPhone(), req.getOtp())) {
+            return Mono.just(Map.<String, Object>of("success", false, "error", "INVALID_OTP", "message", "Invalid OTP code"));
+        }
+        return authService.loginByPhone(req.getPhone());
     }
 
     @PostMapping(value = "/register", consumes = MediaType.APPLICATION_JSON_VALUE)

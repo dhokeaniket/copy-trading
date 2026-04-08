@@ -101,6 +101,37 @@ public class AuthService {
                 });
     }
 
+    // ── 1.2b Login by phone (after OTP verification) ──
+    public Mono<Map<String, Object>> loginByPhone(String phone) {
+        return users.findByPhone(phone)
+                .filter(UserAccount::isActive)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Phone not registered")))
+                .flatMap(u -> issueTokens(u).map(tokens -> {
+                    Map<String, Object> r = new java.util.LinkedHashMap<>();
+                    r.put("success", true);
+                    Map<String, Object> data = new java.util.LinkedHashMap<>();
+                    data.put("accessToken", tokens.get("accessToken"));
+                    data.put("refreshToken", tokens.get("refreshToken"));
+                    Map<String, Object> userMap = new java.util.LinkedHashMap<>();
+                    userMap.put("id", u.getId().toString());
+                    userMap.put("name", u.getName());
+                    userMap.put("email", u.getEmail());
+                    userMap.put("phone", u.getPhone());
+                    String role = u.getRole();
+                    userMap.put("role", role.substring(0, 1).toUpperCase() + role.substring(1).toLowerCase());
+                    userMap.put("twoFactorEnabled", u.isTwoFactorEnabled());
+                    data.put("user", userMap);
+                    r.put("data", data);
+                    log.info("USER_OTP_LOGIN id={} phone={}", u.getId(), phone);
+                    return r;
+                }));
+    }
+
+    // ── Find user by phone ──
+    public Mono<UserAccount> findByPhone(String phone) {
+        return users.findByPhone(phone);
+    }
+
     // ── 1.3 Logout ──
     public Mono<Map<String, String>> logout(String refreshToken) {
         String hash = sha256Hex(refreshToken);

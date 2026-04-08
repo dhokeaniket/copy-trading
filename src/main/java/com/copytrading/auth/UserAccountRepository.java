@@ -21,4 +21,8 @@ public interface UserAccountRepository extends ReactiveCrudRepository<UserAccoun
     Mono<Long> countByRole(String role);
 
     Mono<Boolean> existsByEmail(String email);
+
+    Mono<UserAccount> findByPhone(String phone);
+
+    Mono<Boolean> existsByPhone(String phone);
 }

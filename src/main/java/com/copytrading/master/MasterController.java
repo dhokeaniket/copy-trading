@@ -89,6 +89,11 @@ public class MasterController {
         return service.rejectChild(UUID.fromString(userId), childId);
     }
 
+    @PostMapping("/children/{childId}/decline")
+    public Mono<Map<String, String>> declineChild(@AuthenticationPrincipal String userId, @PathVariable UUID childId) {
+        return service.rejectChild(UUID.fromString(userId), childId);
+    }
+
     @GetMapping("/children/{childId}/scaling")
     public Mono<Map<String, Object>> getScaling(@AuthenticationPrincipal String userId, @PathVariable UUID childId) {
         return service.getScaling(UUID.fromString(userId), childId);
