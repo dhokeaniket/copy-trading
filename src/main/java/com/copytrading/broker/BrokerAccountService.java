@@ -352,7 +352,7 @@ public class BrokerAccountService {
                 });
     }
 
-    // 3.8 Check session status
+    // 3.8 Check session status (enhanced with connectionHealth, margin, brokerName)
     public Mono<Map<String, Object>> getSessionStatus(UUID accountId, UUID userId) {
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
@@ -360,11 +360,52 @@ public class BrokerAccountService {
                 .map(a -> {
                     boolean active = a.isSessionActive() && a.getSessionExpires() != null
                             && a.getSessionExpires().isAfter(Instant.now());
+                    String health = active ? "good" : (a.getAccessToken() != null ? "degraded" : "down");
                     Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("accountId", a.getId());
+                    r.put("status", a.getStatus());
                     r.put("sessionActive", active);
                     r.put("broker", a.getBrokerId());
+                    r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
+                    r.put("clientId", a.getClientId());
+                    r.put("connectionHealth", health);
+                    r.put("lastSyncedAt", a.getSessionExpires() != null ? Instant.now().toString() : null);
                     r.put("expiresAt", a.getSessionExpires() != null ? a.getSessionExpires().toString() : null);
                     return r;
+                });
+    }
+
+    // 3.8b Test connection — tries to fetch margin to verify broker is reachable
+    public Mono<Map<String, Object>> testConnection(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
+                .flatMap(a -> {
+                    if (!a.isSessionActive() || a.getAccessToken() == null) {
+                        return Mono.just(Map.<String, Object>of(
+                                "accountId", a.getId().toString(),
+                                "connectionHealth", "down",
+                                "message", "No active session. Login first."));
+                    }
+                    // Try fetching margin as a health check
+                    return getMargin(accountId, userId)
+                            .map(margin -> {
+                                Map<String, Object> r = new LinkedHashMap<>();
+                                r.put("accountId", a.getId().toString());
+                                r.put("connectionHealth", "good");
+                                r.put("sessionActive", true);
+                                r.put("margin", margin.getOrDefault("availableMargin", 0));
+                                r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
+                                r.put("message", "Connection successful");
+                                return (Map<String, Object>) r;
+                            })
+                            .onErrorResume(e -> {
+                                Map<String, Object> r = new LinkedHashMap<>();
+                                r.put("accountId", a.getId().toString());
+                                r.put("connectionHealth", "degraded");
+                                r.put("message", "Connection issue: " + e.getMessage());
+                                return Mono.just(r);
+                            });
                 });
     }
 

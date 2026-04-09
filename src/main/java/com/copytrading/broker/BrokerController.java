@@ -84,6 +84,13 @@ public class BrokerController {
         return service.getSessionStatus(accountId, UUID.fromString(userId));
     }
 
+    // 3.8b GET /brokers/accounts/:accountId/test — Test connection
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/test")
+    public Mono<Map<String, Object>> testConnection(@PathVariable UUID accountId,
+                                                     @AuthenticationPrincipal String userId) {
+        return service.testConnection(accountId, UUID.fromString(userId));
+    }
+
     // 3.9 GET /brokers/accounts/:accountId/margin
     @GetMapping("/api/v1/brokers/accounts/{accountId}/margin")
     public Mono<Map<String, Object>> getMargin(@PathVariable UUID accountId,
