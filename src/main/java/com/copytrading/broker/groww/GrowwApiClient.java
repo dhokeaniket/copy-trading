@@ -106,6 +106,14 @@ public class GrowwApiClient {
                 .retrieve().bodyToMono(Map.class);
     }
 
+    public Mono<Map> listTrades(String accessToken, String segment) {
+        return client.get()
+                .uri(u -> u.path("/v1/trade/list")
+                        .queryParamIfPresent("segment", java.util.Optional.ofNullable(segment)).build())
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
     private static String sha256Hex(String input) {
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256").digest(input.getBytes(StandardCharsets.UTF_8));

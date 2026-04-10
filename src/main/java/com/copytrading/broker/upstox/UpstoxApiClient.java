@@ -89,6 +89,27 @@ public class UpstoxApiClient {
                 .retrieve().bodyToMono(Map.class);
     }
 
+    public Mono<Map> getOrders(String accessToken) {
+        return client.get()
+                .uri("/v2/order/retrieve/all")
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
+    public Mono<Map> getTrades(String accessToken) {
+        return client.get()
+                .uri("/v2/order/trades/get-trades-for-day")
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
+    public Mono<Map> getHoldings(String accessToken) {
+        return client.get()
+                .uri("/v2/portfolio/long-term-holdings")
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
     public Mono<Map> cancelOrder(String accessToken, String orderId) {
         return client.delete()
                 .uri(u -> u.path("/v2/order/cancel").queryParam("order_id", orderId).build())

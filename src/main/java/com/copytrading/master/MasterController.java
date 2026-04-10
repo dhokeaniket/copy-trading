@@ -115,4 +115,39 @@ public class MasterController {
     public Mono<Map<String, Object>> getTradeHistory(@AuthenticationPrincipal String userId) {
         return service.getTradeHistory(UUID.fromString(userId));
     }
+
+    // Active account
+    @PostMapping(value = "/active-account", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> setActiveAccount(@AuthenticationPrincipal String userId,
+                                                       @RequestBody Map<String, String> body) {
+        return service.setActiveAccount(UUID.fromString(userId), UUID.fromString(body.get("brokerAccountId")));
+    }
+
+    @GetMapping("/active-account")
+    public Mono<Map<String, Object>> getActiveAccount(@AuthenticationPrincipal String userId) {
+        return service.getActiveAccount(UUID.fromString(userId));
+    }
+
+    @DeleteMapping("/active-account")
+    public Mono<Map<String, String>> clearActiveAccount(@AuthenticationPrincipal String userId) {
+        return service.clearActiveAccount(UUID.fromString(userId));
+    }
+
+    // Copy logs scoped to master
+    @GetMapping("/copy/logs")
+    public Mono<Map<String, Object>> getCopyLogs(@AuthenticationPrincipal String userId) {
+        return service.getCopyLogs(UUID.fromString(userId));
+    }
+
+    // Earnings
+    @GetMapping("/earnings")
+    public Mono<Map<String, Object>> getEarnings(@AuthenticationPrincipal String userId) {
+        return service.getEarnings(UUID.fromString(userId));
+    }
+
+    // Payouts
+    @GetMapping("/payouts")
+    public Mono<Map<String, Object>> getPayouts(@AuthenticationPrincipal String userId) {
+        return service.getPayouts(UUID.fromString(userId));
+    }
 }

@@ -1,6 +1,7 @@
 package com.copytrading.child;
 
 import com.copytrading.auth.UserAccountRepository;
+import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.logs.TradeLogRepository;
 import com.copytrading.subscription.Subscription;
 import com.copytrading.subscription.SubscriptionRepository;
@@ -18,11 +19,14 @@ public class ChildService {
     private final SubscriptionRepository subs;
     private final UserAccountRepository users;
     private final TradeLogRepository logs;
+    private final CopyLogRepository copyLogs;
 
-    public ChildService(SubscriptionRepository subs, UserAccountRepository users, TradeLogRepository logs) {
+    public ChildService(SubscriptionRepository subs, UserAccountRepository users,
+                        TradeLogRepository logs, CopyLogRepository copyLogs) {
         this.subs = subs;
         this.users = users;
         this.logs = logs;
+        this.copyLogs = copyLogs;
     }
 
     // 5.1 List available masters
@@ -226,6 +230,12 @@ public class ChildService {
     public Mono<Map<String, Object>> getCopiedTrades(UUID childId) {
         return logs.findByChildId(childId).collectList()
                 .map(list -> Map.<String, Object>of("trades", list));
+    }
+
+    // Copy logs scoped to child
+    public Mono<Map<String, Object>> getCopyLogs(UUID childId) {
+        return copyLogs.findByChildId(childId).collectList()
+                .map(list -> Map.<String, Object>of("logs", list));
     }
 
     // 5.10 Child analytics

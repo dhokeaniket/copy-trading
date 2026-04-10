@@ -119,6 +119,43 @@ public class BrokerController {
         return service.adminBrokerStatus();
     }
 
+    // Orders
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/orders")
+    public Mono<Map<String, Object>> getOrders(@PathVariable UUID accountId,
+                                                @AuthenticationPrincipal String userId) {
+        return service.getOrders(accountId, UUID.fromString(userId));
+    }
+
+    // Trades
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/trades")
+    public Mono<Map<String, Object>> getTrades(@PathVariable UUID accountId,
+                                                @AuthenticationPrincipal String userId) {
+        return service.getTrades(accountId, UUID.fromString(userId));
+    }
+
+    // Holdings
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/holdings")
+    public Mono<Map<String, Object>> getHoldings(@PathVariable UUID accountId,
+                                                  @AuthenticationPrincipal String userId) {
+        return service.getHoldings(accountId, UUID.fromString(userId));
+    }
+
+    // Close position
+    @PostMapping(value = "/api/v1/brokers/accounts/{accountId}/orders/close-position", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> closePosition(@PathVariable UUID accountId,
+                                                    @AuthenticationPrincipal String userId,
+                                                    @RequestBody Map<String, Object> body) {
+        return service.closePosition(accountId, UUID.fromString(userId), body);
+    }
+
+    // Cancel order
+    @DeleteMapping("/api/v1/brokers/accounts/{accountId}/orders/{orderId}")
+    public Mono<Map<String, Object>> cancelOrder(@PathVariable UUID accountId,
+                                                  @AuthenticationPrincipal String userId,
+                                                  @PathVariable String orderId) {
+        return service.cancelOrder(accountId, UUID.fromString(userId), orderId);
+    }
+
     // Broker OAuth callback — captures request_token/auth_code from broker redirect
     @GetMapping("/api/v1/brokers/callback")
     public Mono<Map<String, Object>> oauthCallback(

@@ -1,5 +1,4 @@
 package com.copytrading.broker.dhan;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -84,6 +83,34 @@ public class DhanApiClient {
                 .header("access-token", accessToken)
                 .header("Content-Type", "application/json")
                 .bodyValue(body)
+                .retrieve().bodyToMono(Map.class);
+    }
+
+    public Mono<Map> getOrders(String accessToken) {
+        return apiClient.get()
+                .uri("/v2/orders")
+                .header("access-token", accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
+    public Mono<Map> getTrades(String accessToken) {
+        return apiClient.get()
+                .uri("/v2/trades")
+                .header("access-token", accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
+    public Mono<Map> getHoldings(String accessToken) {
+        return apiClient.get()
+                .uri("/v2/holdings")
+                .header("access-token", accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
+    public Mono<Map> cancelOrder(String accessToken, String orderId) {
+        return apiClient.delete()
+                .uri("/v2/orders/" + orderId)
+                .header("access-token", accessToken)
                 .retrieve().bodyToMono(Map.class);
     }
 

@@ -1,7 +1,7 @@
 package com.copytrading.master;
 
 import com.copytrading.auth.UserAccountRepository;
-import com.copytrading.auth.dto.UserDto;
+import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.logs.TradeLogRepository;
 import com.copytrading.subscription.Subscription;
 import com.copytrading.subscription.SubscriptionRepository;
@@ -19,11 +19,78 @@ public class MasterService {
     private final SubscriptionRepository subs;
     private final UserAccountRepository users;
     private final TradeLogRepository logs;
+    private final CopyLogRepository copyLogs;
+    private final MasterActiveAccountRepository activeAccountRepo;
 
-    public MasterService(SubscriptionRepository subs, UserAccountRepository users, TradeLogRepository logs) {
+    public MasterService(SubscriptionRepository subs, UserAccountRepository users,
+                         TradeLogRepository logs, CopyLogRepository copyLogs,
+                         MasterActiveAccountRepository activeAccountRepo) {
         this.subs = subs;
         this.users = users;
         this.logs = logs;
+        this.copyLogs = copyLogs;
+        this.activeAccountRepo = activeAccountRepo;
+    }
+
+    // Active account management (DB-backed)
+    public Mono<Map<String, Object>> setActiveAccount(UUID masterId, UUID brokerAccountId) {
+        return activeAccountRepo.findById(masterId)
+                .flatMap(existing -> {
+                    existing.setBrokerAccountId(brokerAccountId);
+                    existing.setActivatedAt(Instant.now());
+                    return activeAccountRepo.save(existing);
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    MasterActiveAccount a = new MasterActiveAccount();
+                    a.setMasterId(masterId);
+                    a.setBrokerAccountId(brokerAccountId);
+                    a.setActivatedAt(Instant.now());
+                    return activeAccountRepo.save(a);
+                }))
+                .map(saved -> Map.<String, Object>of(
+                        "brokerAccountId", saved.getBrokerAccountId().toString(),
+                        "message", "Active account set"));
+    }
+
+    public Mono<Map<String, Object>> getActiveAccount(UUID masterId) {
+        return activeAccountRepo.findById(masterId)
+                .map(a -> Map.<String, Object>of("brokerAccountId", a.getBrokerAccountId().toString()))
+                .defaultIfEmpty(Map.of("brokerAccountId", "", "message", "No active account set"));
+    }
+
+    public Mono<Map<String, String>> clearActiveAccount(UUID masterId) {
+        return activeAccountRepo.deleteById(masterId)
+                .thenReturn(Map.of("message", "Active account cleared"));
+    }
+
+    // Copy logs scoped to master
+    public Mono<Map<String, Object>> getCopyLogs(UUID masterId) {
+        return copyLogs.findByMasterId(masterId).collectList()
+                .map(list -> Map.<String, Object>of("logs", list));
+    }
+
+    // Earnings (mock with monthly breakdown)
+    public Mono<Map<String, Object>> getEarnings(UUID masterId) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("totalEarnings", 0);
+        r.put("thisMonth", 0);
+        r.put("lastMonth", 0);
+        r.put("pendingPayout", 0);
+        r.put("currency", "INR");
+        r.put("monthlyBreakdown", List.of(
+                Map.of("month", "2025-01", "earnings", 0),
+                Map.of("month", "2025-02", "earnings", 0),
+                Map.of("month", "2025-03", "earnings", 0),
+                Map.of("month", "2025-04", "earnings", 0),
+                Map.of("month", "2025-05", "earnings", 0),
+                Map.of("month", "2025-06", "earnings", 0)
+        ));
+        return Mono.just(r);
+    }
+
+    // Payouts (mock)
+    public Mono<Map<String, Object>> getPayouts(UUID masterId) {
+        return Mono.just(Map.<String, Object>of("payouts", List.of(), "totalPaid", 0, "currency", "INR"));
     }
 
     // 4.1 List children

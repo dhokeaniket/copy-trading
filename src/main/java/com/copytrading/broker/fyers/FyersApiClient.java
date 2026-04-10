@@ -103,6 +103,27 @@ public class FyersApiClient {
                 .retrieve().bodyToMono(Map.class);
     }
 
+    public Mono<Map> getOrders(String accessToken) {
+        return client.get()
+                .uri("/orders")
+                .header("Authorization", accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
+    public Mono<Map> getTrades(String accessToken) {
+        return client.get()
+                .uri("/tradebook")
+                .header("Authorization", accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
+    public Mono<Map> getHoldings(String accessToken) {
+        return client.get()
+                .uri("/holdings")
+                .header("Authorization", accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
     private static String sha256Hex(String input) {
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256").digest(input.getBytes(StandardCharsets.UTF_8));

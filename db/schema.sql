@@ -101,3 +101,49 @@ CREATE TABLE IF NOT EXISTS broker_accounts (
 
 CREATE INDEX IF NOT EXISTS idx_broker_accounts_user ON broker_accounts(user_id);
 CREATE INDEX IF NOT EXISTS idx_broker_accounts_broker ON broker_accounts(broker_id);
+
+-- ============================================================
+-- Copy Logs (detailed copy execution logs)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS copy_logs (
+  id               BIGSERIAL PRIMARY KEY,
+  master_id        UUID,
+  child_id         UUID,
+  master_trade_id  VARCHAR(100),
+  symbol           VARCHAR(50),
+  qty              INTEGER,
+  trade_type       VARCHAR(10),
+  master_status    VARCHAR(30),
+  child_status     VARCHAR(30),
+  error_message    TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_copy_logs_master ON copy_logs(master_id);
+CREATE INDEX IF NOT EXISTS idx_copy_logs_child ON copy_logs(child_id);
+CREATE INDEX IF NOT EXISTS idx_copy_logs_created ON copy_logs(created_at);
+
+-- ============================================================
+-- Notifications
+-- ============================================================
+CREATE TABLE IF NOT EXISTS notifications (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type       VARCHAR(50) NOT NULL,
+  title      VARCHAR(200) NOT NULL,
+  message    TEXT,
+  read       BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(user_id, read);
+
+-- ============================================================
+-- Master Active Accounts
+-- ============================================================
+CREATE TABLE IF NOT EXISTS master_active_accounts (
+  master_id        UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  broker_account_id UUID NOT NULL REFERENCES broker_accounts(id),
+  activated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);

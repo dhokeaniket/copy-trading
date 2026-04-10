@@ -55,6 +55,11 @@ springdoc:
     path: /v3/api-docs
   use-management-port: false
 
+aws:
+  accessKeyId: ${AWS_ACCESS_KEY_ID:}
+  secretAccessKey: ${AWS_SECRET_ACCESS_KEY:}
+  region: ${AWS_REGION:ap-south-1}
+
 brokers:
   zerodha:
     apiKey: ${ZERODHA_API_KEY:dm1fk4i61xyi29iu}

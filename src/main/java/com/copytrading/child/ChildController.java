@@ -94,4 +94,9 @@ public class ChildController {
     public Mono<Map<String, Object>> getAnalytics(@AuthenticationPrincipal String userId) {
         return service.getAnalytics(UUID.fromString(userId));
     }
+
+    @GetMapping("/copy/logs")
+    public Mono<Map<String, Object>> getCopyLogs(@AuthenticationPrincipal String userId) {
+        return service.getCopyLogs(UUID.fromString(userId));
+    }
 }

@@ -94,6 +94,27 @@ public class ZerodhaApiClient {
                 .retrieve().bodyToMono(Map.class);
     }
 
+    public Mono<Map> getOrders(String apiKey, String accessToken) {
+        return client.get()
+                .uri("/orders")
+                .header("Authorization", "token " + apiKey + ":" + accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
+    public Mono<Map> getTrades(String apiKey, String accessToken) {
+        return client.get()
+                .uri("/trades")
+                .header("Authorization", "token " + apiKey + ":" + accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
+    public Mono<Map> getHoldings(String apiKey, String accessToken) {
+        return client.get()
+                .uri("/portfolio/holdings")
+                .header("Authorization", "token " + apiKey + ":" + accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
     private static String sha256Hex(String input) {
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256").digest(input.getBytes(StandardCharsets.UTF_8));

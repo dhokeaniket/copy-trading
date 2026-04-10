@@ -520,6 +520,155 @@ public class BrokerAccountService {
         return Mono.just(Map.of("brokers", statuses));
     }
 
+    // --- Orders ---
+    public Mono<Map<String, Object>> getOrders(UUID accountId, UUID userId) {
+        return getActiveAccount(accountId, userId).flatMap(a -> {
+            switch (a.getBrokerId()) {
+                case "GROWW":
+                    return growwClient.listOrders(a.getAccessToken(), null)
+                            .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("payload", resp)));
+                case "ZERODHA":
+                    return zerodhaClient.getOrders(platformConfig.getZerodha().getApiKey(), a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
+                case "FYERS":
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    return fyersClient.getOrders(fyersAuth)
+                            .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("orderBook", resp)));
+                case "UPSTOX":
+                    return upstoxClient.getOrders(a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
+                case "DHAN":
+                    return dhanClient.getOrders(a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("orders", resp));
+                default:
+                    return Mono.just(Map.<String, Object>of("orders", List.of()));
+            }
+        });
+    }
+
+    // --- Trades ---
+    public Mono<Map<String, Object>> getTrades(UUID accountId, UUID userId) {
+        return getActiveAccount(accountId, userId).flatMap(a -> {
+            switch (a.getBrokerId()) {
+                case "GROWW":
+                    return growwClient.listTrades(a.getAccessToken(), null)
+                            .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("payload", resp)));
+                case "ZERODHA":
+                    return zerodhaClient.getTrades(platformConfig.getZerodha().getApiKey(), a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
+                case "FYERS":
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    return fyersClient.getTrades(fyersAuth)
+                            .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("tradeBook", resp)));
+                case "UPSTOX":
+                    return upstoxClient.getTrades(a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
+                case "DHAN":
+                    return dhanClient.getTrades(a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("trades", resp));
+                default:
+                    return Mono.just(Map.<String, Object>of("trades", List.of()));
+            }
+        });
+    }
+
+    // --- Holdings ---
+    public Mono<Map<String, Object>> getHoldings(UUID accountId, UUID userId) {
+        return getActiveAccount(accountId, userId).flatMap(a -> {
+            switch (a.getBrokerId()) {
+                case "GROWW":
+                    return growwClient.getHoldings(a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("payload", resp)));
+                case "ZERODHA":
+                    return zerodhaClient.getHoldings(platformConfig.getZerodha().getApiKey(), a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
+                case "FYERS":
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    return fyersClient.getHoldings(fyersAuth)
+                            .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("holdings", resp)));
+                case "UPSTOX":
+                    return upstoxClient.getHoldings(a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
+                case "DHAN":
+                    return dhanClient.getHoldings(a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("holdings", resp));
+                default:
+                    return Mono.just(Map.<String, Object>of("holdings", List.of()));
+            }
+        });
+    }
+
+    // --- Close Position (place market order to close) ---
+    public Mono<Map<String, Object>> closePosition(UUID accountId, UUID userId, Map<String, Object> body) {
+        return getActiveAccount(accountId, userId).flatMap(a -> {
+            String symbol = (String) body.get("symbol");
+            Object qtyObj = body.get("qty");
+            int qty = qtyObj instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(qtyObj));
+            String type = (String) body.getOrDefault("type", "SELL");
+            String product = (String) body.getOrDefault("product", "MIS");
+
+            switch (a.getBrokerId()) {
+                case "GROWW":
+                    return growwClient.placeOrder(a.getAccessToken(), Map.of(
+                            "symbol", symbol, "qty", qty, "type", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL",
+                            "product", product, "order_type", "MARKET", "price", 0
+                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                case "ZERODHA":
+                    return zerodhaClient.placeOrder(platformConfig.getZerodha().getApiKey(), a.getAccessToken(), Map.of(
+                            "tradingsymbol", symbol, "quantity", qty, "transaction_type", type,
+                            "product", product, "order_type", "MARKET", "exchange", "NSE"
+                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                case "FYERS": {
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    int side = type.equalsIgnoreCase("BUY") ? 1 : -1;
+                    return fyersClient.placeOrder(fyersAuth, Map.of(
+                            "symbol", symbol, "qty", qty, "side", side,
+                            "productType", product, "type", 2, "limitPrice", 0, "stopPrice", 0
+                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                }
+                case "UPSTOX":
+                    return upstoxClient.placeOrder(a.getAccessToken(), Map.of(
+                            "instrument_token", symbol, "quantity", qty, "transaction_type", type,
+                            "product", product, "order_type", "MARKET", "price", 0
+                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                case "DHAN":
+                    return dhanClient.placeOrder(a.getAccessToken(), Map.of(
+                            "tradingSymbol", symbol, "quantity", qty, "transactionType", type,
+                            "productType", product, "orderType", "MARKET", "exchangeSegment", "NSE_EQ"
+                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                default:
+                    return Mono.just(Map.<String, Object>of("message", "Unsupported broker"));
+            }
+        });
+    }
+
+    // --- Cancel Order ---
+    public Mono<Map<String, Object>> cancelOrder(UUID accountId, UUID userId, String orderId) {
+        return getActiveAccount(accountId, userId).flatMap(a -> {
+            switch (a.getBrokerId()) {
+                case "GROWW":
+                    return growwClient.cancelOrder(a.getAccessToken(), orderId, "EQ")
+                            .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
+                case "ZERODHA":
+                    return zerodhaClient.cancelOrder(platformConfig.getZerodha().getApiKey(), a.getAccessToken(), orderId)
+                            .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
+                case "FYERS": {
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    return fyersClient.cancelOrder(fyersAuth, orderId)
+                            .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
+                }
+                case "UPSTOX":
+                    return upstoxClient.cancelOrder(a.getAccessToken(), orderId)
+                            .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
+                case "DHAN":
+                    return dhanClient.cancelOrder(a.getAccessToken(), orderId)
+                            .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
+                default:
+                    return Mono.just(Map.<String, Object>of("message", "Unsupported broker"));
+            }
+        });
+    }
+
     // --- Margin parsers ---
     private Map<String, Object> parseGrowwMargin(Map resp) {
         Object payload = resp.get("payload");
