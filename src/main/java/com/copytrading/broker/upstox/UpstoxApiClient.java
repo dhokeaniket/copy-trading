@@ -116,4 +116,11 @@ public class UpstoxApiClient {
                 .header("Authorization", "Bearer " + accessToken)
                 .retrieve().bodyToMono(Map.class);
     }
+
+    public Mono<Map> getProfile(String accessToken) {
+        return client.get()
+                .uri("/v2/user/profile")
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
 }

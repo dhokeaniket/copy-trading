@@ -106,6 +106,12 @@ public class GrowwApiClient {
                 .retrieve().bodyToMono(Map.class);
     }
 
+    public Mono<Map> getProfile(String accessToken) {
+        return client.get().uri("/v1/user/profile")
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve().bodyToMono(Map.class);
+    }
+
     public Mono<Map> listTrades(String accessToken, String segment) {
         return client.get()
                 .uri(u -> u.path("/v1/trade/list")

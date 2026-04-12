@@ -119,6 +119,13 @@ public class BrokerController {
         return service.adminBrokerStatus();
     }
 
+    // Dashboard — all-in-one: profile + margin + positions + holdings + orders
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/dashboard")
+    public Mono<Map<String, Object>> getDashboard(@PathVariable UUID accountId,
+                                                   @AuthenticationPrincipal String userId) {
+        return service.getDashboard(accountId, UUID.fromString(userId));
+    }
+
     // Orders
     @GetMapping("/api/v1/brokers/accounts/{accountId}/orders")
     public Mono<Map<String, Object>> getOrders(@PathVariable UUID accountId,

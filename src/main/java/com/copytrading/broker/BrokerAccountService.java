@@ -783,6 +783,127 @@ public class BrokerAccountService {
         return r;
     }
 
+    // --- Dashboard (all-in-one: profile + margin + positions + holdings + orders) ---
+    public Mono<Map<String, Object>> getDashboard(UUID accountId, UUID userId) {
+        return getActiveAccount(accountId, userId).flatMap(a -> {
+            Mono<Map<String, Object>> marginMono = getMargin(accountId, userId)
+                    .onErrorResume(e -> Mono.just(Map.of("error", e.getMessage())));
+            Mono<Map<String, Object>> positionsMono = getPositions(accountId, userId)
+                    .onErrorResume(e -> Mono.just(Map.of("positions", List.of(), "error", e.getMessage())));
+            Mono<Map<String, Object>> holdingsMono = getHoldings(accountId, userId)
+                    .onErrorResume(e -> Mono.just(Map.of("holdings", List.of(), "error", e.getMessage())));
+            Mono<Map<String, Object>> ordersMono = getOrders(accountId, userId)
+                    .onErrorResume(e -> Mono.just(Map.of("orders", List.of(), "error", e.getMessage())));
+            Mono<Map<String, Object>> profileMono = getBrokerProfile(a)
+                    .onErrorResume(e -> Mono.just(Map.of("error", e.getMessage())));
+
+            return Mono.zip(marginMono, positionsMono, holdingsMono, ordersMono, profileMono)
+                    .map(tuple -> {
+                        Map<String, Object> r = new LinkedHashMap<>();
+                        r.put("accountId", a.getId().toString());
+                        r.put("brokerId", a.getBrokerId());
+                        r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
+                        r.put("clientId", a.getClientId());
+                        r.put("nickname", a.getNickname());
+                        r.put("status", a.getStatus());
+                        r.put("sessionActive", a.isSessionActive());
+                        r.put("profile", tuple.getT5());
+                        r.put("margin", tuple.getT1());
+                        r.put("positions", tuple.getT2().getOrDefault("positions", List.of()));
+                        r.put("holdings", tuple.getT3().getOrDefault("holdings", List.of()));
+                        r.put("orders", tuple.getT4().getOrDefault("orders", List.of()));
+                        return r;
+                    });
+        });
+    }
+
+    private Mono<Map<String, Object>> getBrokerProfile(BrokerAccount a) {
+        switch (a.getBrokerId()) {
+            case "GROWW":
+                return growwClient.getProfile(a.getAccessToken())
+                        .map(resp -> {
+                            Map<String, Object> p = new LinkedHashMap<>();
+                            Object payload = resp.get("payload");
+                            if (payload instanceof Map m) {
+                                p.put("name", m.getOrDefault("name", ""));
+                                p.put("email", m.getOrDefault("email", ""));
+                                p.put("clientId", m.getOrDefault("client_id", ""));
+                                p.put("broker", "Groww");
+                            } else {
+                                p.put("raw", resp);
+                                p.put("broker", "Groww");
+                            }
+                            return p;
+                        });
+            case "ZERODHA":
+                return zerodhaClient.getProfile(platformConfig.getZerodha().getApiKey(), a.getAccessToken())
+                        .map(resp -> {
+                            Map<String, Object> p = new LinkedHashMap<>();
+                            Object data = resp.get("data");
+                            if (data instanceof Map d) {
+                                p.put("name", d.getOrDefault("user_name", ""));
+                                p.put("email", d.getOrDefault("email", ""));
+                                p.put("clientId", d.getOrDefault("user_id", ""));
+                                p.put("broker", "Zerodha");
+                                p.put("exchanges", d.getOrDefault("exchanges", List.of()));
+                                p.put("products", d.getOrDefault("products", List.of()));
+                            } else {
+                                p.put("raw", resp);
+                                p.put("broker", "Zerodha");
+                            }
+                            return p;
+                        });
+            case "FYERS": {
+                String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                return fyersClient.getProfile(fyersAuth)
+                        .map(resp -> {
+                            Map<String, Object> p = new LinkedHashMap<>();
+                            Object data = resp.get("data");
+                            if (data instanceof Map d) {
+                                p.put("name", d.getOrDefault("name", ""));
+                                p.put("email", d.getOrDefault("email_id", ""));
+                                p.put("clientId", d.getOrDefault("fy_id", ""));
+                                p.put("broker", "Fyers");
+                                p.put("pan", d.getOrDefault("PAN", ""));
+                            } else {
+                                p.put("raw", resp);
+                                p.put("broker", "Fyers");
+                            }
+                            return p;
+                        });
+            }
+            case "UPSTOX":
+                return upstoxClient.getProfile(a.getAccessToken())
+                        .map(resp -> {
+                            Map<String, Object> p = new LinkedHashMap<>();
+                            Object data = resp.get("data");
+                            if (data instanceof Map d) {
+                                p.put("name", d.getOrDefault("user_name", ""));
+                                p.put("email", d.getOrDefault("email", ""));
+                                p.put("clientId", d.getOrDefault("user_id", ""));
+                                p.put("broker", "Upstox");
+                                p.put("exchanges", d.getOrDefault("exchanges", List.of()));
+                            } else {
+                                p.put("raw", resp);
+                                p.put("broker", "Upstox");
+                            }
+                            return p;
+                        });
+            case "DHAN":
+                return dhanClient.getProfile(a.getAccessToken())
+                        .map(resp -> {
+                            Map<String, Object> p = new LinkedHashMap<>();
+                            p.put("name", resp.getOrDefault("userName", resp.getOrDefault("name", "")));
+                            p.put("email", resp.getOrDefault("emailId", resp.getOrDefault("email", "")));
+                            p.put("clientId", resp.getOrDefault("dhanClientId", resp.getOrDefault("clientId", "")));
+                            p.put("broker", "Dhan");
+                            return p;
+                        });
+            default:
+                return Mono.just(Map.of("broker", a.getBrokerId(), "message", "Profile not available"));
+        }
+    }
+
     // --- Helpers ---
     private Mono<BrokerAccount> getActiveAccount(UUID accountId, UUID userId) {
         return repo.findById(accountId)
