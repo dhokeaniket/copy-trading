@@ -1,5 +1,6 @@
 package com.copytrading.broker;
 
+import com.copytrading.alert.BalanceAlertService;
 import com.copytrading.broker.dto.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -14,9 +15,11 @@ import java.util.UUID;
 public class BrokerController {
 
     private final BrokerAccountService service;
+    private final BalanceAlertService balanceAlertService;
 
-    public BrokerController(BrokerAccountService service) {
+    public BrokerController(BrokerAccountService service, BalanceAlertService balanceAlertService) {
         this.service = service;
+        this.balanceAlertService = balanceAlertService;
     }
 
     // 3.1 GET /brokers
@@ -161,6 +164,20 @@ public class BrokerController {
                                                   @AuthenticationPrincipal String userId,
                                                   @PathVariable String orderId) {
         return service.cancelOrder(accountId, UUID.fromString(userId), orderId);
+    }
+
+    // Balance alert check
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/balance-alert")
+    public Mono<Map<String, Object>> checkBalanceAlert(@PathVariable UUID accountId,
+                                                        @AuthenticationPrincipal String userId) {
+        return balanceAlertService.checkBalance(accountId, UUID.fromString(userId));
+    }
+
+    // Connection signal (like mobile network bars: 1-4)
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/signal")
+    public Mono<Map<String, Object>> getConnectionSignal(@PathVariable UUID accountId,
+                                                          @AuthenticationPrincipal String userId) {
+        return service.getConnectionSignal(accountId, UUID.fromString(userId));
     }
 
     // Broker OAuth callback — captures request_token/auth_code from broker redirect

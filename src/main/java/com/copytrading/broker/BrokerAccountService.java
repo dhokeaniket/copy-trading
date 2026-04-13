@@ -783,6 +783,63 @@ public class BrokerAccountService {
         return r;
     }
 
+    // --- Connection Signal (like mobile network bars: 1-4) ---
+    public Mono<Map<String, Object>> getConnectionSignal(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
+                .flatMap(a -> {
+                    // No session at all → signal 0 (no bars, red)
+                    if (!a.isSessionActive() || a.getAccessToken() == null) {
+                        return Mono.just(buildSignal(a, 0, "disconnected", "No active session. Login required."));
+                    }
+                    // Session expired → signal 1 (1 bar, red)
+                    if (a.getSessionExpires() != null && a.getSessionExpires().isBefore(Instant.now())) {
+                        return Mono.just(buildSignal(a, 1, "expired", "Session expired. Re-login required."));
+                    }
+                    // Session exists — try a real API call (margin) to check latency
+                    long start = System.currentTimeMillis();
+                    return getMargin(accountId, userId)
+                            .map(margin -> {
+                                long latency = System.currentTimeMillis() - start;
+                                int bars;
+                                String quality;
+                                String msg;
+                                if (latency < 500) {
+                                    bars = 4; quality = "excellent"; msg = "Connection excellent (" + latency + "ms)";
+                                } else if (latency < 1500) {
+                                    bars = 3; quality = "good"; msg = "Connection good (" + latency + "ms)";
+                                } else if (latency < 3000) {
+                                    bars = 2; quality = "fair"; msg = "Connection slow (" + latency + "ms)";
+                                } else {
+                                    bars = 1; quality = "poor"; msg = "Connection very slow (" + latency + "ms)";
+                                }
+                                Map<String, Object> r = buildSignal(a, bars, quality, msg);
+                                r.put("latencyMs", latency);
+                                r.put("marginAvailable", margin.getOrDefault("availableMargin", 0));
+                                return r;
+                            })
+                            .onErrorResume(e -> {
+                                // API call failed → signal 1 (degraded)
+                                return Mono.just(buildSignal(a, 1, "error", "Broker API error: " + e.getMessage()));
+                            });
+                });
+    }
+
+    private Map<String, Object> buildSignal(BrokerAccount a, int bars, String quality, String message) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("accountId", a.getId().toString());
+        r.put("brokerId", a.getBrokerId());
+        r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
+        r.put("signal", bars);           // 0-4 (like mobile bars)
+        r.put("maxSignal", 4);
+        r.put("quality", quality);       // disconnected, expired, error, poor, fair, good, excellent
+        r.put("color", bars >= 3 ? "green" : bars == 2 ? "yellow" : "red");
+        r.put("message", message);
+        r.put("sessionActive", a.isSessionActive());
+        return r;
+    }
+
     // --- Dashboard (all-in-one: profile + margin + positions + holdings + orders) ---
     public Mono<Map<String, Object>> getDashboard(UUID accountId, UUID userId) {
         return getActiveAccount(accountId, userId).flatMap(a -> {
@@ -799,6 +856,7 @@ public class BrokerAccountService {
 
             return Mono.zip(marginMono, positionsMono, holdingsMono, ordersMono, profileMono)
                     .map(tuple -> {
+                        Map<String, Object> margin = tuple.getT1();
                         Map<String, Object> r = new LinkedHashMap<>();
                         r.put("accountId", a.getId().toString());
                         r.put("brokerId", a.getBrokerId());
@@ -807,8 +865,21 @@ public class BrokerAccountService {
                         r.put("nickname", a.getNickname());
                         r.put("status", a.getStatus());
                         r.put("sessionActive", a.isSessionActive());
+                        // Connection signal (4=excellent, 3=good, 2=fair, 1=poor, 0=disconnected)
+                        boolean hasError = margin.containsKey("error");
+                        int signal = hasError ? 1 : 4;
+                        r.put("signal", Map.of(
+                                "bars", signal,
+                                "maxBars", 4,
+                                "quality", hasError ? "error" : "excellent",
+                                "color", signal >= 3 ? "green" : signal == 2 ? "yellow" : "red"
+                        ));
+                        // Balance alert
+                        double available = toDouble(margin.getOrDefault("availableMargin", 0));
+                        String alertLevel = available < 1000 ? "CRITICAL" : available < 5000 ? "WARNING" : available < 10000 ? "LOW" : "OK";
+                        r.put("balanceAlert", Map.of("level", alertLevel, "availableMargin", available));
                         r.put("profile", tuple.getT5());
-                        r.put("margin", tuple.getT1());
+                        r.put("margin", margin);
                         r.put("positions", tuple.getT2().getOrDefault("positions", List.of()));
                         r.put("holdings", tuple.getT3().getOrDefault("holdings", List.of()));
                         r.put("orders", tuple.getT4().getOrDefault("orders", List.of()));

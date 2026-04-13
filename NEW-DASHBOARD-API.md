@@ -129,3 +129,128 @@ If session expired:
 | `GET /brokers/accounts/{id}/orders` | Orders only |
 | `GET /brokers/accounts/{id}/trades` | Trades only |
 | `GET /brokers/accounts/{id}/test` | Connection health check |
+
+
+---
+
+## NEW: Balance Alert API
+
+Checks if child's broker balance is low. Pushes notifications automatically when trades are copied.
+
+### Endpoint
+
+```
+GET /api/v1/brokers/accounts/{accountId}/balance-alert
+```
+
+**Auth:** Bearer token
+
+### Response
+
+```json
+{
+  "alertLevel": "WARNING",
+  "message": "Balance kam hai. Add funds to avoid trade copy failures.",
+  "availableMargin": 3500.00,
+  "usedMargin": 1500.00,
+  "totalFunds": 5000.00,
+  "thresholds": {
+    "critical": 1000,
+    "warning": 5000,
+    "low": 10000
+  }
+}
+```
+
+### Alert Levels
+
+| Level | Condition | Color | Meaning |
+|-------|-----------|-------|---------|
+| `CRITICAL` | Balance < ₹1,000 | 🔴 Red | Trade copy will fail! Add funds now |
+| `WARNING` | Balance < ₹5,000 | 🟡 Yellow | Balance kam hai, add funds |
+| `LOW` | Balance < ₹10,000 | 🟠 Orange | Balance low, keep an eye |
+| `OK` | Balance ≥ ₹10,000 | 🟢 Green | All good |
+
+### Auto Notifications
+
+When a trade is copied to a child account, the system automatically checks their balance and pushes a notification if low. Child sees it in `GET /notifications`.
+
+---
+
+## NEW: Connection Signal API
+
+Like mobile network bars — shows broker connection strength (0-4 bars).
+
+### Endpoint
+
+```
+GET /api/v1/brokers/accounts/{accountId}/signal
+```
+
+**Auth:** Bearer token
+
+### Response
+
+```json
+{
+  "accountId": "uuid",
+  "brokerId": "ZERODHA",
+  "brokerName": "Zerodha",
+  "signal": 4,
+  "maxSignal": 4,
+  "quality": "excellent",
+  "color": "green",
+  "message": "Connection excellent (120ms)",
+  "sessionActive": true,
+  "latencyMs": 120,
+  "marginAvailable": 75000.50
+}
+```
+
+### Signal Bars
+
+| Bars | Quality | Color | Meaning |
+|------|---------|-------|---------|
+| 4 | `excellent` | 🟢 green | < 500ms response |
+| 3 | `good` | 🟢 green | 500-1500ms response |
+| 2 | `fair` | 🟡 yellow | 1500-3000ms response |
+| 1 | `poor` / `expired` / `error` | 🔴 red | > 3000ms or API error or session expired |
+| 0 | `disconnected` | 🔴 red | No session, login required |
+
+### Frontend Display
+
+```
+Signal 4: ████  (all green)
+Signal 3: ███░  (green)
+Signal 2: ██░░  (yellow)
+Signal 1: █░░░  (red)
+Signal 0: ░░░░  (red/grey — disconnected)
+```
+
+---
+
+## Dashboard Now Includes Signal + Balance Alert
+
+The `/dashboard` endpoint now also returns `signal` and `balanceAlert` automatically:
+
+```json
+{
+  "accountId": "uuid",
+  "brokerId": "ZERODHA",
+  "signal": {
+    "bars": 4,
+    "maxBars": 4,
+    "quality": "excellent",
+    "color": "green"
+  },
+  "balanceAlert": {
+    "level": "OK",
+    "availableMargin": 75000.50
+  },
+  "profile": { ... },
+  "margin": { ... },
+  "positions": [ ... ],
+  "holdings": [ ... ],
+  "orders": [ ... ]
+}
+```
