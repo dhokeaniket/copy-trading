@@ -254,3 +254,101 @@ The `/dashboard` endpoint now also returns `signal` and `balanceAlert` automatic
   "orders": [ ... ]
 }
 ```
+
+
+---
+
+## NEW: Trade Copy Engine
+
+The core copy trading engine. Two modes: manual trigger + auto-polling.
+
+### Manual Copy Trade
+
+Master triggers a trade to be copied to all active children.
+
+```
+POST /api/v1/engine/copy-trade
+```
+
+**Auth:** Bearer token (Master)
+
+**Request:**
+```json
+{
+  "symbol": "RELIANCE",
+  "qty": 10,
+  "side": "BUY",
+  "product": "MIS",
+  "orderType": "MARKET",
+  "price": 0
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| symbol | string | yes | Trading symbol (e.g. RELIANCE, TCS) |
+| qty | int | yes | Quantity (master's qty, will be scaled per child) |
+| side | string | yes | BUY or SELL |
+| product | string | no | MIS (default), CNC, NRML |
+| orderType | string | no | MARKET (default), LIMIT |
+| price | double | no | 0 for MARKET orders |
+
+**Response:**
+```json
+{
+  "message": "Trade copy completed",
+  "symbol": "RELIANCE",
+  "side": "BUY",
+  "masterQty": 10,
+  "childrenTotal": 3,
+  "success": 2,
+  "failed": 1,
+  "results": [
+    { "childId": "uuid-1", "status": "SUCCESS", "message": "Order placed: 123456", "broker": "ZERODHA", "scaledQty": 10 },
+    { "childId": "uuid-2", "status": "SUCCESS", "message": "Order placed: 789012", "broker": "FYERS", "scaledQty": 15 },
+    { "childId": "uuid-3", "status": "FAILED", "message": "Insufficient balance (₹200)", "broker": "DHAN", "scaledQty": 10 }
+  ]
+}
+```
+
+### Engine Status
+
+```
+GET /api/v1/engine/status
+```
+
+### Enable/Disable Auto-Polling
+
+```
+POST /api/v1/engine/polling
+{ "enabled": true }
+```
+
+When enabled, the engine polls master's broker orders every 10 seconds and auto-copies new COMPLETE orders to children.
+
+### Reset Polling Cache
+
+```
+POST /api/v1/engine/polling/reset
+```
+
+Clears known orders cache. Use at start of trading day.
+
+### How It Works
+
+```
+Manual Mode:
+  Master clicks "Copy Trade" → POST /engine/copy-trade → Engine places order on each child's broker
+
+Auto-Polling Mode:
+  Every 10 sec → Fetch master's orders → Detect new COMPLETE orders → Copy to children
+
+For each child:
+  1. Check if broker session is active
+  2. Check if balance is sufficient (>₹500)
+  3. Scale quantity by child's scalingFactor
+  4. Place order on child's broker
+  5. Log result to copy_logs
+  6. Send notification to child (success or failure)
+  7. Send summary notification to master
+```
