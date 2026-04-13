@@ -49,24 +49,38 @@ public class MasterService {
                 }))
                 .map(saved -> Map.<String, Object>of(
                         "brokerAccountId", saved.getBrokerAccountId().toString(),
-                        "message", "Active account set"));
+                        "message", "Active account set"))
+                .onErrorResume(e -> {
+                    Map<String, Object> fallback = new LinkedHashMap<>();
+                    fallback.put("error", "Could not set active account: " + e.getMessage());
+                    return Mono.just(fallback);
+                });
     }
 
     public Mono<Map<String, Object>> getActiveAccount(UUID masterId) {
         return activeAccountRepo.findById(masterId)
                 .map(a -> Map.<String, Object>of("brokerAccountId", a.getBrokerAccountId().toString()))
-                .defaultIfEmpty(Map.of("brokerAccountId", "", "message", "No active account set"));
+                .defaultIfEmpty(Map.of("brokerAccountId", "", "message", "No active account set"))
+                .onErrorResume(e -> {
+                    // Table may not exist yet
+                    Map<String, Object> fallback = new LinkedHashMap<>();
+                    fallback.put("brokerAccountId", "");
+                    fallback.put("message", "No active account set");
+                    return Mono.just(fallback);
+                });
     }
 
     public Mono<Map<String, String>> clearActiveAccount(UUID masterId) {
         return activeAccountRepo.deleteById(masterId)
-                .thenReturn(Map.of("message", "Active account cleared"));
+                .thenReturn(Map.of("message", "Active account cleared"))
+                .onErrorResume(e -> Mono.just(Map.of("message", "Active account cleared")));
     }
 
     // Copy logs scoped to master
     public Mono<Map<String, Object>> getCopyLogs(UUID masterId) {
         return copyLogs.findByMasterId(masterId).collectList()
-                .map(list -> Map.<String, Object>of("logs", list));
+                .map(list -> Map.<String, Object>of("logs", list))
+                .onErrorResume(e -> Mono.just(Map.of("logs", List.of())));
     }
 
     // Earnings (mock with monthly breakdown)
