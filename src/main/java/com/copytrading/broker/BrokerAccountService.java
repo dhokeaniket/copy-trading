@@ -411,7 +411,12 @@ public class BrokerAccountService {
 
     // 3.9 Get margin (real for all live brokers)
     public Mono<Map<String, Object>> getMargin(UUID accountId, UUID userId) {
-        return getActiveAccount(accountId, userId).flatMap(a -> {
+        return getAccountOwned(accountId, userId).flatMap(a -> {
+            if (!a.isSessionActive() || a.getAccessToken() == null) {
+                Map<String, Object> r = sessionRequiredResponse(a);
+                r.put("availableMargin", 0); r.put("usedMargin", 0); r.put("totalFunds", 0); r.put("collateral", 0);
+                return Mono.just(r);
+            }
             switch (a.getBrokerId()) {
                 case "GROWW":
                     return growwClient.getMargin(a.getAccessToken()).map(resp -> parseGrowwMargin(resp));
@@ -454,7 +459,12 @@ public class BrokerAccountService {
 
     // 3.10 Get positions (real for all live brokers)
     public Mono<Map<String, Object>> getPositions(UUID accountId, UUID userId) {
-        return getActiveAccount(accountId, userId).flatMap(a -> {
+        return getAccountOwned(accountId, userId).flatMap(a -> {
+            if (!a.isSessionActive() || a.getAccessToken() == null) {
+                Map<String, Object> r = sessionRequiredResponse(a);
+                r.put("positions", List.of());
+                return Mono.just(r);
+            }
             switch (a.getBrokerId()) {
                 case "GROWW":
                     return growwClient.getPositions(a.getAccessToken(), null)
@@ -522,7 +532,10 @@ public class BrokerAccountService {
 
     // --- Orders ---
     public Mono<Map<String, Object>> getOrders(UUID accountId, UUID userId) {
-        return getActiveAccount(accountId, userId).flatMap(a -> {
+        return getAccountOwned(accountId, userId).flatMap(a -> {
+            if (!a.isSessionActive() || a.getAccessToken() == null) {
+                Map<String, Object> r = sessionRequiredResponse(a); r.put("orders", List.of()); return Mono.just(r);
+            }
             switch (a.getBrokerId()) {
                 case "GROWW":
                     return growwClient.listOrders(a.getAccessToken(), null)
@@ -548,7 +561,10 @@ public class BrokerAccountService {
 
     // --- Trades ---
     public Mono<Map<String, Object>> getTrades(UUID accountId, UUID userId) {
-        return getActiveAccount(accountId, userId).flatMap(a -> {
+        return getAccountOwned(accountId, userId).flatMap(a -> {
+            if (!a.isSessionActive() || a.getAccessToken() == null) {
+                Map<String, Object> r = sessionRequiredResponse(a); r.put("trades", List.of()); return Mono.just(r);
+            }
             switch (a.getBrokerId()) {
                 case "GROWW":
                     return growwClient.listTrades(a.getAccessToken(), null)
@@ -574,7 +590,10 @@ public class BrokerAccountService {
 
     // --- Holdings ---
     public Mono<Map<String, Object>> getHoldings(UUID accountId, UUID userId) {
-        return getActiveAccount(accountId, userId).flatMap(a -> {
+        return getAccountOwned(accountId, userId).flatMap(a -> {
+            if (!a.isSessionActive() || a.getAccessToken() == null) {
+                Map<String, Object> r = sessionRequiredResponse(a); r.put("holdings", List.of()); return Mono.just(r);
+            }
             switch (a.getBrokerId()) {
                 case "GROWW":
                     return growwClient.getHoldings(a.getAccessToken())
@@ -981,6 +1000,23 @@ public class BrokerAccountService {
                 .filter(a -> a.getUserId().equals(userId))
                 .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "No active broker session. Login first.")));
+    }
+
+    /** Same as getActiveAccount but returns account even if session is inactive (for graceful error responses) */
+    private Mono<BrokerAccount> getAccountOwned(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")));
+    }
+
+    private Map<String, Object> sessionRequiredResponse(BrokerAccount a) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("error", "No active broker session. Login first.");
+        r.put("accountId", a.getId().toString());
+        r.put("brokerId", a.getBrokerId());
+        r.put("status", a.getStatus());
+        r.put("sessionActive", false);
+        return r;
     }
 
     private Map<String, Object> mockSessionResponse(BrokerAccount a) {
