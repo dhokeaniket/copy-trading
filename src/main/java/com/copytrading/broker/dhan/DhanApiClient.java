@@ -90,21 +90,42 @@ public class DhanApiClient {
         return apiClient.get()
                 .uri("/v2/orders")
                 .header("access-token", accessToken)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .bodyToMono(String.class)
+                .map(body -> {
+                    Map<String, Object> result = new java.util.LinkedHashMap<>();
+                    result.put("orders", body);
+                    return (Map) result;
+                })
+                .onErrorResume(e -> Mono.just(java.util.Map.of("orders", java.util.List.of(), "error", e.getMessage())));
     }
 
     public Mono<Map> getTrades(String accessToken) {
         return apiClient.get()
                 .uri("/v2/trades")
                 .header("access-token", accessToken)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .bodyToMono(String.class)
+                .map(body -> {
+                    Map<String, Object> result = new java.util.LinkedHashMap<>();
+                    result.put("trades", body);
+                    return (Map) result;
+                })
+                .onErrorResume(e -> Mono.just(java.util.Map.of("trades", java.util.List.of(), "error", e.getMessage())));
     }
 
     public Mono<Map> getHoldings(String accessToken) {
         return apiClient.get()
                 .uri("/v2/holdings")
                 .header("access-token", accessToken)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .bodyToMono(String.class)
+                .map(body -> {
+                    Map<String, Object> result = new java.util.LinkedHashMap<>();
+                    result.put("holdings", body);
+                    return (Map) result;
+                })
+                .onErrorResume(e -> Mono.just(java.util.Map.of("holdings", java.util.List.of(), "error", e.getMessage())));
     }
 
     public Mono<Map> cancelOrder(String accessToken, String orderId) {

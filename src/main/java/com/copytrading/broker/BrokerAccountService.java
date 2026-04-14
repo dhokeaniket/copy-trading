@@ -552,7 +552,8 @@ public class BrokerAccountService {
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
                 case "DHAN":
                     return dhanClient.getOrders(a.getAccessToken())
-                            .map(resp -> Map.<String, Object>of("orders", resp));
+                            .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("orders", resp)))
+                            .onErrorResume(e -> Mono.just(Map.of("orders", List.of(), "error", e.getMessage())));
                 default:
                     return Mono.just(Map.<String, Object>of("orders", List.of()));
             }
@@ -581,7 +582,8 @@ public class BrokerAccountService {
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
                 case "DHAN":
                     return dhanClient.getTrades(a.getAccessToken())
-                            .map(resp -> Map.<String, Object>of("trades", resp));
+                            .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("trades", resp)))
+                            .onErrorResume(e -> Mono.just(Map.of("trades", List.of(), "error", e.getMessage())));
                 default:
                     return Mono.just(Map.<String, Object>of("trades", List.of()));
             }
@@ -610,7 +612,8 @@ public class BrokerAccountService {
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
                 case "DHAN":
                     return dhanClient.getHoldings(a.getAccessToken())
-                            .map(resp -> Map.<String, Object>of("holdings", resp));
+                            .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("holdings", resp)))
+                            .onErrorResume(e -> Mono.just(Map.of("holdings", List.of(), "error", e.getMessage())));
                 default:
                     return Mono.just(Map.<String, Object>of("holdings", List.of()));
             }
