@@ -417,43 +417,30 @@ public class BrokerAccountService {
                 r.put("availableMargin", 0); r.put("usedMargin", 0); r.put("totalFunds", 0); r.put("collateral", 0);
                 return Mono.just(r);
             }
+            Mono<Map<String, Object>> result;
             switch (a.getBrokerId()) {
                 case "GROWW":
-                    return growwClient.getMargin(a.getAccessToken()).map(resp -> parseGrowwMargin(resp));
+                    result = growwClient.getMargin(a.getAccessToken()).map(resp -> parseGrowwMargin(resp)); break;
                 case "ZERODHA":
-                    return zerodhaClient.getMargins(platformConfig.getZerodha().getApiKey(), a.getAccessToken()).map(resp -> parseZerodhaMargin(resp));
+                    result = zerodhaClient.getMargins(platformConfig.getZerodha().getApiKey(), a.getAccessToken()).map(resp -> parseZerodhaMargin(resp)); break;
                 case "FYERS":
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
-                    return fyersClient.getFunds(fyersAuth).map(resp -> parseFyersMargin(resp));
+                    result = fyersClient.getFunds(fyersAuth).map(resp -> parseFyersMargin(resp)); break;
                 case "UPSTOX":
-                    return upstoxClient.getFundsMargin(a.getAccessToken())
-                            .map(resp -> parseUpstoxMargin(resp))
-                            .onErrorResume(e -> {
-                                log.error("UPSTOX_MARGIN_ERROR: {}", e.getMessage());
-                                Map<String, Object> fallback = new LinkedHashMap<>();
-                                fallback.put("availableMargin", 0);
-                                fallback.put("usedMargin", 0);
-                                fallback.put("totalFunds", 0);
-                                fallback.put("collateral", 0);
-                                fallback.put("error", e.getMessage());
-                                return Mono.just(fallback);
-                            });
+                    result = upstoxClient.getFundsMargin(a.getAccessToken()).map(resp -> parseUpstoxMargin(resp)); break;
                 case "DHAN":
-                    return dhanClient.getFunds(a.getAccessToken())
-                            .map(resp -> parseDhanMargin(resp))
-                            .onErrorResume(e -> {
-                                log.error("DHAN_MARGIN_ERROR: {}", e.getMessage());
-                                Map<String, Object> fallback = new LinkedHashMap<>();
-                                fallback.put("availableMargin", 0);
-                                fallback.put("usedMargin", 0);
-                                fallback.put("totalFunds", 0);
-                                fallback.put("collateral", 0);
-                                fallback.put("error", e.getMessage());
-                                return Mono.just(fallback);
-                            });
+                    result = dhanClient.getFunds(a.getAccessToken()).map(resp -> parseDhanMargin(resp)); break;
                 default:
-                    return Mono.just(mockMargin());
+                    result = Mono.just(mockMargin()); break;
             }
+            return result.onErrorResume(e -> {
+                log.error("{}_MARGIN_ERROR: {}", a.getBrokerId(), e.getMessage());
+                Map<String, Object> fallback = new LinkedHashMap<>();
+                fallback.put("availableMargin", 0); fallback.put("usedMargin", 0);
+                fallback.put("totalFunds", 0); fallback.put("collateral", 0);
+                fallback.put("error", a.getBrokerId() + ": " + e.getMessage());
+                return Mono.just(fallback);
+            });
         });
     }
 
@@ -493,12 +480,11 @@ public class BrokerAccountService {
                             });
                 case "DHAN":
                     return dhanClient.getPositions(a.getAccessToken())
-                            .map(resp -> Map.<String, Object>of("positions", resp))
-                            .onErrorResume(e -> Mono.just(Map.of("positions", List.of(), "error", e.getMessage())));
+                            .map(resp -> Map.<String, Object>of("positions", resp));
                 default:
                     return Mono.just(Map.<String, Object>of("positions", List.of()));
             }
-        });
+        }).onErrorResume(e -> Mono.just(Map.of("positions", List.of(), "error", e.getMessage())));
     }
 
     // Admin: 3.11 List all accounts
@@ -557,7 +543,7 @@ public class BrokerAccountService {
                 default:
                     return Mono.just(Map.<String, Object>of("orders", List.of()));
             }
-        });
+        }).onErrorResume(e -> Mono.just(Map.of("orders", List.of(), "error", e.getMessage())));
     }
 
     // --- Trades ---
@@ -587,7 +573,7 @@ public class BrokerAccountService {
                 default:
                     return Mono.just(Map.<String, Object>of("trades", List.of()));
             }
-        });
+        }).onErrorResume(e -> Mono.just(Map.of("trades", List.of(), "error", e.getMessage())));
     }
 
     // --- Holdings ---
@@ -617,7 +603,7 @@ public class BrokerAccountService {
                 default:
                     return Mono.just(Map.<String, Object>of("holdings", List.of()));
             }
-        });
+        }).onErrorResume(e -> Mono.just(Map.of("holdings", List.of(), "error", e.getMessage())));
     }
 
     // --- Close Position (place market order to close) ---
