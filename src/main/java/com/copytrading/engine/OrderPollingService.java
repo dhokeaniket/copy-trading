@@ -3,6 +3,7 @@ package com.copytrading.engine;
 import com.copytrading.broker.BrokerAccount;
 import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.broker.BrokerAccountService;
+import com.copytrading.cache.PollingStateCache;
 import com.copytrading.master.MasterActiveAccount;
 import com.copytrading.master.MasterActiveAccountRepository;
 import com.copytrading.subscription.SubscriptionRepository;
@@ -37,8 +38,9 @@ public class OrderPollingService {
     private final CopyEngineService copyEngine;
     private final TradeRepository tradeRepo;
     private final TradeUpdatesHub hub;
+    private final PollingStateCache pollingCache;
 
-    // masterId → Set of known order IDs (to detect new ones)
+    // In-memory fallback for known orders (used alongside Redis)
     private final ConcurrentHashMap<UUID, Set<String>> knownOrders = new ConcurrentHashMap<>();
 
     // Toggle polling on/off
@@ -50,7 +52,8 @@ public class OrderPollingService {
                                SubscriptionRepository subs,
                                CopyEngineService copyEngine,
                                TradeRepository tradeRepo,
-                               TradeUpdatesHub hub) {
+                               TradeUpdatesHub hub,
+                               PollingStateCache pollingCache) {
         this.activeAccountRepo = activeAccountRepo;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -58,6 +61,7 @@ public class OrderPollingService {
         this.copyEngine = copyEngine;
         this.tradeRepo = tradeRepo;
         this.hub = hub;
+        this.pollingCache = pollingCache;
     }
 
     public boolean isPollingEnabled() { return pollingEnabled; }
@@ -116,6 +120,9 @@ public class OrderPollingService {
             // Only copy COMPLETE/EXECUTED orders that we haven't seen before
             if (known.contains(orderId)) continue;
             known.add(orderId);
+
+            // Also mark in Redis (survives restarts)
+            pollingCache.markOrderKnown(masterId, orderId).subscribe();
 
             if (!"COMPLETE".equalsIgnoreCase(status) && !"EXECUTED".equalsIgnoreCase(status)
                     && !"TRADED".equalsIgnoreCase(status)) {
@@ -198,9 +205,11 @@ public class OrderPollingService {
     /** Clear known orders for a master (e.g. at start of new trading day) */
     public void resetKnownOrders(UUID masterId) {
         knownOrders.remove(masterId);
+        pollingCache.resetMaster(masterId).subscribe();
     }
 
     public void resetAllKnownOrders() {
         knownOrders.clear();
+        pollingCache.resetAll().subscribe();
     }
 }
