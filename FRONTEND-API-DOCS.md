@@ -2513,3 +2513,505 @@ TOKEN=$(curl -s -X POST "$BASE/api/v1/auth/login" \
 curl -s "$BASE/api/v1/brokers/accounts/{accountId}/dashboard" \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
+
+
+---
+
+## 8. Trade Engine
+
+### 8.1 Execute Trade
+
+```
+POST /api/v1/trades/execute
+```
+
+**Auth:** Bearer token (Master or Child)
+
+When a Master places a trade, it auto-replicates to all subscribed children.
+
+**Request:**
+```json
+{
+  "brokerAccountId": "uuid",
+  "instrument": "RELIANCE",
+  "exchange": "NSE",
+  "segment": "EQUITY",
+  "orderType": "MARKET",
+  "transactionType": "BUY",
+  "quantity": 10,
+  "price": 0,
+  "product": "MIS",
+  "validity": "DAY"
+}
+```
+
+**Response:**
+```json
+{
+  "tradeId": "uuid",
+  "brokerOrderId": "123456",
+  "status": "EXECUTED",
+  "replicationsTriggered": 3,
+  "replicationDetails": [
+    { "childId": "uuid", "status": "SUCCESS", "message": "Order placed: 789", "broker": "FYERS" },
+    { "childId": "uuid", "status": "FAILED", "message": "Broker session inactive", "broker": "DHAN" }
+  ]
+}
+```
+
+### 8.2 List Trades
+
+```
+GET /api/v1/trades?status=EXECUTED
+```
+
+**Response:**
+```json
+{ "trades": [ { "id": "uuid", "instrument": "RELIANCE", "transactionType": "BUY", "quantity": 10, "status": "EXECUTED", "placedAt": "..." } ] }
+```
+
+### 8.3 Get Trade Detail
+
+```
+GET /api/v1/trades/{tradeId}
+```
+
+### 8.4 Cancel Trade
+
+```
+DELETE /api/v1/trades/{tradeId}/cancel
+```
+
+**Response:**
+```json
+{ "message": "Order cancelled", "brokerResponse": "..." }
+```
+
+### 8.5 Get Trade Replications
+
+```
+GET /api/v1/trades/{tradeId}/replications
+```
+
+**Response:**
+```json
+{ "replications": [ { "childId": "uuid", "symbol": "RELIANCE", "childStatus": "SUCCESS", "qty": 10 } ] }
+```
+
+### 8.6 Open Positions
+
+```
+GET /api/v1/trades/open-positions?brokerAccountId=uuid
+```
+
+### 8.7 Basket Order
+
+```
+POST /api/v1/trades/basket
+```
+
+**Request:**
+```json
+{
+  "brokerAccountId": "uuid",
+  "basketName": "My Basket",
+  "orders": [
+    { "instrument": "RELIANCE", "transactionType": "BUY", "quantity": 10, "orderType": "MARKET", "product": "MIS" },
+    { "instrument": "TCS", "transactionType": "BUY", "quantity": 5, "orderType": "MARKET", "product": "MIS" }
+  ]
+}
+```
+
+---
+
+## 9. Copy Engine
+
+### 9.1 Manual Copy Trade
+
+```
+POST /api/v1/engine/copy-trade
+```
+
+**Auth:** Bearer token (Master)
+
+Manually trigger a trade copy to all active children.
+
+**Request:**
+```json
+{ "symbol": "RELIANCE", "qty": 10, "side": "BUY", "product": "MIS", "orderType": "MARKET", "price": 0 }
+```
+
+**Response:**
+```json
+{
+  "message": "Trade copy completed",
+  "symbol": "RELIANCE",
+  "side": "BUY",
+  "masterQty": 10,
+  "childrenTotal": 3,
+  "success": 2,
+  "failed": 1,
+  "results": [
+    { "childId": "uuid", "status": "SUCCESS", "message": "Order placed: 123", "broker": "ZERODHA", "scaledQty": 10 },
+    { "childId": "uuid", "status": "FAILED", "message": "Broker session inactive", "broker": "DHAN", "scaledQty": 10 }
+  ]
+}
+```
+
+### 9.2 Engine Status
+
+```
+GET /api/v1/engine/status
+```
+
+**Response:**
+```json
+{ "engineStatus": "ACTIVE", "pollingEnabled": false, "pollingIntervalSeconds": 3, "supportedBrokers": ["GROWW","ZERODHA","FYERS","UPSTOX","DHAN"], "modes": ["manual","polling"] }
+```
+
+### 9.3 Toggle Polling
+
+```
+POST /api/v1/engine/polling
+```
+
+**Request:**
+```json
+{ "enabled": true }
+```
+
+### 9.4 Reset Polling Cache
+
+```
+POST /api/v1/engine/polling/reset
+```
+
+---
+
+## 10. Risk Engine
+
+### 10.1 Get Risk Rules
+
+```
+GET /api/v1/risk/rules
+```
+
+**Response:**
+```json
+{ "maxTradesPerDay": 50, "maxOpenPositions": 20, "maxCapitalExposure": 80.0, "marginCheckEnabled": true }
+```
+
+### 10.2 Set Risk Rules (Admin)
+
+```
+PUT /api/v1/admin/risk/rules/{userId}
+```
+
+**Request:**
+```json
+{ "maxTradesPerDay": 30, "maxOpenPositions": 10, "maxCapitalExposure": 60, "marginCheckEnabled": true }
+```
+
+### 10.3 Get Exposure
+
+```
+GET /api/v1/risk/exposure
+```
+
+**Response:**
+```json
+{ "currentOpenPositions": 3, "maxOpenPositions": 20, "tradesToday": 5, "maxTradesPerDay": 50, "capitalExposurePct": 0 }
+```
+
+### 10.4 Margin Check
+
+```
+GET /api/v1/risk/margin-check?brokerAccountId=uuid&instrument=RELIANCE&quantity=10&orderType=MARKET
+```
+
+**Response:**
+```json
+{ "sufficient": true, "requiredMargin": 1000, "availableMargin": 75000, "shortfall": 0 }
+```
+
+---
+
+## 11. P&L Engine
+
+### 11.1 Realized P&L
+
+```
+GET /api/v1/pnl/realized?from=2026-01-01&to=2026-04-16
+```
+
+**Response:**
+```json
+{ "realizedPnl": 0, "trades": [...] }
+```
+
+### 11.2 Unrealized P&L
+
+```
+GET /api/v1/pnl/unrealized?brokerAccountId=uuid
+```
+
+**Response:**
+```json
+{ "unrealizedPnl": 0, "positions": [...] }
+```
+
+### 11.3 P&L Summary
+
+```
+GET /api/v1/pnl/summary?period=DAILY
+```
+
+**Response:**
+```json
+{ "summary": [ { "period": "today", "realizedPnl": 0, "unrealizedPnl": 0, "totalTrades": 5, "winRate": 0 } ] }
+```
+
+### 11.4 Child vs Master
+
+```
+GET /api/v1/pnl/child-vs-master?masterId=uuid
+```
+
+**Response:**
+```json
+{ "masterPnl": 0, "childPnl": 0, "replicationAccuracy": 80, "failedReplications": 2 }
+```
+
+### 11.5 Admin P&L (All Users)
+
+```
+GET /api/v1/admin/pnl/all
+```
+
+---
+
+## 12. Logs
+
+### 12.1 User Trade Logs
+
+```
+GET /api/v1/logs/trades
+```
+
+### 12.2 Broker Error Logs
+
+```
+GET /api/v1/logs/broker-errors?brokerAccountId=uuid
+```
+
+### 12.3 Admin Trade Logs
+
+```
+GET /api/v1/admin/logs/trades?userId=uuid&status=EXECUTED
+```
+
+### 12.4 Admin System Logs
+
+```
+GET /api/v1/admin/logs/system
+```
+
+**Response:**
+```json
+{ "logs": [ { "level": "INFO", "service": "copy-trading", "message": "System running", "freeMemoryMB": 200, "totalMemoryMB": 512 } ] }
+```
+
+### 12.5 Admin Broker Error Logs
+
+```
+GET /api/v1/admin/logs/broker-errors?brokerId=ZERODHA
+```
+
+---
+
+## 13. Balance Alert
+
+```
+GET /api/v1/brokers/accounts/{accountId}/balance-alert
+```
+
+**Response:**
+```json
+{ "alertLevel": "WARNING", "message": "Balance kam hai. Add funds.", "availableMargin": 3500, "thresholds": { "critical": 1000, "warning": 5000, "low": 10000 } }
+```
+
+Alert levels: `CRITICAL` (<₹1K) | `WARNING` (<₹5K) | `LOW` (<₹10K) | `OK` (≥₹10K)
+
+---
+
+## 14. Connection Signal
+
+```
+GET /api/v1/brokers/accounts/{accountId}/signal
+```
+
+**Response:**
+```json
+{ "signal": 4, "maxSignal": 4, "quality": "excellent", "color": "green", "message": "Connection excellent (120ms)", "latencyMs": 120 }
+```
+
+Signal: 0 (disconnected) → 1 (poor/red) → 2 (fair/yellow) → 3 (good/green) → 4 (excellent/green)
+
+---
+
+## 15. Dashboard (All-in-One)
+
+```
+GET /api/v1/brokers/accounts/{accountId}/dashboard
+```
+
+Returns profile + margin + positions + holdings + orders + signal + balanceAlert in one call.
+
+---
+
+## 16. WebSocket Channels
+
+Connect: `ws://copy-trading-production-3981.up.railway.app/ws/{channel}?token=JWT`
+
+| Channel | Events |
+|---------|--------|
+| `/ws/trades` | TRADE_EXECUTED, TRADE_FAILED, TRADE_CANCELLED, TRADE_DETECTED |
+| `/ws/positions` | POSITION_OPENED, POSITION_CLOSED, POSITION_UPDATED |
+| `/ws/pnl` | Real-time P&L updates |
+| `/ws/notifications` | MARGIN_WARNING, TRADE_FAILED, REPLICATION_FAILED, SESSION_EXPIRED |
+
+---
+
+## Quick Reference — All Endpoints (Updated)
+
+| # | Method | Endpoint | Auth | Description |
+|---|--------|----------|------|-------------|
+| | **AUTH** | | | |
+| 1 | POST | `/api/v1/auth/register` | No | Register |
+| 2 | POST | `/api/v1/auth/login` | No | Login |
+| 3 | POST | `/api/v1/auth/send-otp` | No | Send OTP |
+| 4 | POST | `/api/v1/auth/verify-otp` | No | Verify OTP |
+| 5 | POST | `/api/v1/auth/refresh-token` | No | Refresh token |
+| 6 | POST | `/api/v1/auth/logout` | Yes | Logout |
+| 7 | POST | `/api/v1/auth/forgot-password` | No | Forgot password |
+| 8 | POST | `/api/v1/auth/reset-password` | No | Reset password |
+| 9 | GET | `/api/v1/auth/me` | Yes | Get profile |
+| 10 | PUT | `/api/v1/auth/me` | Yes | Update profile |
+| 11 | POST | `/api/v1/auth/2fa/enable` | Yes | Enable 2FA |
+| 12 | POST | `/api/v1/auth/2fa/verify` | Yes | Verify 2FA |
+| 13 | DELETE | `/api/v1/auth/2fa/disable` | Yes | Disable 2FA |
+| | **ADMIN** | | | |
+| 14 | GET | `/api/v1/admin/users` | Admin | List users |
+| 15 | POST | `/api/v1/admin/users/master` | Admin | Create master |
+| 16 | POST | `/api/v1/admin/users/child` | Admin | Create child |
+| 17 | GET | `/api/v1/admin/users/{userId}` | Admin | Get user |
+| 18 | PUT | `/api/v1/admin/users/{userId}` | Admin | Update user |
+| 19 | PATCH | `/api/v1/admin/users/{userId}/activate` | Admin | Activate |
+| 20 | PATCH | `/api/v1/admin/users/{userId}/deactivate` | Admin | Deactivate |
+| 21 | DELETE | `/api/v1/admin/users/{userId}` | Admin | Delete user |
+| 22 | GET | `/api/v1/admin/analytics` | Admin | Analytics |
+| 23 | GET | `/api/v1/admin/system-health` | Admin | System health |
+| 24 | GET | `/api/v1/admin/subscriptions` | Admin | Subscriptions |
+| 25 | GET | `/api/v1/admin/trade-logs` | Admin | Trade logs |
+| 26 | GET | `/api/v1/admin/brokers/accounts` | Admin | Broker accounts |
+| 27 | GET | `/api/v1/admin/brokers/status` | Admin | Broker status |
+| 28 | PUT | `/api/v1/admin/risk/rules/{userId}` | Admin | Set risk rules |
+| 29 | GET | `/api/v1/admin/pnl/all` | Admin | Platform P&L |
+| 30 | GET | `/api/v1/admin/logs/trades` | Admin | All trade logs |
+| 31 | GET | `/api/v1/admin/logs/system` | Admin | System logs |
+| 32 | GET | `/api/v1/admin/logs/broker-errors` | Admin | Broker errors |
+| | **BROKERS** | | | |
+| 33 | GET | `/api/v1/brokers` | Yes | List brokers |
+| 34 | POST | `/api/v1/brokers/accounts` | Yes | Link account |
+| 35 | GET | `/api/v1/brokers/accounts` | Yes | List accounts |
+| 36 | GET | `/api/v1/brokers/accounts/{id}` | Yes | Get account |
+| 37 | PUT | `/api/v1/brokers/accounts/{id}` | Yes | Update account |
+| 38 | DELETE | `/api/v1/brokers/accounts/{id}` | Yes | Delete account |
+| 39 | POST | `/api/v1/brokers/accounts/{id}/login` | Yes | Login to broker |
+| 40 | GET | `/api/v1/brokers/accounts/{id}/oauth-url` | Yes | Get OAuth URL |
+| 41 | GET | `/api/v1/brokers/accounts/{id}/status` | Yes | Session status |
+| 42 | GET | `/api/v1/brokers/accounts/{id}/test` | Yes | Test connection |
+| 43 | GET | `/api/v1/brokers/accounts/{id}/dashboard` | Yes | Dashboard |
+| 44 | GET | `/api/v1/brokers/accounts/{id}/margin` | Yes | Margin |
+| 45 | GET | `/api/v1/brokers/accounts/{id}/positions` | Yes | Positions |
+| 46 | GET | `/api/v1/brokers/accounts/{id}/orders` | Yes | Orders |
+| 47 | GET | `/api/v1/brokers/accounts/{id}/trades` | Yes | Trades |
+| 48 | GET | `/api/v1/brokers/accounts/{id}/holdings` | Yes | Holdings |
+| 49 | GET | `/api/v1/brokers/accounts/{id}/signal` | Yes | Connection signal |
+| 50 | GET | `/api/v1/brokers/accounts/{id}/balance-alert` | Yes | Balance alert |
+| 51 | POST | `/api/v1/brokers/accounts/{id}/orders/close-position` | Yes | Close position |
+| 52 | DELETE | `/api/v1/brokers/accounts/{id}/orders/{orderId}` | Yes | Cancel order |
+| 53 | GET | `/api/v1/brokers/callback` | No | OAuth callback |
+| | **MASTER** | | | |
+| 54 | GET | `/api/v1/master/children` | Yes | List children |
+| 55 | POST | `/api/v1/master/children/{childId}/link` | Yes | Link child |
+| 56 | POST | `/api/v1/master/children/bulk-link` | Yes | Bulk link |
+| 57 | DELETE | `/api/v1/master/children/{childId}/unlink` | Yes | Unlink |
+| 58 | POST | `/api/v1/master/children/bulk-unlink` | Yes | Bulk unlink |
+| 59 | POST | `/api/v1/master/children/{childId}/pause` | Yes | Pause |
+| 60 | POST | `/api/v1/master/children/{childId}/resume` | Yes | Resume |
+| 61 | GET | `/api/v1/master/children/pending` | Yes | Pending approvals |
+| 62 | POST | `/api/v1/master/children/{childId}/approve` | Yes | Approve |
+| 63 | POST | `/api/v1/master/children/{childId}/reject` | Yes | Reject |
+| 64 | POST | `/api/v1/master/children/{childId}/decline` | Yes | Decline |
+| 65 | GET | `/api/v1/master/children/{childId}/scaling` | Yes | Get scaling |
+| 66 | PUT | `/api/v1/master/children/{childId}/scaling` | Yes | Update scaling |
+| 67 | GET | `/api/v1/master/analytics` | Yes | Analytics |
+| 68 | GET | `/api/v1/master/trade-history` | Yes | Trade history |
+| 69 | POST | `/api/v1/master/active-account` | Yes | Set active account |
+| 70 | GET | `/api/v1/master/active-account` | Yes | Get active account |
+| 71 | DELETE | `/api/v1/master/active-account` | Yes | Clear active account |
+| 72 | GET | `/api/v1/master/copy/logs` | Yes | Copy logs |
+| 73 | GET | `/api/v1/master/earnings` | Yes | Earnings |
+| 74 | GET | `/api/v1/master/payouts` | Yes | Payouts |
+| | **CHILD** | | | |
+| 75 | GET | `/api/v1/child/masters` | Yes | List masters |
+| 76 | POST | `/api/v1/child/subscriptions` | Yes | Subscribe |
+| 77 | POST | `/api/v1/child/subscriptions/bulk` | Yes | Bulk subscribe |
+| 78 | DELETE | `/api/v1/child/subscriptions/{masterId}` | Yes | Unsubscribe |
+| 79 | POST | `/api/v1/child/subscriptions/bulk-unsubscribe` | Yes | Bulk unsubscribe |
+| 80 | GET | `/api/v1/child/subscriptions` | Yes | List subscriptions |
+| 81 | GET | `/api/v1/child/scaling` | Yes | Get scaling |
+| 82 | PUT | `/api/v1/child/scaling` | Yes | Update scaling |
+| 83 | POST | `/api/v1/child/copying/pause` | Yes | Pause copying |
+| 84 | POST | `/api/v1/child/copying/resume` | Yes | Resume copying |
+| 85 | GET | `/api/v1/child/copied-trades` | Yes | Copied trades |
+| 86 | GET | `/api/v1/child/analytics` | Yes | Analytics |
+| 87 | GET | `/api/v1/child/copy/logs` | Yes | Copy logs |
+| | **TRADE ENGINE** | | | |
+| 88 | POST | `/api/v1/trades/execute` | Yes | Execute trade |
+| 89 | GET | `/api/v1/trades` | Yes | List trades |
+| 90 | GET | `/api/v1/trades/{tradeId}` | Yes | Get trade |
+| 91 | DELETE | `/api/v1/trades/{tradeId}/cancel` | Yes | Cancel trade |
+| 92 | GET | `/api/v1/trades/{tradeId}/replications` | Yes | Replications |
+| 93 | GET | `/api/v1/trades/open-positions` | Yes | Open positions |
+| 94 | POST | `/api/v1/trades/basket` | Yes | Basket order |
+| | **COPY ENGINE** | | | |
+| 95 | POST | `/api/v1/engine/copy-trade` | Yes | Manual copy |
+| 96 | GET | `/api/v1/engine/status` | Yes | Engine status |
+| 97 | POST | `/api/v1/engine/polling` | Yes | Toggle polling |
+| 98 | POST | `/api/v1/engine/polling/reset` | Yes | Reset cache |
+| | **RISK ENGINE** | | | |
+| 99 | GET | `/api/v1/risk/rules` | Yes | Get rules |
+| 100 | GET | `/api/v1/risk/exposure` | Yes | Get exposure |
+| 101 | GET | `/api/v1/risk/margin-check` | Yes | Margin check |
+| | **P&L ENGINE** | | | |
+| 102 | GET | `/api/v1/pnl/realized` | Yes | Realized P&L |
+| 103 | GET | `/api/v1/pnl/unrealized` | Yes | Unrealized P&L |
+| 104 | GET | `/api/v1/pnl/summary` | Yes | P&L summary |
+| 105 | GET | `/api/v1/pnl/child-vs-master` | Yes | Child vs Master |
+| | **LOGS** | | | |
+| 106 | GET | `/api/v1/logs/trades` | Yes | Trade logs |
+| 107 | GET | `/api/v1/logs/broker-errors` | Yes | Broker errors |
+| | **NOTIFICATIONS** | | | |
+| 108 | GET | `/api/v1/notifications` | Yes | List |
+| 109 | PATCH | `/api/v1/notifications/{id}/read` | Yes | Mark read |
+| 110 | POST | `/api/v1/notifications/read-all` | Yes | Mark all read |
+| 111 | DELETE | `/api/v1/notifications/{id}` | Yes | Delete |
+| | **COPY LOGS** | | | |
+| 112 | GET | `/api/v1/copy/logs` | Yes | All copy logs |
+| | **WEBSOCKET** | | | |
+| 113 | WS | `/ws/trades` | Token | Trade events |
+| 114 | WS | `/ws/positions` | Token | Position events |
+| 115 | WS | `/ws/pnl` | Token | P&L updates |
+| 116 | WS | `/ws/notifications` | Token | Alerts |
