@@ -6,12 +6,16 @@ import com.copytrading.broker.BrokerAccountService;
 import com.copytrading.master.MasterActiveAccount;
 import com.copytrading.master.MasterActiveAccountRepository;
 import com.copytrading.subscription.SubscriptionRepository;
+import com.copytrading.trade.Trade;
+import com.copytrading.trade.TradeRepository;
+import com.copytrading.ws.TradeUpdatesHub;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -31,6 +35,8 @@ public class OrderPollingService {
     private final BrokerAccountService brokerService;
     private final SubscriptionRepository subs;
     private final CopyEngineService copyEngine;
+    private final TradeRepository tradeRepo;
+    private final TradeUpdatesHub hub;
 
     // masterId → Set of known order IDs (to detect new ones)
     private final ConcurrentHashMap<UUID, Set<String>> knownOrders = new ConcurrentHashMap<>();
@@ -42,12 +48,16 @@ public class OrderPollingService {
                                BrokerAccountRepository brokerRepo,
                                BrokerAccountService brokerService,
                                SubscriptionRepository subs,
-                               CopyEngineService copyEngine) {
+                               CopyEngineService copyEngine,
+                               TradeRepository tradeRepo,
+                               TradeUpdatesHub hub) {
         this.activeAccountRepo = activeAccountRepo;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
         this.subs = subs;
         this.copyEngine = copyEngine;
+        this.tradeRepo = tradeRepo;
+        this.hub = hub;
     }
 
     public boolean isPollingEnabled() { return pollingEnabled; }
@@ -56,7 +66,7 @@ public class OrderPollingService {
     /**
      * Runs every 10 seconds. Checks each master's active broker account for new orders.
      */
-    @Scheduled(fixedDelay = 10000, initialDelay = 30000)
+    @Scheduled(fixedDelay = 3000, initialDelay = 15000)
     public void pollMasterOrders() {
         if (!pollingEnabled) return;
 
@@ -130,7 +140,33 @@ public class OrderPollingService {
             log.info("NEW_ORDER_DETECTED master={} broker={} orderId={} symbol={} side={} qty={}",
                     masterId, account.getBrokerId(), orderId, symbol, side, qty);
 
-            // Trigger copy
+            // Save master's trade to DB (so master sees it in trade history)
+            Trade masterTrade = new Trade();
+            masterTrade.setUserId(masterId);
+            masterTrade.setBrokerAccountId(account.getId());
+            masterTrade.setBrokerOrderId(orderId);
+            masterTrade.setInstrument(symbol);
+            masterTrade.setExchange("NSE");
+            masterTrade.setSegment("EQUITY");
+            masterTrade.setOrderType("MARKET");
+            masterTrade.setTransactionType(side.toUpperCase());
+            masterTrade.setQuantity(qty);
+            masterTrade.setPrice(0);
+            masterTrade.setProduct(product != null ? product : "MIS");
+            masterTrade.setStatus("EXECUTED");
+            masterTrade.setPlacedAt(Instant.now());
+            masterTrade.setExecutedAt(Instant.now());
+            tradeRepo.save(masterTrade).subscribe(
+                    saved -> log.info("MASTER_TRADE_SAVED id={} symbol={}", saved.getId(), symbol),
+                    err -> log.warn("MASTER_TRADE_SAVE_FAIL: {}", err.getMessage())
+            );
+
+            // Publish WebSocket event
+            hub.publish("{\"event\":\"TRADE_DETECTED\",\"masterId\":\"" + masterId +
+                    "\",\"instrument\":\"" + symbol + "\",\"side\":\"" + side +
+                    "\",\"qty\":" + qty + ",\"broker\":\"" + account.getBrokerId() + "\"}");
+
+            // Trigger copy to all children
             CopyTradeRequest req = new CopyTradeRequest();
             req.setSymbol(symbol);
             req.setQty(qty);

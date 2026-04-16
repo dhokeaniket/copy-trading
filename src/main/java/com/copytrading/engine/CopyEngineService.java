@@ -15,6 +15,8 @@ import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.notification.NotificationService;
 import com.copytrading.subscription.Subscription;
 import com.copytrading.subscription.SubscriptionRepository;
+import com.copytrading.trade.Trade;
+import com.copytrading.trade.TradeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -46,6 +48,7 @@ public class CopyEngineService {
     private final CopyLogRepository copyLogs;
     private final NotificationService notifications;
     private final BalanceAlertService balanceAlert;
+    private final TradeRepository tradeRepo;
     private final GrowwApiClient growwClient;
     private final ZerodhaApiClient zerodhaClient;
     private final FyersApiClient fyersClient;
@@ -59,6 +62,7 @@ public class CopyEngineService {
                              CopyLogRepository copyLogs,
                              NotificationService notifications,
                              BalanceAlertService balanceAlert,
+                             TradeRepository tradeRepo,
                              GrowwApiClient growwClient,
                              ZerodhaApiClient zerodhaClient,
                              FyersApiClient fyersClient,
@@ -71,6 +75,7 @@ public class CopyEngineService {
         this.copyLogs = copyLogs;
         this.notifications = notifications;
         this.balanceAlert = balanceAlert;
+        this.tradeRepo = tradeRepo;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
         this.fyersClient = fyersClient;
@@ -145,56 +150,63 @@ public class CopyEngineService {
                                 "Broker session inactive. Child needs to re-login.", account.getBrokerId());
                     }
 
-                    // Check balance first
-                    return brokerService.getMargin(brokerAccountId, childId)
-                            .onErrorResume(e -> Mono.just(Map.of("availableMargin", 0)))
-                            .flatMap(margin -> {
-                                double available = toDouble(margin.getOrDefault("availableMargin", 0));
-                                // Rough check: if balance < ₹500, skip
-                                if (available < 500) {
-                                    // Push low balance notification
-                                    balanceAlert.checkAndAlert(childId, brokerAccountId).subscribe();
-                                    return logAndReturn(masterId, childId, req, "FAILED",
-                                            "Insufficient balance (₹" + String.format("%.0f", available) + ")",
-                                            account.getBrokerId());
-                                }
+                    // Place order DIRECTLY — let broker handle margin check (fastest path)
+                    // Balance alert sent async after order attempt
+                    return placeOrderOnBroker(account, req.getSymbol(), scaledQty,
+                            req.getSide(), req.getProduct(), req.getOrderType(), req.getPrice())
+                            .flatMap(response -> {
+                                String orderId = extractOrderId(response);
+                                log.info("COPY_ORDER_PLACED child={} broker={} orderId={} symbol={} qty={}",
+                                        childId, account.getBrokerId(), orderId, req.getSymbol(), scaledQty);
 
-                                // Place the order
-                                return placeOrderOnBroker(account, req.getSymbol(), scaledQty,
-                                        req.getSide(), req.getProduct(), req.getOrderType(), req.getPrice())
-                                        .flatMap(response -> {
-                                            String orderId = extractOrderId(response);
-                                            log.info("COPY_ORDER_PLACED child={} broker={} orderId={} symbol={} qty={}",
-                                                    childId, account.getBrokerId(), orderId, req.getSymbol(), scaledQty);
+                                // Save child's trade to trades table
+                                Trade childTrade = new Trade();
+                                childTrade.setUserId(childId);
+                                childTrade.setBrokerAccountId(brokerAccountId);
+                                childTrade.setBrokerOrderId(orderId.length() > 100 ? orderId.substring(0, 100) : orderId);
+                                childTrade.setInstrument(req.getSymbol());
+                                childTrade.setExchange("NSE");
+                                childTrade.setSegment("EQUITY");
+                                childTrade.setOrderType(req.getOrderType() != null ? req.getOrderType() : "MARKET");
+                                childTrade.setTransactionType(req.getSide());
+                                childTrade.setQuantity(scaledQty);
+                                childTrade.setPrice(req.getPrice());
+                                childTrade.setProduct(req.getProduct() != null ? req.getProduct() : "MIS");
+                                childTrade.setStatus("EXECUTED");
+                                childTrade.setPlacedAt(Instant.now());
+                                childTrade.setExecutedAt(Instant.now());
+                                tradeRepo.save(childTrade).subscribe();
 
-                                            // Notify child
-                                            notifications.push(childId,
-                                                    "Trade Copied: " + req.getSide() + " " + req.getSymbol(),
-                                                    req.getSide() + " " + req.getSymbol() + " ×" + scaledQty +
-                                                            " (scaled from " + req.getQty() + " × " + scale + ")",
-                                                    "TRADE_EXECUTED"
-                                            ).subscribe();
+                                // Notify child
+                                notifications.push(childId,
+                                        "Trade Copied: " + req.getSide() + " " + req.getSymbol(),
+                                        req.getSide() + " " + req.getSymbol() + " ×" + scaledQty +
+                                                " (scaled from " + req.getQty() + " × " + scale + ")",
+                                        "TRADE_EXECUTED"
+                                ).subscribe();
 
-                                            // Check balance after trade
-                                            balanceAlert.checkAndAlert(childId, brokerAccountId).subscribe();
+                                // Check balance AFTER trade (async, non-blocking)
+                                balanceAlert.checkAndAlert(childId, brokerAccountId).subscribe();
 
-                                            return logAndReturn(masterId, childId, req, "SUCCESS",
-                                                    "Order placed: " + orderId, account.getBrokerId());
-                                        })
-                                        .onErrorResume(e -> {
-                                            log.error("COPY_ORDER_FAILED child={} broker={} error={}",
-                                                    childId, account.getBrokerId(), e.getMessage());
+                                return logAndReturn(masterId, childId, req, "SUCCESS",
+                                        "Order placed: " + orderId, account.getBrokerId());
+                            })
+                            .onErrorResume(e -> {
+                                log.error("COPY_ORDER_FAILED child={} broker={} error={}",
+                                        childId, account.getBrokerId(), e.getMessage());
 
-                                            notifications.push(childId,
-                                                    "⚠️ Trade Copy Failed",
-                                                    "Failed to copy " + req.getSide() + " " + req.getSymbol() +
-                                                            ": " + e.getMessage(),
-                                                    "TRADE_FAILED"
-                                            ).subscribe();
+                                notifications.push(childId,
+                                        "⚠️ Trade Copy Failed",
+                                        "Failed to copy " + req.getSide() + " " + req.getSymbol() +
+                                                ": " + e.getMessage(),
+                                        "TRADE_FAILED"
+                                ).subscribe();
 
-                                            return logAndReturn(masterId, childId, req, "FAILED",
-                                                    "Order failed: " + e.getMessage(), account.getBrokerId());
-                                        });
+                                // Check balance async (might be the reason it failed)
+                                balanceAlert.checkAndAlert(childId, brokerAccountId).subscribe();
+
+                                return logAndReturn(masterId, childId, req, "FAILED",
+                                        "Order failed: " + e.getMessage(), account.getBrokerId());
                             });
                 });
     }
@@ -302,7 +314,7 @@ public class CopyEngineService {
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("engineStatus", "ACTIVE");
         r.put("pollingEnabled", false);
-        r.put("pollingIntervalSeconds", 10);
+        r.put("pollingIntervalSeconds", 3);
         r.put("supportedBrokers", List.of("GROWW", "ZERODHA", "FYERS", "UPSTOX", "DHAN"));
         r.put("modes", List.of("manual", "polling"));
         return Mono.just(r);

@@ -86,6 +86,13 @@ public class JwtService {
                 .getBody();
     }
 
+    public String extractRole(String token) {
+        try {
+            Claims claims = parse(token);
+            return (String) claims.get("role");
+        } catch (Exception e) { return null; }
+    }
+
     private static SecretKey buildKey(String secret) {
         byte[] raw;
         try {
