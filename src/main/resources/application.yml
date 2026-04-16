@@ -38,7 +38,7 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
   data:
     redis:
-      url: ${REDIS_URL:redis://localhost:6379}
+      url: ${REDIS_URL:}
 
 jwt:
   issuer: copy-trading
