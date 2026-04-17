@@ -6,6 +6,7 @@ import com.copytrading.logs.TradeLogRepository;
 import com.copytrading.subscription.Subscription;
 import com.copytrading.subscription.SubscriptionRepository;
 import org.springframework.http.HttpStatus;
+import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
@@ -21,34 +22,30 @@ public class MasterService {
     private final TradeLogRepository logs;
     private final CopyLogRepository copyLogs;
     private final MasterActiveAccountRepository activeAccountRepo;
+    private final DatabaseClient db;
 
     public MasterService(SubscriptionRepository subs, UserAccountRepository users,
                          TradeLogRepository logs, CopyLogRepository copyLogs,
-                         MasterActiveAccountRepository activeAccountRepo) {
+                         MasterActiveAccountRepository activeAccountRepo,
+                         DatabaseClient db) {
         this.subs = subs;
         this.users = users;
         this.logs = logs;
         this.copyLogs = copyLogs;
         this.activeAccountRepo = activeAccountRepo;
+        this.db = db;
     }
 
-    // Active account management (DB-backed)
+    // Active account management (DB-backed, uses upsert)
     public Mono<Map<String, Object>> setActiveAccount(UUID masterId, UUID brokerAccountId) {
-        return activeAccountRepo.findById(masterId)
-                .flatMap(existing -> {
-                    existing.setBrokerAccountId(brokerAccountId);
-                    existing.setActivatedAt(Instant.now());
-                    return activeAccountRepo.save(existing);
-                })
-                .switchIfEmpty(Mono.defer(() -> {
-                    MasterActiveAccount a = new MasterActiveAccount();
-                    a.setMasterId(masterId);
-                    a.setBrokerAccountId(brokerAccountId);
-                    a.setActivatedAt(Instant.now());
-                    return activeAccountRepo.save(a);
-                }))
-                .map(saved -> Map.<String, Object>of(
-                        "brokerAccountId", saved.getBrokerAccountId().toString(),
+        return db.sql("INSERT INTO master_active_accounts (master_id, broker_account_id, activated_at) " +
+                       "VALUES (:mid, :bid, now()) " +
+                       "ON CONFLICT (master_id) DO UPDATE SET broker_account_id = :bid, activated_at = now()")
+                .bind("mid", masterId)
+                .bind("bid", brokerAccountId)
+                .then()
+                .thenReturn(Map.<String, Object>of(
+                        "brokerAccountId", brokerAccountId.toString(),
                         "message", "Active account set"))
                 .onErrorResume(e -> {
                     Map<String, Object> fallback = new LinkedHashMap<>();
