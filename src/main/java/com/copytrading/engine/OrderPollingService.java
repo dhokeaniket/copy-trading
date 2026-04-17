@@ -92,7 +92,17 @@ public class OrderPollingService {
                 .flatMap(account -> brokerService.getOrders(brokerAccountId, masterId)
                         .map(resp -> {
                             Object ordersObj = resp.get("orders");
-                            if (ordersObj instanceof List<?> ordersList) {
+                            List<?> ordersList = null;
+                            if (ordersObj instanceof List<?> list) {
+                                ordersList = list;
+                            } else if (ordersObj instanceof Map<?,?> map) {
+                                // Groww wraps in {order_list: [...]}
+                                Object inner = map.get("order_list");
+                                if (inner == null) inner = map.get("orderBook");
+                                if (inner == null) inner = map.get("data");
+                                if (inner instanceof List<?> list2) ordersList = list2;
+                            }
+                            if (ordersList != null && !ordersList.isEmpty()) {
                                 return processOrders(masterId, account, ordersList);
                             }
                             return 0;
@@ -113,7 +123,7 @@ public class OrderPollingService {
             if (!(orderObj instanceof Map)) continue;
             Map<String, Object> order = (Map<String, Object>) orderObj;
 
-            String orderId = extractField(order, "order_id", "orderId", "id");
+            String orderId = extractField(order, "order_id", "orderId", "id", "groww_order_id");
             String status = extractField(order, "status", "order_status");
             if (orderId == null || orderId.isBlank()) continue;
 
