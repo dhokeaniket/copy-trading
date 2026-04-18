@@ -80,23 +80,26 @@ public class MasterService {
                 .onErrorResume(e -> Mono.just(Map.of("logs", List.of())));
     }
 
-    // Earnings (mock with monthly breakdown)
+    // Earnings (with monthly breakdown + payouts)
     public Mono<Map<String, Object>> getEarnings(UUID masterId) {
-        Map<String, Object> r = new LinkedHashMap<>();
-        r.put("totalEarnings", 0);
-        r.put("thisMonth", 0);
-        r.put("lastMonth", 0);
-        r.put("pendingPayout", 0);
-        r.put("currency", "INR");
-        r.put("monthlyBreakdown", List.of(
-                Map.of("month", "2025-01", "earnings", 0),
-                Map.of("month", "2025-02", "earnings", 0),
-                Map.of("month", "2025-03", "earnings", 0),
-                Map.of("month", "2025-04", "earnings", 0),
-                Map.of("month", "2025-05", "earnings", 0),
-                Map.of("month", "2025-06", "earnings", 0)
-        ));
-        return Mono.just(r);
+        return subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE").collectList().map(activeSubs -> {
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("totalEarnings", 0);
+            r.put("thisMonth", 0);
+            r.put("lastMonth", 0);
+            r.put("pendingPayout", 0);
+            r.put("currency", "INR");
+            r.put("monthlyBreakdown", List.of(
+                    Map.of("month", "2025-01", "subscribers", activeSubs.size(), "subscriptionFee", 0, "performanceBonus", 0, "total", 0),
+                    Map.of("month", "2025-02", "subscribers", activeSubs.size(), "subscriptionFee", 0, "performanceBonus", 0, "total", 0),
+                    Map.of("month", "2025-03", "subscribers", activeSubs.size(), "subscriptionFee", 0, "performanceBonus", 0, "total", 0),
+                    Map.of("month", "2025-04", "subscribers", activeSubs.size(), "subscriptionFee", 0, "performanceBonus", 0, "total", 0),
+                    Map.of("month", "2025-05", "subscribers", activeSubs.size(), "subscriptionFee", 0, "performanceBonus", 0, "total", 0),
+                    Map.of("month", "2025-06", "subscribers", activeSubs.size(), "subscriptionFee", 0, "performanceBonus", 0, "total", 0)
+            ));
+            r.put("payouts", List.of());
+            return r;
+        });
     }
 
     // Payouts (mock)

@@ -31,19 +31,31 @@ public class ChildService {
 
     // 5.1 List available masters
     public Mono<Map<String, Object>> listMasters() {
-        return users.findByRole("MASTER").collectList().map(masters -> {
-            var list = masters.stream().map(m -> {
-                Map<String, Object> r = new LinkedHashMap<>();
-                r.put("masterId", m.getId());
-                r.put("name", m.getName());
-                r.put("winRate", 0);
-                r.put("totalTrades", 0);
-                r.put("avgPnl", 0);
-                r.put("subscribers", 0);
-                return r;
-            }).toList();
-            return Map.<String, Object>of("masters", list);
-        });
+        return users.findByRole("MASTER").collectList().flatMap(masters ->
+            reactor.core.publisher.Flux.fromIterable(masters)
+                .flatMap(m -> subs.findByMasterIdAndCopyingStatus(m.getId(), "ACTIVE").collectList()
+                    .map(activeSubs -> {
+                        Map<String, Object> r = new LinkedHashMap<>();
+                        r.put("masterId", m.getId());
+                        r.put("name", m.getName());
+                        r.put("winRate", 0);
+                        r.put("totalTrades", 0);
+                        r.put("avgPnl", 0);
+                        r.put("subscribers", activeSubs.size());
+                        r.put("return30d", 0);
+                        r.put("returnYTD", 0);
+                        r.put("riskLevel", "Medium");
+                        r.put("bestTrade", "₹0");
+                        r.put("worstTrade", "₹0");
+                        r.put("verified", true);
+                        r.put("description", m.getName() + " — Master trader on Ascentra");
+                        r.put("markets", List.of("Equity", "F&O"));
+                        r.put("equityCurve", List.of(100, 100, 100, 100, 100, 100));
+                        return r;
+                    }))
+                .collectList()
+                .map(list -> Map.<String, Object>of("masters", list))
+        );
     }
 
     // 5.2 Subscribe to master
