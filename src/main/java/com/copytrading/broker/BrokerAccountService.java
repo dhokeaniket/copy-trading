@@ -438,7 +438,9 @@ public class BrokerAccountService {
                 Map<String, Object> fallback = new LinkedHashMap<>();
                 fallback.put("availableMargin", 0); fallback.put("usedMargin", 0);
                 fallback.put("totalFunds", 0); fallback.put("collateral", 0);
-                fallback.put("error", a.getBrokerId() + ": " + e.getMessage());
+                fallback.put("error", friendlyBrokerError(a.getBrokerId(), e.getMessage()));
+                fallback.put("errorCode", "SESSION_EXPIRED");
+                fallback.put("action", "RE_LOGIN");
                 return Mono.just(fallback);
             });
         });
@@ -484,7 +486,7 @@ public class BrokerAccountService {
                 default:
                     return Mono.just(Map.<String, Object>of("positions", List.of()));
             }
-        }).onErrorResume(e -> Mono.just(Map.of("positions", List.of(), "error", e.getMessage())));
+        }).onErrorResume(e -> Mono.just(Map.of("positions", List.of(), "error", friendlyBrokerError("", e.getMessage()), "errorCode", "SESSION_EXPIRED", "action", "RE_LOGIN")));
     }
 
     // Admin: 3.11 List all accounts
@@ -543,7 +545,7 @@ public class BrokerAccountService {
                 default:
                     return Mono.just(Map.<String, Object>of("orders", List.of()));
             }
-        }).onErrorResume(e -> Mono.just(Map.of("orders", List.of(), "error", e.getMessage())));
+        }).onErrorResume(e -> Mono.just(Map.of("orders", List.of(), "error", friendlyBrokerError("", e.getMessage()), "errorCode", "SESSION_EXPIRED", "action", "RE_LOGIN")));
     }
 
     // --- Trades ---
@@ -573,7 +575,7 @@ public class BrokerAccountService {
                 default:
                     return Mono.just(Map.<String, Object>of("trades", List.of()));
             }
-        }).onErrorResume(e -> Mono.just(Map.of("trades", List.of(), "error", e.getMessage())));
+        }).onErrorResume(e -> Mono.just(Map.of("trades", List.of(), "error", friendlyBrokerError("", e.getMessage()), "errorCode", "SESSION_EXPIRED", "action", "RE_LOGIN")));
     }
 
     // --- Holdings ---
@@ -603,7 +605,7 @@ public class BrokerAccountService {
                 default:
                     return Mono.just(Map.<String, Object>of("holdings", List.of()));
             }
-        }).onErrorResume(e -> Mono.just(Map.of("holdings", List.of(), "error", e.getMessage())));
+        }).onErrorResume(e -> Mono.just(Map.of("holdings", List.of(), "error", friendlyBrokerError("", e.getMessage()), "errorCode", "SESSION_EXPIRED", "action", "RE_LOGIN")));
     }
 
     // --- Close Position (place market order to close) ---
@@ -1000,9 +1002,12 @@ public class BrokerAccountService {
 
     private Map<String, Object> sessionRequiredResponse(BrokerAccount a) {
         Map<String, Object> r = new LinkedHashMap<>();
-        r.put("error", "No active broker session. Login first.");
+        r.put("error", "Session expired. Please re-login to " + BrokerAccountDto.from(a).getBrokerName() + " to continue.");
+        r.put("errorCode", "SESSION_EXPIRED");
+        r.put("action", "RE_LOGIN");
         r.put("accountId", a.getId().toString());
         r.put("brokerId", a.getBrokerId());
+        r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
         r.put("status", a.getStatus());
         r.put("sessionActive", false);
         return r;
@@ -1052,5 +1057,26 @@ public class BrokerAccountService {
     private static double toDouble(Object val) {
         if (val instanceof Number n) return n.doubleValue();
         try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return 0; }
+    }
+
+    private static String friendlyBrokerError(String broker, String rawError) {
+        String name = switch (broker) {
+            case "GROWW" -> "Groww";
+            case "ZERODHA" -> "Zerodha";
+            case "FYERS" -> "Fyers";
+            case "UPSTOX" -> "Upstox";
+            case "DHAN" -> "Dhan";
+            default -> broker;
+        };
+        if (rawError != null && (rawError.contains("401") || rawError.contains("Unauthorized") || rawError.contains("Invalid"))) {
+            return "Session expired. Please re-login to " + name + " to continue.";
+        }
+        if (rawError != null && rawError.contains("403")) {
+            return name + " access denied. Please check your API permissions.";
+        }
+        if (rawError != null && (rawError.contains("timeout") || rawError.contains("Timeout"))) {
+            return name + " is not responding. Please try again.";
+        }
+        return name + " error. Please re-login and try again.";
     }
 }
