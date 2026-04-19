@@ -5,6 +5,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -74,5 +75,14 @@ public class CopyEngineController {
     public Mono<Map<String, String>> resetPolling() {
         pollingService.resetAllKnownOrders();
         return Mono.just(Map.of("message", "Known orders cache cleared. Next poll will detect all orders as new."));
+    }
+
+    @GetMapping("/polling/status")
+    public Mono<Map<String, Object>> getPollingStatus() {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("lastResetAt", pollingService.getLastResetAt().toString());
+        r.put("autoResetEnabled", true);
+        r.put("pollingEnabled", pollingService.isPollingEnabled());
+        return Mono.just(r);
     }
 }

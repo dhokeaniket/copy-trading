@@ -37,6 +37,9 @@ public class CopyLog {
     @Column("error_message")
     private String errorMessage;
 
+    @Column("skip_reason")
+    private String skipReason;
+
     @Column("created_at")
     private Instant createdAt;
 
@@ -60,6 +63,8 @@ public class CopyLog {
     public void setChildStatus(String childStatus) { this.childStatus = childStatus; }
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    public String getSkipReason() { return skipReason; }
+    public void setSkipReason(String skipReason) { this.skipReason = skipReason; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }

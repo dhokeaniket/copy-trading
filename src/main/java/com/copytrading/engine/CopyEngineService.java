@@ -6,6 +6,7 @@ import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.broker.BrokerAccountService;
 import com.copytrading.broker.PlatformBrokerConfig;
 import com.copytrading.broker.dhan.DhanApiClient;
+import com.copytrading.broker.dto.BrokerAccountDto;
 import com.copytrading.broker.fyers.FyersApiClient;
 import com.copytrading.broker.groww.GrowwApiClient;
 import com.copytrading.broker.upstox.UpstoxApiClient;
@@ -17,6 +18,7 @@ import com.copytrading.subscription.Subscription;
 import com.copytrading.subscription.SubscriptionRepository;
 import com.copytrading.trade.Trade;
 import com.copytrading.trade.TradeRepository;
+import com.copytrading.ws.TradeUpdatesHub;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -49,6 +51,8 @@ public class CopyEngineService {
     private final NotificationService notifications;
     private final BalanceAlertService balanceAlert;
     private final TradeRepository tradeRepo;
+    private final TradeUpdatesHub hub;
+    private final SymbolMapper symbolMapper;
     private final GrowwApiClient growwClient;
     private final ZerodhaApiClient zerodhaClient;
     private final FyersApiClient fyersClient;
@@ -63,6 +67,8 @@ public class CopyEngineService {
                              NotificationService notifications,
                              BalanceAlertService balanceAlert,
                              TradeRepository tradeRepo,
+                             TradeUpdatesHub hub,
+                             SymbolMapper symbolMapper,
                              GrowwApiClient growwClient,
                              ZerodhaApiClient zerodhaClient,
                              FyersApiClient fyersClient,
@@ -76,6 +82,8 @@ public class CopyEngineService {
         this.notifications = notifications;
         this.balanceAlert = balanceAlert;
         this.tradeRepo = tradeRepo;
+        this.hub = hub;
+        this.symbolMapper = symbolMapper;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
         this.fyersClient = fyersClient;
@@ -195,6 +203,12 @@ public class CopyEngineService {
                                 log.error("COPY_ORDER_FAILED child={} broker={} error={}",
                                         childId, account.getBrokerId(), e.getMessage());
 
+                                // If 401/session expired, push WebSocket + notification
+                                if (e.getMessage() != null && (e.getMessage().contains("401") || e.getMessage().contains("Unauthorized"))) {
+                                    hub.publish("{\"event\":\"SESSION_EXPIRED\",\"data\":{\"childId\":\"" + childId + "\",\"broker\":\"" + account.getBrokerId() + "\",\"accountId\":\"" + brokerAccountId + "\"}}");
+                                    notifications.push(childId, "Broker session expired", "Your " + BrokerAccountDto.from(account).getBrokerName() + " session has expired. Re-login to resume copy trading.", "SESSION_EXPIRED").subscribe();
+                                }
+
                                 notifications.push(childId,
                                         "⚠️ Trade Copy Failed",
                                         "Failed to copy " + req.getSide() + " " + req.getSymbol() +
@@ -216,6 +230,7 @@ public class CopyEngineService {
      */
     private Mono<Map> placeOrderOnBroker(BrokerAccount account, String symbol, int qty,
                                           String side, String product, String orderType, double price) {
+        symbol = symbolMapper.translate(symbol, "GROWW", account.getBrokerId()); // Best effort translation
         String token = account.getAccessToken();
         String prod = product != null ? product : "MIS";
         String oType = orderType != null ? orderType : "MARKET";
@@ -279,6 +294,11 @@ public class CopyEngineService {
 
     private Mono<Map<String, Object>> logAndReturn(UUID masterId, UUID childId, CopyTradeRequest req,
                                                     String status, String message, String broker) {
+        return logAndReturn(masterId, childId, req, status, message, broker, null);
+    }
+
+    private Mono<Map<String, Object>> logAndReturn(UUID masterId, UUID childId, CopyTradeRequest req,
+                                                    String status, String message, String broker, String skipReason) {
         // Save to copy_logs
         CopyLog cl = new CopyLog();
         cl.setMasterId(masterId);
@@ -289,6 +309,9 @@ public class CopyEngineService {
         cl.setMasterStatus("EXECUTED");
         cl.setChildStatus(status);
         cl.setErrorMessage("FAILED".equals(status) ? message : null);
+        if ("SKIPPED".equals(status) && skipReason != null) {
+            cl.setSkipReason(skipReason);
+        }
         cl.setCreatedAt(Instant.now());
 
         return copyLogs.save(cl)
@@ -303,6 +326,9 @@ public class CopyEngineService {
                     r.put("message", message);
                     if (broker != null) r.put("broker", broker);
                     r.put("scaledQty", req.getQty());
+                    if ("SKIPPED".equals(status) && skipReason != null) {
+                        r.put("skipReason", skipReason);
+                    }
                     return r;
                 });
     }

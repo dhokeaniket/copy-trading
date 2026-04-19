@@ -1,6 +1,7 @@
 package com.copytrading.child;
 
 import com.copytrading.auth.UserAccountRepository;
+import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.logs.TradeLogRepository;
 import com.copytrading.subscription.Subscription;
@@ -20,13 +21,16 @@ public class ChildService {
     private final UserAccountRepository users;
     private final TradeLogRepository logs;
     private final CopyLogRepository copyLogs;
+    private final BrokerAccountRepository brokerRepo;
 
     public ChildService(SubscriptionRepository subs, UserAccountRepository users,
-                        TradeLogRepository logs, CopyLogRepository copyLogs) {
+                        TradeLogRepository logs, CopyLogRepository copyLogs,
+                        BrokerAccountRepository brokerRepo) {
         this.subs = subs;
         this.users = users;
         this.logs = logs;
         this.copyLogs = copyLogs;
+        this.brokerRepo = brokerRepo;
     }
 
     // 5.1 List available masters
@@ -62,8 +66,14 @@ public class ChildService {
     // New child → PENDING_APPROVAL (master must approve)
     // Previously approved child (unsubscribed & re-subscribing) → ACTIVE directly
     public Mono<Map<String, Object>> subscribe(UUID childId, UUID masterId, UUID brokerAccountId, Double scalingFactor) {
+        if (brokerAccountId == null) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "brokerAccountId is required. Please link a broker account before subscribing."));
+        }
         double factor = (scalingFactor != null && scalingFactor >= 0.01 && scalingFactor <= 10.0) ? scalingFactor : 1.0;
-        return subs.findByMasterIdAndChildId(masterId, childId)
+        return brokerRepo.findById(brokerAccountId)
+                .filter(a -> a.getUserId().equals(childId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "This broker account does not belong to you")))
+                .flatMap(account -> subs.findByMasterIdAndChildId(masterId, childId)
                 .flatMap(existing -> {
                     // If already exists and active/paused → conflict
                     if ("ACTIVE".equals(existing.getCopyingStatus()) || "PAUSED".equals(existing.getCopyingStatus())
@@ -113,7 +123,7 @@ public class ChildService {
                         r.put("message", "Subscription request sent. Waiting for master approval.");
                         return r;
                     });
-                }));
+                })));
     }
 
     // 5.2b Bulk subscribe to multiple masters (with approval logic)

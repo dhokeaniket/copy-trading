@@ -6,6 +6,7 @@ import com.copytrading.broker.BrokerAccountService;
 import com.copytrading.cache.PollingStateCache;
 import com.copytrading.master.MasterActiveAccount;
 import com.copytrading.master.MasterActiveAccountRepository;
+import com.copytrading.notification.NotificationService;
 import com.copytrading.subscription.SubscriptionRepository;
 import com.copytrading.trade.Trade;
 import com.copytrading.trade.TradeRepository;
@@ -39,12 +40,16 @@ public class OrderPollingService {
     private final TradeRepository tradeRepo;
     private final TradeUpdatesHub hub;
     private final PollingStateCache pollingCache;
+    private final NotificationService notifications;
 
     // In-memory fallback for known orders (used alongside Redis)
     private final ConcurrentHashMap<UUID, Set<String>> knownOrders = new ConcurrentHashMap<>();
 
     // Toggle polling on/off
     private volatile boolean pollingEnabled = false;
+
+    // Track last reset time
+    private volatile Instant lastResetAt = Instant.now();
 
     public OrderPollingService(MasterActiveAccountRepository activeAccountRepo,
                                BrokerAccountRepository brokerRepo,
@@ -53,7 +58,8 @@ public class OrderPollingService {
                                CopyEngineService copyEngine,
                                TradeRepository tradeRepo,
                                TradeUpdatesHub hub,
-                               PollingStateCache pollingCache) {
+                               PollingStateCache pollingCache,
+                               NotificationService notifications) {
         this.activeAccountRepo = activeAccountRepo;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -62,10 +68,12 @@ public class OrderPollingService {
         this.tradeRepo = tradeRepo;
         this.hub = hub;
         this.pollingCache = pollingCache;
+        this.notifications = notifications;
     }
 
     public boolean isPollingEnabled() { return pollingEnabled; }
     public void setPollingEnabled(boolean enabled) { this.pollingEnabled = enabled; }
+    public Instant getLastResetAt() { return lastResetAt; }
 
     /**
      * Runs every 10 seconds. Checks each master's active broker account for new orders.
@@ -221,5 +229,34 @@ public class OrderPollingService {
     public void resetAllKnownOrders() {
         knownOrders.clear();
         pollingCache.resetAll().subscribe();
+    }
+
+    // Auto-reset polling cache at 9:15 AM IST (3:45 AM UTC) on weekdays
+    @Scheduled(cron = "0 45 3 * * MON-FRI")
+    public void autoResetPollingCache() {
+        log.info("AUTO_RESET_POLLING: Clearing known orders cache at market open");
+        knownOrders.clear();
+        pollingCache.resetAll().subscribe();
+        lastResetAt = Instant.now();
+    }
+
+    // Daily session reminder at 9:00 AM IST (3:30 AM UTC) on weekdays
+    @Scheduled(cron = "0 30 3 * * MON-FRI")
+    public void dailySessionReminder() {
+        log.info("SESSION_REMINDER: Checking expired sessions");
+        subs.findAll()
+            .filter(s -> "ACTIVE".equals(s.getCopyingStatus()) && s.getBrokerAccountId() != null)
+            .flatMap(s -> brokerRepo.findById(s.getBrokerAccountId())
+                .filter(a -> !a.isSessionActive() || a.getSessionExpires() == null || a.getSessionExpires().isBefore(Instant.now()))
+                .flatMap(a -> {
+                    String brokerName = switch(a.getBrokerId()) {
+                        case "GROWW" -> "Groww"; case "ZERODHA" -> "Zerodha"; case "FYERS" -> "Fyers";
+                        case "UPSTOX" -> "Upstox"; case "DHAN" -> "Dhan"; default -> a.getBrokerId();
+                    };
+                    return notifications.push(s.getChildId(), "Broker login required",
+                            "Your " + brokerName + " session expired. Login before 9:15 AM to resume copy trading.",
+                            "SESSION_REMINDER");
+                }))
+            .subscribe();
     }
 }

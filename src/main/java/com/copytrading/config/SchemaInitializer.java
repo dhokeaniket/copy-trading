@@ -31,6 +31,7 @@ public class SchemaInitializer {
                   master_status    VARCHAR(30),
                   child_status     VARCHAR(30),
                   error_message    TEXT,
+                  skip_reason      VARCHAR(50),
                   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """,
@@ -96,7 +97,9 @@ public class SchemaInitializer {
                   trade_id          UUID,
                   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
-                """
+                """,
+                // Add skip_reason column to existing copy_logs tables
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS skip_reason VARCHAR(50)"
             };
 
             for (String sql : statements) {
