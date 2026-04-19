@@ -58,6 +58,7 @@ public class SecurityConfig {
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/send-otp"),
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/verify-otp"),
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/brokers/callback"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/brokers/postback/**"),
                         new PathPatternParserServerWebExchangeMatcher("/api/auth/**")
                 )
         ));
@@ -80,6 +81,7 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/auth/refresh-token", "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password").permitAll()
                         .pathMatchers("/api/v1/auth/send-otp", "/api/v1/auth/verify-otp").permitAll()
                         .pathMatchers("/api/v1/brokers/callback").permitAll()
+                        .pathMatchers("/api/v1/brokers/postback/**").permitAll()
                         .pathMatchers("/ws/**").permitAll()
                         .pathMatchers("/api/auth/**").permitAll()
                         .pathMatchers("/api/v1/admin/**").hasRole("ADMIN")

@@ -78,7 +78,7 @@ public class OrderPollingService {
     /**
      * Runs every 10 seconds. Checks each master's active broker account for new orders.
      */
-    @Scheduled(fixedDelay = 3000, initialDelay = 15000)
+    @Scheduled(fixedDelay = 1000, initialDelay = 15000)
     public void pollMasterOrders() {
         if (!pollingEnabled) return;
 
