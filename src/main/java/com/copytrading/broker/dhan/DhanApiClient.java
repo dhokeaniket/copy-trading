@@ -86,6 +86,36 @@ public class DhanApiClient {
                 .retrieve().bodyToMono(Map.class);
     }
 
+    /** Search for securityId by symbol name using Dhan's search API */
+    public Mono<String> searchSecurityId(String accessToken, String symbol, String exchange) {
+        return apiClient.get()
+                .uri("/v2/search?q=" + symbol)
+                .header("access-token", accessToken)
+                .retrieve()
+                .bodyToMono(String.class)
+                .map(body -> {
+                    // Simple parse: look for securityId near the symbol in response
+                    if (body.contains("securityId")) {
+                        try {
+                            // Find securityId value after the symbol match
+                            int idx = body.indexOf("\"securityId\"");
+                            if (idx > 0) {
+                                String sub = body.substring(idx + 14, Math.min(idx + 30, body.length()));
+                                // Extract the number
+                                StringBuilder num = new StringBuilder();
+                                for (char c : sub.toCharArray()) {
+                                    if (Character.isDigit(c)) num.append(c);
+                                    else if (num.length() > 0) break;
+                                }
+                                if (num.length() > 0) return num.toString();
+                            }
+                        } catch (Exception e) { /* parse failed */ }
+                    }
+                    return "";
+                })
+                .onErrorReturn("");
+    }
+
     public Mono<Map> getOrders(String accessToken) {
         return apiClient.get()
                 .uri("/v2/orders")

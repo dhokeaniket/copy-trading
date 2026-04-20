@@ -267,11 +267,31 @@ public class CopyEngineService {
                         "order_type", oType, "price", price
                 ));
             case "DHAN":
-                return dhanClient.placeOrder(token, Map.of(
-                        "tradingSymbol", symbol, "quantity", qty,
-                        "transactionType", side, "productType", prod,
-                        "orderType", oType, "exchangeSegment", "NSE_EQ"
-                ));
+                // Dhan requires securityId + specific format
+                String dhanExchange = symbol.matches(".*\\d+(CE|PE)$") ? "NSE_FNO" : "NSE_EQ";
+                String dhanTxnType = "BUY".equalsIgnoreCase(side) ? "BUY" : "SELL";
+                String dhanOrderType = "MARKET".equalsIgnoreCase(oType) ? "MARKET" : "LIMIT";
+                Map<String, Object> dhanBody = new java.util.LinkedHashMap<>();
+                dhanBody.put("transactionType", dhanTxnType);
+                dhanBody.put("exchangeSegment", dhanExchange);
+                dhanBody.put("productType", prod.equalsIgnoreCase("CNC") ? "CNC" : "INTRADAY");
+                dhanBody.put("orderType", dhanOrderType);
+                dhanBody.put("validity", "DAY");
+                dhanBody.put("tradingSymbol", symbol);
+                dhanBody.put("quantity", qty);
+                dhanBody.put("price", price);
+                dhanBody.put("triggerPrice", 0);
+                dhanBody.put("disclosedQuantity", 0);
+                dhanBody.put("afterMarketOrder", false);
+                // Try to get securityId via search, fallback to symbol
+                return dhanClient.searchSecurityId(token, symbol, dhanExchange)
+                        .flatMap(secId -> {
+                            if (secId != null && !secId.isBlank() && !secId.equals("")) {
+                                dhanBody.put("securityId", secId);
+                            }
+                            return dhanClient.placeOrder(token, dhanBody);
+                        })
+                        .switchIfEmpty(dhanClient.placeOrder(token, dhanBody));
             default:
                 return Mono.error(new RuntimeException("Unsupported broker: " + account.getBrokerId()));
         }
