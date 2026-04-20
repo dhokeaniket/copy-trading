@@ -146,7 +146,16 @@ public class BrokerAccountService {
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
-                .flatMap(a -> repo.delete(a).thenReturn(Map.of("message", "Account unlinked")));
+                .flatMap(a -> repo.delete(a)
+                        .thenReturn(Map.of("message", "Account unlinked"))
+                        .onErrorResume(e -> {
+                            // FK constraint from subscriptions — deactivate instead of delete
+                            a.setSessionActive(false);
+                            a.setStatus("INACTIVE");
+                            a.setAccessToken(null);
+                            return repo.save(a).thenReturn(Map.of(
+                                    "message", "Account deactivated. Unsubscribe from masters first to fully remove."));
+                        }));
     }
 
     // 3.7 Login to broker (create session)
