@@ -333,14 +333,33 @@ public class MasterService {
             var children = t.getT2();
             long totalTrades = tradeLogs.stream().filter(l -> "EXECUTED".equals(l.getStatus())).count();
             long totalReplications = tradeLogs.stream().filter(l -> "REPLICATED".equals(l.getType())).count();
+            long activeChildren = children.stream().filter(s -> "ACTIVE".equals(s.getCopyingStatus())).count();
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("totalPnl", 0);
             r.put("winRate", 0);
             r.put("totalTrades", totalTrades);
             r.put("totalReplications", totalReplications);
+            r.put("totalChildren", activeChildren);
+            r.put("totalFollowers", activeChildren);
+            r.put("revenue", 0);
+            r.put("totalEarnings", 0);
+            r.put("subscriptionRevenue", 0);
+            r.put("performanceBonus", 0);
+            r.put("portfolioValue", 0);
+            r.put("earningsBreakdown", List.of(
+                    Map.of("name", "Subscription Fees", "value", 0),
+                    Map.of("name", "Performance Bonus", "value", 0)
+            ));
+            r.put("performanceChart", List.of(
+                    Map.of("date", java.time.LocalDate.now().minusDays(21).toString(), "value", 100),
+                    Map.of("date", java.time.LocalDate.now().minusDays(14).toString(), "value", 100),
+                    Map.of("date", java.time.LocalDate.now().minusDays(7).toString(), "value", 100),
+                    Map.of("date", java.time.LocalDate.now().toString(), "value", 100)
+            ));
+            r.put("pnl", List.of());
             r.put("childPerformance", children.stream().map(s -> Map.of(
                     "childId", s.getChildId(), "scalingFactor", s.getScalingFactor(),
-                    "copyingStatus", s.getCopyingStatus())).toList());
+                    "copyingStatus", s.getCopyingStatus(), "pnl", 0, "tradesCopied", 0)).toList());
             return r;
         });
     }

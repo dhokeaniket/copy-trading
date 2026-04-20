@@ -13,6 +13,8 @@ import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 import java.util.*;
+import java.util.Objects;
+import java.util.Set;
 
 @Service
 public class ChildService {
@@ -204,6 +206,11 @@ public class ChildService {
                     r.put("copyingStatus", s.getCopyingStatus());
                     r.put("subscribedAt", s.getCreatedAt());
                     r.put("brokerAccountId", s.getBrokerAccountId());
+                    r.put("pnl", 0);
+                    r.put("totalPnL", 0);
+                    r.put("tradesCopiedToday", 0);
+                    r.put("allocation", 0);
+                    r.put("allocationAmount", 0);
                     return r;
                 }))
                 .collectList()
@@ -250,8 +257,32 @@ public class ChildService {
 
     // 5.9 Copied trades
     public Mono<Map<String, Object>> getCopiedTrades(UUID childId) {
-        return logs.findByChildId(childId).collectList()
-                .map(list -> Map.<String, Object>of("trades", list));
+        return copyLogs.findByChildId(childId).collectList().flatMap(logsList -> {
+            // Get master names for each log
+            Set<UUID> masterIds = logsList.stream().map(l -> l.getMasterId()).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+            return reactor.core.publisher.Flux.fromIterable(masterIds)
+                    .flatMap(mid -> users.findById(mid).map(u -> Map.entry(mid, u.getName())))
+                    .collectMap(Map.Entry::getKey, Map.Entry::getValue)
+                    .map(masterNames -> {
+                        var trades = logsList.stream().map(l -> {
+                            Map<String, Object> t = new LinkedHashMap<>();
+                            t.put("id", l.getId());
+                            t.put("master", masterNames.getOrDefault(l.getMasterId(), "Unknown"));
+                            t.put("instrument", l.getSymbol());
+                            t.put("type", l.getTradeType());
+                            t.put("masterQty", l.getQty() != null ? l.getQty() : 0);
+                            t.put("myQty", l.getQty() != null ? l.getQty() : 0);
+                            t.put("entry", 0);
+                            t.put("current", 0);
+                            t.put("ltp", 0);
+                            t.put("pnl", 0);
+                            t.put("time", l.getCreatedAt() != null ? l.getCreatedAt().toString() : null);
+                            t.put("status", l.getChildStatus());
+                            return t;
+                        }).toList();
+                        return Map.<String, Object>of("trades", trades);
+                    });
+        });
     }
 
     // Copy logs scoped to child
@@ -267,9 +298,25 @@ public class ChildService {
             long failed = tradeLogs.stream().filter(l -> "FAILED".equals(l.getStatus())).count();
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("totalPnl", 0);
+            r.put("totalPnL", 0);
+            r.put("personalPnL", 0);
+            r.put("copiedPnL", 0);
+            r.put("masterPnL", 0);
+            r.put("personalTrades", 0);
             r.put("copiedTrades", copied);
             r.put("failedReplications", failed);
-            r.put("masterPnlComparison", Map.of());
+            r.put("portfolioValue", 0);
+            r.put("winRate", 0);
+            r.put("activeMasters", 0);
+            r.put("pnlHistory", List.of(
+                    Map.of("time", java.time.LocalDate.now().minusDays(4).toString(), "personal", 0, "copied", 0),
+                    Map.of("time", java.time.LocalDate.now().minusDays(3).toString(), "personal", 0, "copied", 0),
+                    Map.of("time", java.time.LocalDate.now().minusDays(2).toString(), "personal", 0, "copied", 0),
+                    Map.of("time", java.time.LocalDate.now().minusDays(1).toString(), "personal", 0, "copied", 0),
+                    Map.of("time", java.time.LocalDate.now().toString(), "personal", 0, "copied", 0)
+            ));
+            r.put("personalTradesList", List.of());
+            r.put("masterPnlComparison", Map.of("masterPnl", 0, "childPnl", 0, "replicationAccuracy", 0));
             return r;
         });
     }
