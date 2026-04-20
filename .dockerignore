@@ -5,3 +5,9 @@ target
 .idea
 .vscode
 *.iml
+bin
+*.md
+scripts
+db
+node_modules
+.github
