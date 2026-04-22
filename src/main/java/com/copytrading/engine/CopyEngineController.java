@@ -46,7 +46,9 @@ public class CopyEngineController {
     @GetMapping("/status")
     public Mono<Map<String, Object>> getStatus() {
         return copyEngine.getStatus().map(status -> {
-            status.put("pollingEnabled", pollingService.isPollingEnabled());
+            boolean enabled = pollingService.isPollingEnabled();
+            status.put("pollingEnabled", enabled);
+            status.put("isPolling", enabled); // FE compat
             return status;
         });
     }

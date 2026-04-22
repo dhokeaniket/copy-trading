@@ -11,6 +11,7 @@ import com.copytrading.subscription.SubscriptionRepository;
 import com.copytrading.trade.Trade;
 import com.copytrading.trade.TradeRepository;
 import com.copytrading.ws.TradeUpdatesHub;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -45,8 +46,8 @@ public class OrderPollingService {
     // In-memory fallback for known orders (used alongside Redis)
     private final ConcurrentHashMap<UUID, Set<String>> knownOrders = new ConcurrentHashMap<>();
 
-    // Toggle polling on/off
-    private volatile boolean pollingEnabled = false;
+    // Toggle polling on/off — defaults to true, restored from Redis on startup
+    private volatile boolean pollingEnabled = true;
 
     // Track last reset time
     private volatile Instant lastResetAt = Instant.now();
@@ -72,8 +73,28 @@ public class OrderPollingService {
     }
 
     public boolean isPollingEnabled() { return pollingEnabled; }
-    public void setPollingEnabled(boolean enabled) { this.pollingEnabled = enabled; }
+    public void setPollingEnabled(boolean enabled) {
+        this.pollingEnabled = enabled;
+        // Persist to Redis so it survives restarts
+        pollingCache.setPollingEnabled(enabled).subscribe();
+    }
     public Instant getLastResetAt() { return lastResetAt; }
+
+    /** Restore polling state from Redis on startup. Defaults to ON if not set. */
+    @PostConstruct
+    public void restorePollingState() {
+        pollingCache.getPollingEnabled()
+                .subscribe(
+                        enabled -> {
+                            this.pollingEnabled = enabled;
+                            log.info("POLLING_STATE_RESTORED from Redis: enabled={}", enabled);
+                        },
+                        err -> {
+                            this.pollingEnabled = true; // Default ON
+                            log.warn("POLLING_STATE_RESTORE_FAILED, defaulting to ON: {}", err.getMessage());
+                        }
+                );
+    }
 
     /**
      * Runs every 10 seconds. Checks each master's active broker account for new orders.

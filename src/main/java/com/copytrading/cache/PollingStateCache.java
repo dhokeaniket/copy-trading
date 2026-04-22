@@ -58,4 +58,21 @@ public class PollingStateCache {
                 .flatMap(redis::delete)
                 .then();
     }
+
+    /** Save polling enabled state to Redis (survives restarts) */
+    public Mono<Void> setPollingEnabled(boolean enabled) {
+        return redis.opsForValue().set("poll:enabled", String.valueOf(enabled))
+                .then()
+                .onErrorResume(e -> {
+                    log.warn("Redis setPollingEnabled failed: {}", e.getMessage());
+                    return Mono.empty();
+                });
+    }
+
+    /** Get polling enabled state from Redis. Returns null if not set. */
+    public Mono<Boolean> getPollingEnabled() {
+        return redis.opsForValue().get("poll:enabled")
+                .map(Boolean::parseBoolean)
+                .onErrorReturn(true); // Default to ON if Redis fails
+    }
 }
