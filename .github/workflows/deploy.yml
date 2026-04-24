@@ -1,0 +1,28 @@
+name: Deploy Ascentra Capital Backend
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            cd /home/ec2-user/copy-trading
+            git pull origin main
+            sudo pkill -f java || true
+            sleep 3
+            export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+            export PATH=$JAVA_HOME/bin:$PATH
+            ./gradlew build -x test
+            nohup java -jar build/libs/copy-trading-backend-0.1.0.jar > /home/ec2-user/ascentra.log 2>&1 &
+            echo "Deployment successful!"
