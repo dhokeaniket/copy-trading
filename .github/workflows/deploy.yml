@@ -19,10 +19,11 @@ jobs:
           script: |
             cd /home/ec2-user/copy-trading
             git pull origin main
-            sudo pkill -f java || true
-            sleep 3
             export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
             export PATH=$JAVA_HOME/bin:$PATH
             ./gradlew build -x test
+            fuser -k 8081/tcp || true
+            sleep 2
             nohup java -jar build/libs/copy-trading-backend-0.1.0.jar > /home/ec2-user/ascentra.log 2>&1 &
+            disown
             echo "Deployment successful!"
