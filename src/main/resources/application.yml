@@ -14,7 +14,7 @@ spring:
   r2dbc:
     url: ${SPRING_R2DBC_URL:r2dbc:postgresql://database-1.clysagkw8b8t.eu-north-1.rds.amazonaws.com:5432/copytrading}
     username: ${SPRING_R2DBC_USERNAME:postgres}
-    password: ${SPRING_R2DBC_PASSWORD:Password}
+    password: ${SPRING_R2DBC_PASSWORD:Ascentra123}
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
     consumer:
