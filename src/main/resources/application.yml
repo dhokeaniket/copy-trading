@@ -72,4 +72,4 @@ brokers:
   dhan:
     apiKey: ${DHAN_API_KEY:c4db3869}
     apiSecret: ${DHAN_API_SECRET:2a2b732b-6c9f-427d-9de4-714431bff9e3}
-  callbackUrl: ${BROKER_CALLBACK_URL:http://13.53.246.13:8081/api/v1/brokers/callback}
+  callbackUrl: ${BROKER_CALLBACK_URL:https://api.ascentracapital.com/api/v1/brokers/callback}
