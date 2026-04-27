@@ -18,7 +18,11 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           script: |
             cd /home/ec2-user/copy-trading
+            git stash || true
+            git checkout -- . || true
+            rm -f gradle.properties
             git pull origin main
+            chmod +x gradlew
             export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
             export PATH=$JAVA_HOME/bin:$PATH
             ./gradlew build -x test
