@@ -16,6 +16,8 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_KEY }}
+          password: ${{ secrets.EC2_PASSWORD }}
+          command_timeout: 20m
           script: |
             cd /home/ec2-user/copy-trading
             git stash || true
@@ -25,9 +27,11 @@ jobs:
             chmod +x gradlew
             export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
             export PATH=$JAVA_HOME/bin:$PATH
-            ./gradlew build -x test
+            ./gradlew build -x test --no-daemon
             fuser -k 8081/tcp || true
             sleep 2
             nohup java -jar build/libs/copy-trading-backend-0.1.0.jar > /home/ec2-user/ascentra.log 2>&1 &
             disown
+            sleep 15
+            curl -s http://localhost:8081/health || echo "App starting..."
             echo "Deployment successful!"
