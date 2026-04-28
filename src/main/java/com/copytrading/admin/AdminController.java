@@ -2,6 +2,8 @@ package com.copytrading.admin;
 
 import com.copytrading.admin.dto.*;
 import com.copytrading.auth.dto.UserDto;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -12,6 +14,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/admin")
+@Tag(name = "6. Admin", description = "Admin: user management, analytics, system health, subscriptions, trade logs")
 public class AdminController {
 
     private final AdminService adminService;

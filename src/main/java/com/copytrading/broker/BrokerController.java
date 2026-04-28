@@ -7,11 +7,14 @@ import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 import java.util.Map;
 import java.util.UUID;
 
 @RestController
+@Tag(name = "2. Broker Accounts", description = "Link broker accounts, login, margin, positions, orders, holdings, dashboard")
 public class BrokerController {
 
     private final BrokerAccountService service;
@@ -22,13 +25,13 @@ public class BrokerController {
         this.balanceAlertService = balanceAlertService;
     }
 
-    // 3.1 GET /brokers
+    @Operation(summary = "List supported brokers", description = "Returns all supported brokers with login methods")
     @GetMapping("/api/v1/brokers")
     public Mono<Map<String, Object>> listBrokers() {
         return service.listBrokers();
     }
 
-    // 3.2 POST /brokers/accounts
+    @Operation(summary = "Link broker account", description = "Link a new broker account. For Groww: provide apiKey+apiSecret. For OAuth brokers: just brokerId and nickname.")
     @PostMapping(value = "/api/v1/brokers/accounts", consumes = MediaType.APPLICATION_JSON_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
     public Mono<Map<String, Object>> linkAccount(@AuthenticationPrincipal String userId,
@@ -36,7 +39,7 @@ public class BrokerController {
         return service.linkAccount(UUID.fromString(userId), req);
     }
 
-    // 3.3 GET /brokers/accounts
+    @Operation(summary = "List my broker accounts")
     @GetMapping("/api/v1/brokers/accounts")
     public Mono<Map<String, Object>> listAccounts(@AuthenticationPrincipal String userId) {
         return service.listAccounts(UUID.fromString(userId));
@@ -64,7 +67,7 @@ public class BrokerController {
         return service.deleteAccount(accountId, UUID.fromString(userId));
     }
 
-    // 3.7 POST /brokers/accounts/:accountId/login
+    @Operation(summary = "Login to broker", description = "Create broker session. Body varies by broker: Groww={}, Zerodha={requestToken}, Fyers/Upstox={authCode}, Dhan={authCode:tokenId}, AngelOne={totpCode}")
     @PostMapping(value = "/api/v1/brokers/accounts/{accountId}/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> loginToBroker(@PathVariable UUID accountId,
                                                     @AuthenticationPrincipal String userId,
@@ -122,7 +125,7 @@ public class BrokerController {
         return service.adminBrokerStatus();
     }
 
-    // Dashboard — all-in-one: profile + margin + positions + holdings + orders
+    @Operation(summary = "Broker dashboard", description = "All-in-one: profile + margin + positions + holdings + orders + signal")
     @GetMapping("/api/v1/brokers/accounts/{accountId}/dashboard")
     public Mono<Map<String, Object>> getDashboard(@PathVariable UUID accountId,
                                                    @AuthenticationPrincipal String userId) {

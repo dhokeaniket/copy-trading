@@ -4,6 +4,8 @@ import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -11,6 +13,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/engine")
+@Tag(name = "5. Copy Engine", description = "Manual copy trade, polling control, engine status")
 public class CopyEngineController {
 
     private final CopyEngineService copyEngine;
@@ -34,6 +37,7 @@ public class CopyEngineController {
      *   "price": 0
      * }
      */
+    @Operation(summary = "Copy trade to children", description = "Master triggers manual copy of a trade to all active children. Supports equity (RELIANCE) and F&O (NIFTY25JUN25000CE).")
     @PostMapping(value = "/copy-trade", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> copyTrade(@AuthenticationPrincipal String userId,
                                                 @RequestBody CopyTradeRequest req) {

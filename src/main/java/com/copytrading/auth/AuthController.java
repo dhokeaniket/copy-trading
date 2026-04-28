@@ -7,12 +7,16 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 import java.util.Map;
 import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/auth")
+@Tag(name = "1. Authentication", description = "Register, login, OTP, 2FA, profile management")
 public class AuthController {
 
     private final AuthService authService;
@@ -23,6 +27,7 @@ public class AuthController {
         this.otpService = otpService;
     }
 
+    @Operation(summary = "Send OTP", description = "Send OTP to registered phone number for phone-based login")
     @PostMapping(value = "/send-otp", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> sendOtp(@RequestBody SendOtpRequest req) {
         if (req.getPhone() == null || req.getPhone().isBlank()) {
@@ -54,6 +59,7 @@ public class AuthController {
                 }));
     }
 
+    @Operation(summary = "Verify OTP", description = "Verify OTP and get access tokens")
     @PostMapping(value = "/verify-otp", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> verifyOtp(@RequestBody VerifyOtpRequest req) {
         if (req.getPhone() == null || req.getOtp() == null) {
@@ -71,17 +77,20 @@ public class AuthController {
         return authService.loginByPhone(req.getPhone());
     }
 
+    @Operation(summary = "Register", description = "Create a new user account (MASTER, CHILD, or ADMIN)")
     @PostMapping(value = "/register", consumes = MediaType.APPLICATION_JSON_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
     public Mono<Map<String, Object>> register(@RequestBody RegisterRequest req) {
         return authService.register(req);
     }
 
+    @Operation(summary = "Login", description = "Login with email and password. Returns JWT tokens.")
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<LoginResponse> login(@RequestBody LoginRequest req) {
         return authService.login(req);
     }
 
+    @Operation(summary = "Logout", description = "Revoke refresh token")
     @PostMapping(value = "/logout", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, String>> logout(@RequestBody LogoutRequest req) {
         if (req.getRefreshToken() == null || req.getRefreshToken().isBlank()) {
@@ -90,6 +99,7 @@ public class AuthController {
         return authService.logout(req.getRefreshToken());
     }
 
+    @Operation(summary = "Refresh token", description = "Exchange refresh token for new access + refresh tokens")
     @PostMapping(value = "/refresh-token", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, String>> refreshToken(@RequestBody RefreshTokenRequest req) {
         if (req.getRefreshToken() == null || req.getRefreshToken().isBlank()) {
@@ -98,6 +108,7 @@ public class AuthController {
         return authService.refreshToken(req.getRefreshToken());
     }
 
+    @Operation(summary = "Forgot password", description = "Request password reset link via email")
     @PostMapping(value = "/forgot-password", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, String>> forgotPassword(@RequestBody ForgotPasswordRequest req) {
         if (req.getEmail() == null || req.getEmail().isBlank()) {
@@ -106,11 +117,13 @@ public class AuthController {
         return authService.forgotPassword(req.getEmail());
     }
 
+    @Operation(summary = "Reset password", description = "Reset password using token from email")
     @PostMapping(value = "/reset-password", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, String>> resetPassword(@RequestBody ResetPasswordRequest req) {
         return authService.resetPassword(req.getToken(), req.getNewPassword());
     }
 
+    @Operation(summary = "Get my profile", description = "Get current user's profile")
     @GetMapping("/me")
     public Mono<UserDto> getProfile(@AuthenticationPrincipal String userId) {
         return authService.getProfile(UUID.fromString(userId));

@@ -3,6 +3,8 @@ package com.copytrading.master;
 import com.copytrading.master.dto.BulkLinkRequest;
 import com.copytrading.master.dto.LinkChildRequest;
 import com.copytrading.master.dto.UpdateScalingRequest;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -14,12 +16,14 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/master")
+@Tag(name = "3. Master", description = "Master trader: manage children, active account, analytics, earnings")
 public class MasterController {
 
     private final MasterService service;
 
     public MasterController(MasterService service) { this.service = service; }
 
+    @Operation(summary = "List children", description = "List all children linked to this master")
     @GetMapping("/children")
     public Mono<Map<String, Object>> listChildren(@AuthenticationPrincipal String userId) {
         return service.listChildren(UUID.fromString(userId));

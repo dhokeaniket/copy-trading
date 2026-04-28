@@ -4,6 +4,8 @@ import com.copytrading.child.dto.BulkSubscribeRequest;
 import com.copytrading.child.dto.ChildScalingRequest;
 import com.copytrading.child.dto.MasterIdRequest;
 import com.copytrading.child.dto.SubscribeRequest;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -15,6 +17,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/child")
+@Tag(name = "4. Child", description = "Child trader: subscribe to masters, manage copying, analytics")
 public class ChildController {
 
     private final ChildService service;
