@@ -60,6 +60,7 @@ public class SymbolMapper {
             case "FYERS": return "NSE:" + p.underlying + p.year + p.month + p.strike + p.type;
             case "UPSTOX": return "NSE_FO|" + p.underlying + p.year + p.month + p.strike + p.type;
             case "DHAN": return p.underlying + "-" + p.year + p.month + "-" + p.strike + "-" + p.type;
+            case "ANGELONE": return p.underlying + p.year + p.month + p.strike + p.type;
             case "GROWW": {
                 int monthNum = 0;
                 for (int i = 1; i < MONTHS.length; i++) { if (MONTHS[i].equals(p.month)) { monthNum = i; break; } }

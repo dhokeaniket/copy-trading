@@ -6,6 +6,7 @@ import com.copytrading.broker.fyers.FyersApiClient;
 import com.copytrading.broker.groww.GrowwApiClient;
 import com.copytrading.broker.upstox.UpstoxApiClient;
 import com.copytrading.broker.zerodha.ZerodhaApiClient;
+import com.copytrading.broker.angelone.AngelOneApiClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -28,11 +29,13 @@ public class BrokerAccountService {
     private final FyersApiClient fyersClient;
     private final UpstoxApiClient upstoxClient;
     private final DhanApiClient dhanClient;
+    private final AngelOneApiClient angelOneClient;
     private final PlatformBrokerConfig platformConfig;
 
     public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
                                 ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
                                 UpstoxApiClient upstoxClient, DhanApiClient dhanClient,
+                                AngelOneApiClient angelOneClient,
                                 PlatformBrokerConfig platformConfig) {
         this.repo = repo;
         this.growwClient = growwClient;
@@ -40,6 +43,7 @@ public class BrokerAccountService {
         this.fyersClient = fyersClient;
         this.upstoxClient = upstoxClient;
         this.dhanClient = dhanClient;
+        this.angelOneClient = angelOneClient;
         this.platformConfig = platformConfig;
     }
 
@@ -50,7 +54,7 @@ public class BrokerAccountService {
             brokerInfo("ZERODHA", "Zerodha", true, List.of(), "oauth", "requestToken"),
             brokerInfo("FYERS", "Fyers", true, List.of(), "oauth", "authCode"),
             brokerInfo("UPSTOX", "Upstox", true, List.of(), "oauth", "authCode"),
-            brokerInfo("ANGELONE", "Angel One", false, List.of(), "oauth", "authCode"),
+            brokerInfo("ANGELONE", "Angel One", true, List.of(), "totp", "totpCode"),
             dhanBrokerInfo()
         );
         return Mono.just(Map.of("brokers", brokers));
@@ -170,6 +174,7 @@ public class BrokerAccountService {
                         case "FYERS":    return loginFyers(a, req);
                         case "UPSTOX":   return loginUpstox(a, req);
                         case "DHAN":     return loginDhan(a, req);
+                        case "ANGELONE": return loginAngelOne(a, req);
                         default:
                             // Mock login for unsupported brokers
                             a.setSessionActive(true);
@@ -291,6 +296,41 @@ public class BrokerAccountService {
                 });
     }
 
+    // --- ANGEL ONE LOGIN (clientcode + password + TOTP) ---
+    private Mono<Map<String, Object>> loginAngelOne(BrokerAccount a, BrokerLoginRequest req) {
+        var creds = platformConfig.getAngelone();
+        String apiKey = creds.getApiKey();
+        if (apiKey == null || apiKey.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Angel One API key not configured on platform"));
+        }
+        if (req == null || req.getTotpCode() == null || req.getTotpCode().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "totpCode required for Angel One login. Also set clientId (your Angel One client code) and password via account update."));
+        }
+        // clientId = Angel One client code, apiSecret = password (stored on account)
+        String clientCode = a.getClientId();
+        String password = a.getApiSecret();
+        if (clientCode == null || clientCode.isBlank() || password == null || password.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Angel One requires clientId (client code) and apiSecret (password) set on the broker account."));
+        }
+        return angelOneClient.login(apiKey, clientCode, password, req.getTotpCode())
+                .flatMap(resp -> extractAndSaveSession(a, resp, "AngelOne",
+                        r -> {
+                            if (r.containsKey("data") && r.get("data") instanceof Map d) {
+                                return (String) d.get("jwtToken");
+                            }
+                            return (String) r.get("jwtToken");
+                        }))
+                .onErrorResume(e -> {
+                    if (e instanceof ResponseStatusException) return Mono.error(e);
+                    log.error("ANGELONE_LOGIN_FAILED error={}", e.getMessage(), e);
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                            "Angel One API error: " + e.getMessage()));
+                });
+    }
+
     /** Common helper: extract token from response, save session, return status */
     private Mono<Map<String, Object>> extractAndSaveSession(BrokerAccount a, Map resp, String brokerName,
                                                              java.util.function.Function<Map, String> tokenExtractor) {
@@ -352,6 +392,11 @@ public class BrokerAccountService {
                             r.put("loginMethod", "oauth");
                             r.put("loginField", "tokenId");
                             r.put("message", "Call POST /login with empty body first to get loginUrl. Open it in browser. After login, Dhan redirects with tokenId. Call login again with {\"authCode\": \"tokenId\"}");
+                            break;
+                        case "ANGELONE":
+                            r.put("loginMethod", "totp");
+                            r.put("loginField", "totpCode");
+                            r.put("message", "Set clientId (Angel One client code) and apiSecret (password) on the account. Then call login with {\"totpCode\": \"123456\"}");
                             break;
                         default:
                             r.put("loginMethod", "mock");
@@ -439,6 +484,8 @@ public class BrokerAccountService {
                     result = upstoxClient.getFundsMargin(a.getAccessToken()).map(resp -> parseUpstoxMargin(resp)); break;
                 case "DHAN":
                     result = dhanClient.getFunds(a.getAccessToken()).map(resp -> parseDhanMargin(resp)); break;
+                case "ANGELONE":
+                    result = angelOneClient.getRMS(platformConfig.getAngelone().getApiKey(), a.getAccessToken()).map(resp -> parseAngelOneMargin(resp)); break;
                 default:
                     result = Mono.just(mockMargin()); break;
             }
@@ -492,6 +539,12 @@ public class BrokerAccountService {
                 case "DHAN":
                     return dhanClient.getPositions(a.getAccessToken())
                             .map(resp -> Map.<String, Object>of("positions", resp));
+                case "ANGELONE":
+                    return angelOneClient.getPositions(platformConfig.getAngelone().getApiKey(), a.getAccessToken())
+                            .map(resp -> {
+                                Object data = resp.get("data");
+                                return Map.<String, Object>of("positions", data != null ? data : List.of());
+                            });
                 default:
                     return Mono.just(Map.<String, Object>of("positions", List.of()));
             }
@@ -521,8 +574,8 @@ public class BrokerAccountService {
             Map.of("brokerId", "ZERODHA", "name", "Zerodha", "apiStatus", "UP", "latencyMs", 0, "lastChecked", Instant.now().toString()),
             Map.of("brokerId", "FYERS", "name", "Fyers", "apiStatus", "UP", "latencyMs", 0, "lastChecked", Instant.now().toString()),
             Map.of("brokerId", "UPSTOX", "name", "Upstox", "apiStatus", "UP", "latencyMs", 0, "lastChecked", Instant.now().toString()),
-            Map.of("brokerId", "ANGELONE", "name", "Angel One", "apiStatus", "MOCK", "latencyMs", 0, "lastChecked", Instant.now().toString()),
-            Map.of("brokerId", "DHAN", "name", "Dhan", "apiStatus", "MOCK", "latencyMs", 0, "lastChecked", Instant.now().toString())
+            Map.of("brokerId", "ANGELONE", "name", "Angel One", "apiStatus", "UP", "latencyMs", 0, "lastChecked", Instant.now().toString()),
+            Map.of("brokerId", "DHAN", "name", "Dhan", "apiStatus", "UP", "latencyMs", 0, "lastChecked", Instant.now().toString())
         );
         return Mono.just(Map.of("brokers", statuses));
     }
@@ -551,6 +604,9 @@ public class BrokerAccountService {
                     return dhanClient.getOrders(a.getAccessToken())
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("orders", resp)))
                             .onErrorResume(e -> Mono.just(Map.of("orders", List.of(), "error", e.getMessage())));
+                case "ANGELONE":
+                    return angelOneClient.getOrders(platformConfig.getAngelone().getApiKey(), a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
                 default:
                     return Mono.just(Map.<String, Object>of("orders", List.of()));
             }
@@ -581,6 +637,9 @@ public class BrokerAccountService {
                     return dhanClient.getTrades(a.getAccessToken())
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("trades", resp)))
                             .onErrorResume(e -> Mono.just(Map.of("trades", List.of(), "error", e.getMessage())));
+                case "ANGELONE":
+                    return angelOneClient.getTrades(platformConfig.getAngelone().getApiKey(), a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
                 default:
                     return Mono.just(Map.<String, Object>of("trades", List.of()));
             }
@@ -611,6 +670,9 @@ public class BrokerAccountService {
                     return dhanClient.getHoldings(a.getAccessToken())
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("holdings", resp)))
                             .onErrorResume(e -> Mono.just(Map.of("holdings", List.of(), "error", e.getMessage())));
+                case "ANGELONE":
+                    return angelOneClient.getHoldings(platformConfig.getAngelone().getApiKey(), a.getAccessToken())
+                            .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
                 default:
                     return Mono.just(Map.<String, Object>of("holdings", List.of()));
             }
@@ -655,6 +717,25 @@ public class BrokerAccountService {
                             "tradingSymbol", symbol, "quantity", qty, "transactionType", type,
                             "productType", product, "orderType", "MARKET", "exchangeSegment", "NSE_EQ"
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                case "ANGELONE": {
+                    String apiKey = platformConfig.getAngelone().getApiKey();
+                    Map<String, Object> angelBody = new LinkedHashMap<>();
+                    angelBody.put("variety", "NORMAL");
+                    angelBody.put("tradingsymbol", symbol + "-EQ");
+                    angelBody.put("symboltoken", "");
+                    angelBody.put("transactiontype", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
+                    angelBody.put("exchange", "NSE");
+                    angelBody.put("ordertype", "MARKET");
+                    angelBody.put("producttype", product.equalsIgnoreCase("CNC") ? "DELIVERY" : "INTRADAY");
+                    angelBody.put("duration", "DAY");
+                    angelBody.put("price", "0");
+                    angelBody.put("squareoff", "0");
+                    angelBody.put("stoploss", "0");
+                    angelBody.put("quantity", String.valueOf(qty));
+                    angelBody.put("triggerprice", "0");
+                    return angelOneClient.placeOrder(apiKey, a.getAccessToken(), angelBody)
+                            .map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                }
                 default:
                     return Mono.just(Map.<String, Object>of("message", "Unsupported broker"));
             }
@@ -681,6 +762,9 @@ public class BrokerAccountService {
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "DHAN":
                     return dhanClient.cancelOrder(a.getAccessToken(), orderId)
+                            .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
+                case "ANGELONE":
+                    return angelOneClient.cancelOrder(platformConfig.getAngelone().getApiKey(), a.getAccessToken(), "NORMAL", orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 default:
                     return Mono.just(Map.<String, Object>of("message", "Unsupported broker"));
@@ -793,6 +877,29 @@ public class BrokerAccountService {
             r.put("totalFunds", toDouble(resp.getOrDefault("sodLimit", 0)));
             r.put("collateral", toDouble(resp.getOrDefault("collateralAmount", 0)));
             return r;
+        } catch (Exception e) { /* fallback */ }
+        r.put("availableMargin", 0);
+        r.put("usedMargin", 0);
+        r.put("totalFunds", 0);
+        r.put("collateral", 0);
+        r.put("raw", resp);
+        return r;
+    }
+
+    private Map<String, Object> parseAngelOneMargin(Map resp) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        try {
+            Object data = resp.get("data");
+            if (data instanceof Map d) {
+                double net = toDouble(d.getOrDefault("net", 0));
+                double used = toDouble(d.getOrDefault("utiliseddebits", 0));
+                double collateral = toDouble(d.getOrDefault("collateral", 0));
+                r.put("availableMargin", net - used);
+                r.put("usedMargin", used);
+                r.put("totalFunds", net);
+                r.put("collateral", collateral);
+                return r;
+            }
         } catch (Exception e) { /* fallback */ }
         r.put("availableMargin", 0);
         r.put("usedMargin", 0);
@@ -987,6 +1094,24 @@ public class BrokerAccountService {
                             p.put("email", resp.getOrDefault("emailId", resp.getOrDefault("email", "")));
                             p.put("clientId", resp.getOrDefault("dhanClientId", resp.getOrDefault("clientId", "")));
                             p.put("broker", "Dhan");
+                            return p;
+                        });
+            case "ANGELONE":
+                return angelOneClient.getProfile(platformConfig.getAngelone().getApiKey(), a.getAccessToken())
+                        .map(resp -> {
+                            Map<String, Object> p = new LinkedHashMap<>();
+                            Object data = resp.get("data");
+                            if (data instanceof Map d) {
+                                p.put("name", d.getOrDefault("name", ""));
+                                p.put("email", d.getOrDefault("email", ""));
+                                p.put("clientId", d.getOrDefault("clientcode", ""));
+                                p.put("broker", "Angel One");
+                                p.put("exchanges", d.getOrDefault("exchanges", List.of()));
+                                p.put("products", d.getOrDefault("products", List.of()));
+                            } else {
+                                p.put("raw", resp);
+                                p.put("broker", "Angel One");
+                            }
                             return p;
                         });
             default:

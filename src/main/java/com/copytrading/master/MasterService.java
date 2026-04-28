@@ -1,6 +1,7 @@
 package com.copytrading.master;
 
 import com.copytrading.auth.UserAccountRepository;
+import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.logs.TradeLogRepository;
 import com.copytrading.subscription.Subscription;
@@ -22,17 +23,20 @@ public class MasterService {
     private final TradeLogRepository logs;
     private final CopyLogRepository copyLogs;
     private final MasterActiveAccountRepository activeAccountRepo;
+    private final BrokerAccountRepository brokerRepo;
     private final DatabaseClient db;
 
     public MasterService(SubscriptionRepository subs, UserAccountRepository users,
                          TradeLogRepository logs, CopyLogRepository copyLogs,
                          MasterActiveAccountRepository activeAccountRepo,
+                         BrokerAccountRepository brokerRepo,
                          DatabaseClient db) {
         this.subs = subs;
         this.users = users;
         this.logs = logs;
         this.copyLogs = copyLogs;
         this.activeAccountRepo = activeAccountRepo;
+        this.brokerRepo = brokerRepo;
         this.db = db;
     }
 
@@ -133,21 +137,65 @@ public class MasterService {
                         existing.setCopyingStatus("ACTIVE");
                         existing.setApprovedOnce(true);
                         if (scalingFactor != null) existing.setScalingFactor(scalingFactor);
-                        return subs.save(existing).thenReturn(Map.of("message", "Child approved and linked"));
+                        // If subscription already has brokerAccountId (from child's subscribe), keep it
+                        if (existing.getBrokerAccountId() != null) {
+                            return subs.save(existing).thenReturn(Map.of("message", "Child approved and linked"));
+                        }
+                        // Otherwise, auto-resolve child's first active broker account
+                        return resolveChildBrokerAccount(childId)
+                                .flatMap(brokerAccountId -> {
+                                    existing.setBrokerAccountId(brokerAccountId);
+                                    return subs.save(existing).thenReturn(Map.of("message", "Child approved and linked"));
+                                })
+                                .switchIfEmpty(subs.save(existing).thenReturn(
+                                        Map.of("message", "Child approved but no broker account found. Child must link a broker account.")));
                     }
                     return Mono.<Map<String, String>>error(
                             new ResponseStatusException(HttpStatus.CONFLICT, "Child already linked"));
                 })
-                .switchIfEmpty(Mono.defer(() -> {
-                    Subscription s = new Subscription();
-                    s.setMasterId(masterId);
-                    s.setChildId(childId);
-                    s.setScalingFactor(scalingFactor != null ? scalingFactor : 1.0);
-                    s.setCopyingStatus("ACTIVE");
-                    s.setApprovedOnce(true);
-                    s.setCreatedAt(Instant.now());
-                    return subs.save(s).thenReturn(Map.of("message", "Child linked successfully"));
-                }));
+                .switchIfEmpty(Mono.defer(() ->
+                    // Brand new link from master — auto-resolve child's broker account
+                    resolveChildBrokerAccount(childId)
+                            .flatMap(brokerAccountId -> {
+                                Subscription s = new Subscription();
+                                s.setMasterId(masterId);
+                                s.setChildId(childId);
+                                s.setBrokerAccountId(brokerAccountId);
+                                s.setScalingFactor(scalingFactor != null ? scalingFactor : 1.0);
+                                s.setCopyingStatus("ACTIVE");
+                                s.setApprovedOnce(true);
+                                s.setCreatedAt(Instant.now());
+                                return subs.save(s).thenReturn(Map.of("message", "Child linked successfully"));
+                            })
+                            .switchIfEmpty(Mono.defer(() -> {
+                                // No broker account found — still create subscription, but warn
+                                Subscription s = new Subscription();
+                                s.setMasterId(masterId);
+                                s.setChildId(childId);
+                                s.setScalingFactor(scalingFactor != null ? scalingFactor : 1.0);
+                                s.setCopyingStatus("ACTIVE");
+                                s.setApprovedOnce(true);
+                                s.setCreatedAt(Instant.now());
+                                return subs.save(s).thenReturn(
+                                        Map.of("message", "Child linked but no broker account found. Child must link a broker account for copy trading to work."));
+                            }))
+                ));
+    }
+
+    /**
+     * Find the child's first active broker account (session active, has access token).
+     * Falls back to any linked broker account if none are active.
+     */
+    private Mono<UUID> resolveChildBrokerAccount(UUID childId) {
+        return brokerRepo.findByUserId(childId)
+                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                .next()
+                .map(a -> a.getId())
+                .switchIfEmpty(
+                    brokerRepo.findByUserId(childId)
+                            .next()
+                            .map(a -> a.getId())
+                );
     }
 
     // 4.2a List pending approval requests
@@ -206,6 +254,17 @@ public class MasterService {
                                     existing.setCopyingStatus("ACTIVE");
                                     existing.setApprovedOnce(true);
                                     existing.setScalingFactor(factor);
+                                    // Auto-resolve broker account if missing
+                                    if (existing.getBrokerAccountId() == null) {
+                                        return resolveChildBrokerAccount(childId)
+                                                .flatMap(bid -> {
+                                                    existing.setBrokerAccountId(bid);
+                                                    return subs.save(existing);
+                                                })
+                                                .switchIfEmpty(subs.save(existing))
+                                                .map(s -> Map.<String, Object>of(
+                                                        "childId", childId.toString(), "status", "APPROVED", "subscriptionId", s.getId()));
+                                    }
                                     return subs.save(existing).map(s -> Map.<String, Object>of(
                                             "childId", childId.toString(), "status", "APPROVED", "subscriptionId", s.getId()));
                                 }
@@ -213,22 +272,48 @@ public class MasterService {
                                     existing.setCopyingStatus("ACTIVE");
                                     existing.setApprovedOnce(true);
                                     existing.setScalingFactor(factor);
+                                    // Auto-resolve broker account if missing
+                                    if (existing.getBrokerAccountId() == null) {
+                                        return resolveChildBrokerAccount(childId)
+                                                .flatMap(bid -> {
+                                                    existing.setBrokerAccountId(bid);
+                                                    return subs.save(existing);
+                                                })
+                                                .switchIfEmpty(subs.save(existing))
+                                                .map(s -> Map.<String, Object>of(
+                                                        "childId", childId.toString(), "status", "REACTIVATED", "subscriptionId", s.getId()));
+                                    }
                                     return subs.save(existing).map(s -> Map.<String, Object>of(
                                             "childId", childId.toString(), "status", "REACTIVATED", "subscriptionId", s.getId()));
                                 }
                                 return Mono.just(Map.<String, Object>of("childId", childId.toString(), "status", "ALREADY_LINKED"));
                             })
-                            .switchIfEmpty(Mono.defer(() -> {
-                                Subscription s = new Subscription();
-                                s.setMasterId(masterId);
-                                s.setChildId(childId);
-                                s.setScalingFactor(factor);
-                                s.setCopyingStatus("ACTIVE");
-                                s.setApprovedOnce(true);
-                                s.setCreatedAt(Instant.now());
-                                return subs.save(s).map(saved -> Map.<String, Object>of(
-                                        "childId", childId.toString(), "status", "LINKED", "subscriptionId", saved.getId()));
-                            }));
+                            .switchIfEmpty(Mono.defer(() ->
+                                resolveChildBrokerAccount(childId)
+                                        .flatMap(brokerAccountId -> {
+                                            Subscription s = new Subscription();
+                                            s.setMasterId(masterId);
+                                            s.setChildId(childId);
+                                            s.setBrokerAccountId(brokerAccountId);
+                                            s.setScalingFactor(factor);
+                                            s.setCopyingStatus("ACTIVE");
+                                            s.setApprovedOnce(true);
+                                            s.setCreatedAt(Instant.now());
+                                            return subs.save(s).map(saved -> Map.<String, Object>of(
+                                                    "childId", childId.toString(), "status", "LINKED", "subscriptionId", saved.getId()));
+                                        })
+                                        .switchIfEmpty(Mono.defer(() -> {
+                                            Subscription s = new Subscription();
+                                            s.setMasterId(masterId);
+                                            s.setChildId(childId);
+                                            s.setScalingFactor(factor);
+                                            s.setCopyingStatus("ACTIVE");
+                                            s.setApprovedOnce(true);
+                                            s.setCreatedAt(Instant.now());
+                                            return subs.save(s).map(saved -> Map.<String, Object>of(
+                                                    "childId", childId.toString(), "status", "LINKED_NO_BROKER", "subscriptionId", saved.getId()));
+                                        }))
+                            ));
                 })
                 .collectList()
                 .map(results -> Map.<String, Object>of("results", results));
