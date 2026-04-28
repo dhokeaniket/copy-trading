@@ -248,7 +248,8 @@ public class CopyEngineService {
                 growwBody.put("validity", "DAY");
                 growwBody.put("exchange", "NSE");
                 growwBody.put("segment", "CASH");
-                growwBody.put("product", prod.equalsIgnoreCase("CNC") ? "CNC" : "INTRADAY");
+                // Pass through exact product from master (CNC, MIS, NRML)
+                growwBody.put("product", prod);
                 growwBody.put("order_type", isMarket ? "MARKET" : "LIMIT");
                 growwBody.put("transaction_type", side.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
                 growwBody.put("order_reference_id", "COPY-" + System.currentTimeMillis());

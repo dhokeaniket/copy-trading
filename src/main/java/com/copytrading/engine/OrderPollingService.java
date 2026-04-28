@@ -173,6 +173,7 @@ public class OrderPollingService {
             String side = extractField(order, "transaction_type", "side", "transactionType");
             String qtyStr = extractField(order, "quantity", "qty", "filled_quantity");
             String product = extractField(order, "product", "productType", "product_type");
+            String detectedOrderType = extractField(order, "order_type", "orderType");
 
             if (symbol == null || side == null || qtyStr == null) continue;
 
@@ -218,7 +219,7 @@ public class OrderPollingService {
             req.setQty(qty);
             req.setSide(side.toUpperCase());
             req.setProduct(product != null ? product : "MIS");
-            req.setOrderType("MARKET");
+            req.setOrderType(detectedOrderType != null ? detectedOrderType : "MARKET");
             req.setPrice(0);
 
             copyEngine.copyTrade(masterId, req)
