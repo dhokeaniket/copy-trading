@@ -14,4 +14,6 @@ public interface TradeRepository extends ReactiveCrudRepository<Trade, UUID> {
 
     @Query("SELECT COUNT(*) FROM trades WHERE user_id = :userId AND placed_at >= CURRENT_DATE")
     Mono<Long> countTodayTrades(UUID userId);
+
+    Mono<Trade> findByUserIdAndBrokerOrderId(UUID userId, String brokerOrderId);
 }

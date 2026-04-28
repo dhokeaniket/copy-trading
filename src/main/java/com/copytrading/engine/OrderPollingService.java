@@ -105,6 +105,15 @@ public class OrderPollingService {
                         },
                         err -> log.warn("KNOWN_ORDERS_RESTORE_FAILED: {}", err.getMessage())
                 );
+        // Also load today's trades from DB as known orders (belt and suspenders)
+        activeAccountRepo.findAll()
+                .flatMap(active -> tradeRepo.findByUserIdOrderByPlacedAtDesc(active.getMasterId())
+                        .filter(t -> t.getBrokerOrderId() != null && !t.getBrokerOrderId().isBlank())
+                        .map(t -> Map.entry(active.getMasterId(), t.getBrokerOrderId())))
+                .subscribe(
+                        entry -> knownOrders.computeIfAbsent(entry.getKey(), k -> ConcurrentHashMap.newKeySet()).add(entry.getValue()),
+                        err -> log.warn("DB_KNOWN_ORDERS_LOAD_FAILED: {}", err.getMessage())
+                );
     }
 
     /**
@@ -269,6 +278,15 @@ public class OrderPollingService {
     public void resetAllKnownOrders() {
         knownOrders.clear();
         pollingCache.resetAll().subscribe();
+        // Immediately reload known orders from DB so old trades don't get re-triggered
+        activeAccountRepo.findAll()
+                .flatMap(active -> tradeRepo.findByUserIdOrderByPlacedAtDesc(active.getMasterId())
+                        .filter(t -> t.getBrokerOrderId() != null && !t.getBrokerOrderId().isBlank())
+                        .map(t -> Map.entry(active.getMasterId(), t.getBrokerOrderId())))
+                .subscribe(
+                        entry -> knownOrders.computeIfAbsent(entry.getKey(), k -> ConcurrentHashMap.newKeySet()).add(entry.getValue()),
+                        err -> log.warn("DB_RELOAD_AFTER_RESET_FAILED: {}", err.getMessage())
+                );
     }
 
     // Auto-reset polling cache at 9:15 AM IST (3:45 AM UTC) on weekdays
