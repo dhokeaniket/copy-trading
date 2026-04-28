@@ -237,11 +237,20 @@ public class CopyEngineService {
 
         switch (account.getBrokerId()) {
             case "GROWW":
-                return growwClient.placeOrder(token, Map.of(
-                        "symbol", symbol, "qty", qty,
-                        "type", side, "product", prod,
-                        "order_type", oType, "price", price
-                ));
+                // Groww requires specific field names per their API docs
+                Map<String, Object> growwBody = new java.util.LinkedHashMap<>();
+                growwBody.put("trading_symbol", symbol);
+                growwBody.put("quantity", qty);
+                growwBody.put("price", price);
+                growwBody.put("trigger_price", 0);
+                growwBody.put("validity", "DAY");
+                growwBody.put("exchange", "NSE");
+                growwBody.put("segment", "CASH");
+                growwBody.put("product", prod.equalsIgnoreCase("CNC") ? "CNC" : "INTRADAY");
+                growwBody.put("order_type", oType.equalsIgnoreCase("LIMIT") ? "LIMIT" : "MARKET");
+                growwBody.put("transaction_type", side.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
+                growwBody.put("order_reference_id", "COPY-" + System.currentTimeMillis());
+                return growwClient.placeOrder(token, growwBody);
             case "ZERODHA": {
                 String apiKey = platformConfig.getZerodha().getApiKey();
                 return zerodhaClient.placeOrder(apiKey, token, Map.of(
