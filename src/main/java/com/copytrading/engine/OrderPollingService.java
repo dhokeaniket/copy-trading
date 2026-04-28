@@ -94,6 +94,17 @@ public class OrderPollingService {
                             log.warn("POLLING_STATE_RESTORE_FAILED, defaulting to ON: {}", err.getMessage());
                         }
                 );
+        // Restore known orders from Redis so we don't re-process orders after restart
+        pollingCache.loadAllKnownOrders()
+                .subscribe(
+                        restored -> {
+                            restored.forEach((masterId, orderIds) -> {
+                                knownOrders.computeIfAbsent(masterId, k -> ConcurrentHashMap.newKeySet()).addAll(orderIds);
+                                log.info("KNOWN_ORDERS_RESTORED master={} count={}", masterId, orderIds.size());
+                            });
+                        },
+                        err -> log.warn("KNOWN_ORDERS_RESTORE_FAILED: {}", err.getMessage())
+                );
     }
 
     /**
@@ -145,7 +156,7 @@ public class OrderPollingService {
 
     @SuppressWarnings("unchecked")
     private int processOrders(UUID masterId, BrokerAccount account, List<?> ordersList) {
-        Set<String> known = knownOrders.computeIfAbsent(masterId, k -> new HashSet<>());
+        Set<String> known = knownOrders.computeIfAbsent(masterId, k -> ConcurrentHashMap.newKeySet());
         int newCount = 0;
 
         for (Object orderObj : ordersList) {

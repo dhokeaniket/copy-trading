@@ -59,6 +59,26 @@ public class PollingStateCache {
                 .then();
     }
 
+    /** Load all known orders from Redis (for restoring state after restart) */
+    public Mono<java.util.Map<UUID, java.util.Set<String>>> loadAllKnownOrders() {
+        return redis.keys("poll:orders:*")
+                .flatMap(key -> {
+                    String masterIdStr = key.replace("poll:orders:", "");
+                    return redis.opsForSet().members(key)
+                            .collectList()
+                            .map(members -> java.util.Map.entry(UUID.fromString(masterIdStr), new java.util.HashSet<>(members)));
+                })
+                .collectList()
+                .map(entries -> {
+                    java.util.Map<UUID, java.util.Set<String>> result = new java.util.HashMap<>();
+                    for (var entry : entries) {
+                        result.put(entry.getKey(), entry.getValue());
+                    }
+                    return result;
+                })
+                .onErrorReturn(java.util.Map.of());
+    }
+
     /** Save polling enabled state to Redis (survives restarts) */
     public Mono<Void> setPollingEnabled(boolean enabled) {
         return redis.opsForValue().set("poll:enabled", String.valueOf(enabled))

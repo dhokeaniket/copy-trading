@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration;
 @ConfigurationProperties(prefix = "brokers")
 public class PlatformBrokerConfig {
 
+    private BrokerCreds groww = new BrokerCreds();
     private BrokerCreds zerodha = new BrokerCreds();
     private BrokerCreds fyers = new BrokerCreds();
     private BrokerCreds upstox = new BrokerCreds();
@@ -14,6 +15,8 @@ public class PlatformBrokerConfig {
     private BrokerCreds angelone = new BrokerCreds();
     private String callbackUrl;
 
+    public BrokerCreds getGroww() { return groww; }
+    public void setGroww(BrokerCreds groww) { this.groww = groww; }
     public BrokerCreds getZerodha() { return zerodha; }
     public void setZerodha(BrokerCreds zerodha) { this.zerodha = zerodha; }
     public BrokerCreds getFyers() { return fyers; }
@@ -29,6 +32,7 @@ public class PlatformBrokerConfig {
 
     public BrokerCreds getFor(String brokerId) {
         return switch (brokerId) {
+            case "GROWW" -> groww;
             case "ZERODHA" -> zerodha;
             case "FYERS" -> fyers;
             case "UPSTOX" -> upstox;

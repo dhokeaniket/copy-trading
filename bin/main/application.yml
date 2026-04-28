@@ -60,6 +60,9 @@ aws:
   region: ${AWS_REGION:ap-south-1}
 
 brokers:
+  groww:
+    apiKey: ${GROWW_API_KEY:}
+    apiSecret: ${GROWW_API_SECRET:}
   zerodha:
     apiKey: ${ZERODHA_API_KEY:dm1fk4i61xyi29iu}
     apiSecret: ${ZERODHA_API_SECRET:3eqyt7lsvr5sz90c5yabf63x930ihph9}

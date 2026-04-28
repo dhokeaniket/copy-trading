@@ -88,11 +88,17 @@ public class BrokerAccountService {
         a.setSessionActive(false);
         a.setLinkedAt(Instant.now());
 
-        // For OAuth brokers, use platform-level keys; for Groww, use per-user keys
+        // For OAuth brokers, use platform-level keys; for Groww, also fall back to platform keys
         PlatformBrokerConfig.BrokerCreds platformCreds = platformConfig.getFor(broker);
-        if (platformCreds != null && platformCreds.getApiKey() != null) {
-            a.setApiKey(platformCreds.getApiKey());
-            a.setApiSecret(platformCreds.getApiSecret());
+        if (platformCreds != null && platformCreds.getApiKey() != null && !platformCreds.getApiKey().isBlank()) {
+            // Use platform keys if user didn't provide their own
+            if (req.getApiKey() == null || req.getApiKey().isBlank()) {
+                a.setApiKey(platformCreds.getApiKey());
+                a.setApiSecret(platformCreds.getApiSecret() != null ? platformCreds.getApiSecret() : "");
+            } else {
+                a.setApiKey(req.getApiKey());
+                a.setApiSecret(req.getApiSecret() != null ? req.getApiSecret() : "");
+            }
         } else {
             a.setApiKey(req.getApiKey() != null ? req.getApiKey() : "");
             a.setApiSecret(req.getApiSecret() != null ? req.getApiSecret() : "");
@@ -188,11 +194,24 @@ public class BrokerAccountService {
 
     // --- GROWW LOGIN ---
     private Mono<Map<String, Object>> loginGroww(BrokerAccount a, BrokerLoginRequest req) {
+        // Resolve API key: prefer per-user key, fall back to platform-level key
+        String apiKey = a.getApiKey();
+        String apiSecret = a.getApiSecret();
+        var platformCreds = platformConfig.getGroww();
+        if ((apiKey == null || apiKey.isBlank()) && platformCreds != null && platformCreds.getApiKey() != null && !platformCreds.getApiKey().isBlank()) {
+            apiKey = platformCreds.getApiKey();
+            apiSecret = platformCreds.getApiSecret();
+        }
+        if (apiKey == null || apiKey.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "No Groww API key configured. Set apiKey on the broker account or configure platform-level Groww credentials."));
+        }
+
         Mono<Map> tokenMono;
         if (req != null && req.getTotpCode() != null && !req.getTotpCode().isBlank()) {
-            tokenMono = growwClient.generateToken(a.getApiKey(), req.getTotpCode());
+            tokenMono = growwClient.generateToken(apiKey, req.getTotpCode());
         } else {
-            tokenMono = growwClient.generateTokenWithSecret(a.getApiKey(), a.getApiSecret());
+            tokenMono = growwClient.generateTokenWithSecret(apiKey, apiSecret);
         }
         return tokenMono.flatMap(resp -> extractAndSaveSession(a, resp, "Groww",
                 r -> {
