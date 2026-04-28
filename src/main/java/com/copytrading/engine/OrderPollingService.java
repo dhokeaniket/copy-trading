@@ -46,6 +46,9 @@ public class OrderPollingService {
     // In-memory fallback for known orders (used alongside Redis)
     private final ConcurrentHashMap<UUID, Set<String>> knownOrders = new ConcurrentHashMap<>();
 
+    // Lock to prevent same order being processed concurrently by multiple poll cycles
+    private final Set<String> processingOrders = ConcurrentHashMap.newKeySet();
+
     // Toggle polling on/off — defaults to true, restored from Redis on startup
     private volatile boolean pollingEnabled = true;
 
@@ -176,8 +179,9 @@ public class OrderPollingService {
             String status = extractField(order, "status", "order_status");
             if (orderId == null || orderId.isBlank()) continue;
 
-            // Only copy COMPLETE/EXECUTED orders that we haven't seen before
+            // Skip if already known OR currently being processed by another poll cycle
             if (known.contains(orderId)) continue;
+            if (!processingOrders.add(orderId)) continue; // another cycle is already handling this
             known.add(orderId);
 
             // Also mark in Redis (survives restarts)
