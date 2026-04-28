@@ -61,7 +61,7 @@ public class CopyEngineService {
     private final DhanApiClient dhanClient;
     private final AngelOneApiClient angelOneClient;
     private final PlatformBrokerConfig platformConfig;
-    private final DhanSecurityMapper dhanSecurityMapper;
+    private final InstrumentCache instruments;
 
     public CopyEngineService(SubscriptionRepository subs,
                              BrokerAccountRepository brokerRepo,
@@ -79,7 +79,7 @@ public class CopyEngineService {
                              DhanApiClient dhanClient,
                              AngelOneApiClient angelOneClient,
                              PlatformBrokerConfig platformConfig,
-                             DhanSecurityMapper dhanSecurityMapper) {
+                             InstrumentCache instruments) {
         this.subs = subs;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -96,7 +96,7 @@ public class CopyEngineService {
         this.dhanClient = dhanClient;
         this.angelOneClient = angelOneClient;
         this.platformConfig = platformConfig;
-        this.dhanSecurityMapper = dhanSecurityMapper;
+        this.instruments = instruments;
     }
 
     /**
@@ -329,12 +329,13 @@ public class CopyEngineService {
             }
             case "UPSTOX": {
                 // POST /v2/order/place — JSON, Bearer token
+                // instrument_token: "NSE_EQ|INE002A01018" (ISIN format from instrument master)
                 // product: I=intraday, D=delivery
                 String upProd = prod.equalsIgnoreCase("MIS") ? "I"
                         : prod.equalsIgnoreCase("CNC") ? "D"
                         : prod.equalsIgnoreCase("NRML") ? "D" : "I";
-                String upSym = sym.contains("|") ? sym
-                        : (isFnO ? "NSE_FO|" : "NSE_EQ|") + sym;
+                String upSym = instruments.getUpstoxInstrumentKey(sym, isFnO);
+                if (upSym == null) upSym = (isFnO ? "NSE_FO|" : "NSE_EQ|") + sym; // fallback
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("quantity", qty);
                 b.put("product", upProd);
@@ -356,7 +357,7 @@ public class CopyEngineService {
                 String dhanExch = isFnO ? "NSE_FNO" : "NSE_EQ";
                 String dhanProd = prod.equalsIgnoreCase("CNC") ? "CNC"
                         : prod.equalsIgnoreCase("NRML") ? "MARGIN" : "INTRADAY";
-                String secId = dhanSecurityMapper.getSecurityId(sym, dhanExch);
+                String secId = instruments.getDhanSecurityId(sym, isFnO);
                 String clientId = account.getClientId() != null ? account.getClientId() : "";
 
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
@@ -391,15 +392,18 @@ public class CopyEngineService {
             case "ANGELONE": {
                 // POST /rest/secure/angelbroking/order/v1/placeOrder — JSON
                 // producttype: INTRADAY, DELIVERY, CARRYFORWARD
+                // symboltoken is REQUIRED (numeric token from scrip master)
                 String apiKey = platformConfig.getAngelone().getApiKey();
                 String angelProd = prod.equalsIgnoreCase("MIS") ? "INTRADAY"
                         : prod.equalsIgnoreCase("CNC") ? "DELIVERY"
                         : prod.equalsIgnoreCase("NRML") ? "CARRYFORWARD" : "INTRADAY";
                 String angelSym = isFnO ? sym : sym + "-EQ";
+                String angelToken = instruments.getAngelToken(angelSym, isFnO);
+                if (angelToken == null) angelToken = instruments.getAngelToken(sym, isFnO);
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("variety", "NORMAL");
                 b.put("tradingsymbol", angelSym);
-                b.put("symboltoken", "");
+                b.put("symboltoken", angelToken != null ? angelToken : "");
                 b.put("transactiontype", txn);
                 b.put("exchange", isFnO ? "NFO" : "NSE");
                 b.put("ordertype", isMarket ? "MARKET" : "LIMIT");
