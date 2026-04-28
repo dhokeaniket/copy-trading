@@ -174,11 +174,16 @@ public class OrderPollingService {
             String qtyStr = extractField(order, "quantity", "qty", "filled_quantity");
             String product = extractField(order, "product", "productType", "product_type");
             String detectedOrderType = extractField(order, "order_type", "orderType");
+            String priceStr = extractField(order, "price", "average_fill_price", "averagePrice");
+            String exchangeField = extractField(order, "exchange");
+            String segmentField = extractField(order, "segment");
 
             if (symbol == null || side == null || qtyStr == null) continue;
 
             int qty;
             try { qty = (int) Double.parseDouble(qtyStr); } catch (Exception e) { continue; }
+            double detectedPrice = 0;
+            try { if (priceStr != null) detectedPrice = Double.parseDouble(priceStr); } catch (Exception e) { /* ignore */ }
 
             // Normalize side
             if ("1".equals(side)) side = "BUY";
@@ -220,7 +225,9 @@ public class OrderPollingService {
             req.setSide(side.toUpperCase());
             req.setProduct(product != null ? product : "MIS");
             req.setOrderType(detectedOrderType != null ? detectedOrderType : "MARKET");
-            req.setPrice(0);
+            // For LIMIT orders, pass the actual price; for MARKET, price=0
+            boolean isLimitOrder = "LIMIT".equalsIgnoreCase(detectedOrderType);
+            req.setPrice(isLimitOrder ? detectedPrice : 0);
 
             copyEngine.copyTrade(masterId, req)
                     .subscribe(
