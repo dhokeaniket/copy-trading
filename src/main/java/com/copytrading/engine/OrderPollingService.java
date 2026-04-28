@@ -52,6 +52,9 @@ public class OrderPollingService {
     // Toggle polling on/off — defaults to true, restored from Redis on startup
     private volatile boolean pollingEnabled = true;
 
+    // Temporarily pause polling during cache reset to prevent race conditions
+    private volatile boolean resetInProgress = false;
+
     // Track last reset time
     private volatile Instant lastResetAt = Instant.now();
 
@@ -124,7 +127,7 @@ public class OrderPollingService {
      */
     @Scheduled(fixedDelay = 1000, initialDelay = 15000)
     public void pollMasterOrders() {
-        if (!pollingEnabled) return;
+        if (!pollingEnabled || resetInProgress) return;
 
         activeAccountRepo.findAll()
                 .flatMap(activeAccount -> pollSingleMaster(activeAccount)
@@ -179,9 +182,9 @@ public class OrderPollingService {
             String status = extractField(order, "status", "order_status");
             if (orderId == null || orderId.isBlank()) continue;
 
-            // Skip if already known OR currently being processed by another poll cycle
+            // 3-layer dedup: in-memory set → processingOrders lock → (DB checked on startup/reset)
             if (known.contains(orderId)) continue;
-            if (!processingOrders.add(orderId)) continue; // another cycle is already handling this
+            if (!processingOrders.add(orderId)) continue;
             known.add(orderId);
 
             // Also mark in Redis (survives restarts)
@@ -199,8 +202,8 @@ public class OrderPollingService {
             String product = extractField(order, "product", "productType", "product_type");
             String detectedOrderType = extractField(order, "order_type", "orderType");
             String priceStr = extractField(order, "price", "average_fill_price", "averagePrice");
-            String exchangeField = extractField(order, "exchange");
-            String segmentField = extractField(order, "segment");
+            String exchange = extractField(order, "exchange");
+            String segment = extractField(order, "segment");
 
             if (symbol == null || side == null || qtyStr == null) continue;
 
@@ -222,12 +225,13 @@ public class OrderPollingService {
             masterTrade.setBrokerAccountId(account.getId());
             masterTrade.setBrokerOrderId(orderId);
             masterTrade.setInstrument(symbol);
-            masterTrade.setExchange("NSE");
-            masterTrade.setSegment("EQUITY");
-            masterTrade.setOrderType("MARKET");
+            masterTrade.setExchange(exchange != null ? exchange : "NSE");
+            boolean detectedFnO = symbol != null && symbol.matches(".*\\d+(CE|PE)$");
+            masterTrade.setSegment(detectedFnO ? "FNO" : (segment != null ? segment : "EQUITY"));
+            masterTrade.setOrderType(detectedOrderType != null ? detectedOrderType : "MARKET");
             masterTrade.setTransactionType(side.toUpperCase());
             masterTrade.setQuantity(qty);
-            masterTrade.setPrice(0);
+            masterTrade.setPrice(detectedPrice);
             masterTrade.setProduct(product != null ? product : "MIS");
             masterTrade.setStatus("EXECUTED");
             masterTrade.setPlacedAt(Instant.now());
@@ -280,25 +284,29 @@ public class OrderPollingService {
     }
 
     public void resetAllKnownOrders() {
+        resetInProgress = true;
         knownOrders.clear();
+        processingOrders.clear();
         pollingCache.resetAll().subscribe();
-        // Immediately reload known orders from DB so old trades don't get re-triggered
+        // Reload known orders from DB so old trades don't get re-triggered
         activeAccountRepo.findAll()
                 .flatMap(active -> tradeRepo.findByUserIdOrderByPlacedAtDesc(active.getMasterId())
                         .filter(t -> t.getBrokerOrderId() != null && !t.getBrokerOrderId().isBlank())
                         .map(t -> Map.entry(active.getMasterId(), t.getBrokerOrderId())))
-                .subscribe(
-                        entry -> knownOrders.computeIfAbsent(entry.getKey(), k -> ConcurrentHashMap.newKeySet()).add(entry.getValue()),
-                        err -> log.warn("DB_RELOAD_AFTER_RESET_FAILED: {}", err.getMessage())
-                );
+                .doOnNext(entry -> knownOrders.computeIfAbsent(entry.getKey(), k -> ConcurrentHashMap.newKeySet()).add(entry.getValue()))
+                .doOnError(err -> log.warn("DB_RELOAD_AFTER_RESET_FAILED: {}", err.getMessage()))
+                .doFinally(signal -> {
+                    resetInProgress = false;
+                    log.info("RESET_COMPLETE: knownOrders reloaded from DB, polling resumed");
+                })
+                .subscribe();
     }
 
     // Auto-reset polling cache at 9:15 AM IST (3:45 AM UTC) on weekdays
     @Scheduled(cron = "0 45 3 * * MON-FRI")
     public void autoResetPollingCache() {
         log.info("AUTO_RESET_POLLING: Clearing known orders cache at market open");
-        knownOrders.clear();
-        pollingCache.resetAll().subscribe();
+        resetAllKnownOrders(); // clears + reloads from DB to prevent re-triggering old orders
         lastResetAt = Instant.now();
     }
 

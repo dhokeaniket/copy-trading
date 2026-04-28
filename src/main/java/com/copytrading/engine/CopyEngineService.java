@@ -201,8 +201,9 @@ public class CopyEngineService {
                     childTrade.setBrokerAccountId(brokerAccountId);
                     childTrade.setBrokerOrderId(orderId.length() > 100 ? orderId.substring(0, 100) : orderId);
                     childTrade.setInstrument(req.getSymbol());
-                    childTrade.setExchange("NSE");
-                    childTrade.setSegment("EQUITY");
+                    boolean childFnO = req.getSymbol() != null && req.getSymbol().matches(".*\\d+(CE|PE)$");
+                    childTrade.setExchange(req.getExchange() != null ? req.getExchange() : "NSE");
+                    childTrade.setSegment(childFnO ? "FNO" : "EQUITY");
                     childTrade.setOrderType(req.getOrderType() != null ? req.getOrderType() : "MARKET");
                     childTrade.setTransactionType(req.getSide());
                     childTrade.setQuantity(scaledQty);
