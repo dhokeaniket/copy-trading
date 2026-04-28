@@ -61,6 +61,7 @@ public class CopyEngineService {
     private final DhanApiClient dhanClient;
     private final AngelOneApiClient angelOneClient;
     private final PlatformBrokerConfig platformConfig;
+    private final DhanSecurityMapper dhanSecurityMapper;
 
     public CopyEngineService(SubscriptionRepository subs,
                              BrokerAccountRepository brokerRepo,
@@ -77,7 +78,8 @@ public class CopyEngineService {
                              UpstoxApiClient upstoxClient,
                              DhanApiClient dhanClient,
                              AngelOneApiClient angelOneClient,
-                             PlatformBrokerConfig platformConfig) {
+                             PlatformBrokerConfig platformConfig,
+                             DhanSecurityMapper dhanSecurityMapper) {
         this.subs = subs;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -94,6 +96,7 @@ public class CopyEngineService {
         this.dhanClient = dhanClient;
         this.angelOneClient = angelOneClient;
         this.platformConfig = platformConfig;
+        this.dhanSecurityMapper = dhanSecurityMapper;
     }
 
     /**
@@ -251,174 +254,163 @@ public class CopyEngineService {
 
     /**
      * Place order on the child's broker using the real API client.
-     * Each broker has its own specific order format — these match their official API docs.
+     * Each broker has its own specific order format — verified against official API docs.
+     *
+     * Zerodha: https://kite.trade/docs/connect/v3/orders/ (form-urlencoded)
+     * Groww:   https://api.groww.in (JSON)
+     * Fyers:   https://api-t1.fyers.in/api/v3 (JSON)
+     * Upstox:  https://upstox.com/developer/api-documentation/place-order (JSON)
+     * Dhan:    https://dhanhq.co/docs/v2/orders/ (JSON, requires numeric securityId)
+     * Angel:   https://smartapi.angelone.in (JSON)
      */
     private Mono<Map> placeOrderOnBroker(BrokerAccount account, String symbol, int qty,
                                           String side, String product, String orderType, double price) {
-        symbol = symbolMapper.translate(symbol, "GROWW", account.getBrokerId());
+        String sym = symbolMapper.translate(symbol, "GROWW", account.getBrokerId());
         String token = account.getAccessToken();
         String prod = product != null ? product : "MIS";
         String oType = orderType != null ? orderType : "MARKET";
         boolean isMarket = oType.equalsIgnoreCase("MARKET");
-        boolean isFnO = symbolMapper.isFnO(symbol);
+        boolean isFnO = symbolMapper.isFnO(sym);
+        String txn = "BUY".equalsIgnoreCase(side) ? "BUY" : "SELL";
 
         switch (account.getBrokerId()) {
             case "GROWW": {
-                // Groww API: POST /v1/order/create (JSON body)
-                Map<String, Object> growwBody = new java.util.LinkedHashMap<>();
-                growwBody.put("trading_symbol", symbol);
-                growwBody.put("quantity", qty);
-                growwBody.put("price", isMarket ? 0 : price);
-                growwBody.put("trigger_price", 0);
-                growwBody.put("validity", "DAY");
-                growwBody.put("exchange", "NSE");
-                growwBody.put("segment", isFnO ? "FNO" : "CASH");
-                growwBody.put("product", prod);
-                growwBody.put("order_type", isMarket ? "MARKET" : "LIMIT");
-                growwBody.put("transaction_type", side.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
-                growwBody.put("order_reference_id", "COPY-" + System.currentTimeMillis());
-                return growwClient.placeOrder(token, growwBody);
+                // POST /v1/order/create — JSON body, Bearer token
+                Map<String, Object> b = new java.util.LinkedHashMap<>();
+                b.put("trading_symbol", sym);
+                b.put("quantity", qty);
+                b.put("price", isMarket ? 0 : price);
+                b.put("trigger_price", 0);
+                b.put("validity", "DAY");
+                b.put("exchange", "NSE");
+                b.put("segment", isFnO ? "FNO" : "CASH");
+                b.put("product", prod);
+                b.put("order_type", isMarket ? "MARKET" : "LIMIT");
+                b.put("transaction_type", txn);
+                b.put("order_reference_id", "COPY-" + System.currentTimeMillis());
+                return growwClient.placeOrder(token, b);
             }
             case "ZERODHA": {
-                // Zerodha Kite API: POST /orders/regular (form-urlencoded)
-                // Required: tradingsymbol, exchange, transaction_type, order_type, quantity, product
-                // For MARKET: price=0, trigger_price=0
-                // For LIMIT: price=actual, trigger_price=0
+                // POST /orders/regular — form-urlencoded, token api_key:access_token
                 String apiKey = platformConfig.getZerodha().getApiKey();
-                String exchange = isFnO ? "NFO" : "NSE";
-                Map<String, Object> zerodhaBody = new java.util.LinkedHashMap<>();
-                zerodhaBody.put("tradingsymbol", symbol);
-                zerodhaBody.put("exchange", exchange);
-                zerodhaBody.put("transaction_type", side.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
-                zerodhaBody.put("order_type", isMarket ? "MARKET" : "LIMIT");
-                zerodhaBody.put("quantity", qty);
-                zerodhaBody.put("product", prod);
-                zerodhaBody.put("validity", "DAY");
-                if (!isMarket) {
-                    zerodhaBody.put("price", price);
-                }
-                return zerodhaClient.placeOrder(apiKey, token, zerodhaBody);
+                Map<String, Object> b = new java.util.LinkedHashMap<>();
+                b.put("tradingsymbol", sym);
+                b.put("exchange", isFnO ? "NFO" : "NSE");
+                b.put("transaction_type", txn);
+                b.put("order_type", isMarket ? "MARKET" : "LIMIT");
+                b.put("quantity", qty);
+                b.put("product", prod);
+                b.put("validity", "DAY");
+                if (!isMarket) b.put("price", price);
+                return zerodhaClient.placeOrder(apiKey, token, b);
             }
             case "FYERS": {
-                // Fyers API v3: POST /orders/sync (JSON body)
-                // symbol format: "NSE:SYMBOL-EQ" for equity, "NSE:SYMBOL..." for F&O
-                // side: 1=BUY, -1=SELL
-                // type: 1=LIMIT, 2=MARKET, 3=SL, 4=SL-M
-                // productType: INTRADAY, CNC, MARGIN, BO, CO
+                // POST /orders/sync — JSON, Authorization: appId:accessToken
+                // side: 1=BUY, -1=SELL; type: 1=LIMIT, 2=MARKET
                 String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + token;
-                int fSide = "BUY".equalsIgnoreCase(side) ? 1 : -1;
-                int fType = isMarket ? 2 : 1;
-                String fyersSymbol = isFnO ? symbol : "NSE:" + symbol + "-EQ";
+                String fyersSym = isFnO ? sym : "NSE:" + sym + "-EQ";
                 String fyersProd = prod.equalsIgnoreCase("MIS") ? "INTRADAY"
                         : prod.equalsIgnoreCase("CNC") ? "CNC"
                         : prod.equalsIgnoreCase("NRML") ? "MARGIN" : "INTRADAY";
-                Map<String, Object> fyersBody = new java.util.LinkedHashMap<>();
-                fyersBody.put("symbol", fyersSymbol);
-                fyersBody.put("qty", qty);
-                fyersBody.put("type", fType);
-                fyersBody.put("side", fSide);
-                fyersBody.put("productType", fyersProd);
-                fyersBody.put("limitPrice", isMarket ? 0 : price);
-                fyersBody.put("stopPrice", 0);
-                fyersBody.put("validity", "DAY");
-                fyersBody.put("disclosedQty", 0);
-                fyersBody.put("offlineOrder", false);
-                fyersBody.put("stopLoss", 0);
-                fyersBody.put("takeProfit", 0);
-                return fyersClient.placeOrder(fyersAuth, fyersBody);
+                Map<String, Object> b = new java.util.LinkedHashMap<>();
+                b.put("symbol", fyersSym);
+                b.put("qty", qty);
+                b.put("type", isMarket ? 2 : 1);
+                b.put("side", "BUY".equalsIgnoreCase(side) ? 1 : -1);
+                b.put("productType", fyersProd);
+                b.put("limitPrice", isMarket ? 0 : price);
+                b.put("stopPrice", 0);
+                b.put("validity", "DAY");
+                b.put("disclosedQty", 0);
+                b.put("offlineOrder", false);
+                b.put("stopLoss", 0);
+                b.put("takeProfit", 0);
+                return fyersClient.placeOrder(fyersAuth, b);
             }
             case "UPSTOX": {
-                // Upstox API v2: POST /v2/order/place (JSON body)
-                // instrument_token format: "NSE_EQ|ISIN" or "NSE_FO|TOKEN"
-                // product: "I" (intraday), "D" (delivery/CNC), "MTF"
-                // order_type: MARKET, LIMIT, SL, SL-M
-                // transaction_type: BUY, SELL
-                String upstoxProd = prod.equalsIgnoreCase("MIS") ? "I"
+                // POST /v2/order/place — JSON, Bearer token
+                // product: I=intraday, D=delivery
+                String upProd = prod.equalsIgnoreCase("MIS") ? "I"
                         : prod.equalsIgnoreCase("CNC") ? "D"
                         : prod.equalsIgnoreCase("NRML") ? "D" : "I";
-                String upstoxSymbol = symbol;
-                // If symbol doesn't already have exchange prefix, add it
-                if (!symbol.contains("|")) {
-                    upstoxSymbol = (isFnO ? "NSE_FO|" : "NSE_EQ|") + symbol;
-                }
-                Map<String, Object> upstoxBody = new java.util.LinkedHashMap<>();
-                upstoxBody.put("quantity", qty);
-                upstoxBody.put("product", upstoxProd);
-                upstoxBody.put("validity", "DAY");
-                upstoxBody.put("price", isMarket ? 0 : price);
-                upstoxBody.put("tag", "COPY-" + System.currentTimeMillis());
-                upstoxBody.put("instrument_token", upstoxSymbol);
-                upstoxBody.put("order_type", isMarket ? "MARKET" : "LIMIT");
-                upstoxBody.put("transaction_type", side.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
-                upstoxBody.put("disclosed_quantity", 0);
-                upstoxBody.put("trigger_price", 0);
-                upstoxBody.put("is_amo", false);
-                return upstoxClient.placeOrder(token, upstoxBody);
+                String upSym = sym.contains("|") ? sym
+                        : (isFnO ? "NSE_FO|" : "NSE_EQ|") + sym;
+                Map<String, Object> b = new java.util.LinkedHashMap<>();
+                b.put("quantity", qty);
+                b.put("product", upProd);
+                b.put("validity", "DAY");
+                b.put("price", isMarket ? 0 : price);
+                b.put("tag", "COPY" + System.currentTimeMillis());
+                b.put("instrument_token", upSym);
+                b.put("order_type", isMarket ? "MARKET" : "LIMIT");
+                b.put("transaction_type", txn);
+                b.put("disclosed_quantity", 0);
+                b.put("trigger_price", 0);
+                b.put("is_amo", false);
+                return upstoxClient.placeOrder(token, b);
             }
             case "DHAN": {
-                // Dhan API v2: POST /v2/orders (JSON body)
-                // Requires securityId (numeric) — we try to resolve via search, fallback to symbol
-                // exchangeSegment: NSE_EQ, NSE_FNO, BSE_EQ, etc.
-                // transactionType: BUY, SELL
-                // orderType: MARKET, LIMIT, SL, SLM
-                // productType: CNC, INTRADAY, MARGIN, CO, BO
-                String dhanExchange = isFnO ? "NSE_FNO" : "NSE_EQ";
-                String dhanTxnType = "BUY".equalsIgnoreCase(side) ? "BUY" : "SELL";
-                String dhanOrderType = isMarket ? "MARKET" : "LIMIT";
+                // POST /v2/orders — JSON, access-token header
+                // REQUIRED: dhanClientId, securityId (numeric), exchangeSegment
+                // securityId resolved from Dhan instrument CSV (loaded on startup)
+                String dhanExch = isFnO ? "NSE_FNO" : "NSE_EQ";
                 String dhanProd = prod.equalsIgnoreCase("CNC") ? "CNC"
-                        : prod.equalsIgnoreCase("NRML") ? "MARGIN"
-                        : "INTRADAY";
-                Map<String, Object> dhanBody = new java.util.LinkedHashMap<>();
-                dhanBody.put("transactionType", dhanTxnType);
-                dhanBody.put("exchangeSegment", dhanExchange);
-                dhanBody.put("productType", dhanProd);
-                dhanBody.put("orderType", dhanOrderType);
-                dhanBody.put("validity", "DAY");
-                dhanBody.put("tradingSymbol", symbol);
-                dhanBody.put("quantity", qty);
-                dhanBody.put("price", isMarket ? 0 : price);
-                dhanBody.put("triggerPrice", 0);
-                dhanBody.put("disclosedQuantity", 0);
-                dhanBody.put("afterMarketOrder", false);
-                return dhanClient.searchSecurityId(token, symbol, dhanExchange)
-                        .flatMap(secId -> {
-                            if (secId != null && !secId.isBlank()) {
-                                dhanBody.put("securityId", secId);
-                            }
-                            return dhanClient.placeOrder(token, dhanBody);
+                        : prod.equalsIgnoreCase("NRML") ? "MARGIN" : "INTRADAY";
+                String secId = dhanSecurityMapper.getSecurityId(sym, dhanExch);
+                String clientId = account.getClientId() != null ? account.getClientId() : "";
+
+                Map<String, Object> b = new java.util.LinkedHashMap<>();
+                b.put("dhanClientId", clientId);
+                b.put("transactionType", txn);
+                b.put("exchangeSegment", dhanExch);
+                b.put("productType", dhanProd);
+                b.put("orderType", isMarket ? "MARKET" : "LIMIT");
+                b.put("validity", "DAY");
+                b.put("quantity", String.valueOf(qty));
+                b.put("price", isMarket ? "" : String.valueOf(price));
+                b.put("triggerPrice", "");
+                b.put("disclosedQuantity", "");
+                b.put("afterMarketOrder", false);
+                b.put("correlationId", "COPY" + System.currentTimeMillis());
+
+                if (secId != null) {
+                    b.put("securityId", secId);
+                    return dhanClient.placeOrder(token, b);
+                }
+                // Fallback: search Dhan API
+                return dhanClient.searchSecurityId(token, sym, dhanExch)
+                        .flatMap(found -> {
+                            b.put("securityId", (found != null && !found.isBlank()) ? found : sym);
+                            return dhanClient.placeOrder(token, b);
                         })
-                        .switchIfEmpty(dhanClient.placeOrder(token, dhanBody));
+                        .switchIfEmpty(Mono.defer(() -> {
+                            b.put("securityId", sym);
+                            return dhanClient.placeOrder(token, b);
+                        }));
             }
             case "ANGELONE": {
-                // Angel One SmartAPI: POST /rest/secure/angelbroking/order/v1/placeOrder (JSON body)
-                // Required: variety, tradingsymbol, symboltoken, transactiontype, exchange,
-                //           ordertype, producttype, duration, price, squareoff, stoploss, quantity
-                // variety: NORMAL, STOPLOSS, AMO, ROBO
-                // producttype: INTRADAY, DELIVERY, CARRYFORWARD, BO, CO
-                // ordertype: MARKET, LIMIT, STOPLOSS_LIMIT, STOPLOSS_MARKET
+                // POST /rest/secure/angelbroking/order/v1/placeOrder — JSON
+                // producttype: INTRADAY, DELIVERY, CARRYFORWARD
                 String apiKey = platformConfig.getAngelone().getApiKey();
-                String exchange = isFnO ? "NFO" : "NSE";
                 String angelProd = prod.equalsIgnoreCase("MIS") ? "INTRADAY"
                         : prod.equalsIgnoreCase("CNC") ? "DELIVERY"
                         : prod.equalsIgnoreCase("NRML") ? "CARRYFORWARD" : "INTRADAY";
-                String angelOrderType = isMarket ? "MARKET" : "LIMIT";
-                // Angel One uses "-EQ" suffix for equity symbols
-                String angelSymbol = isFnO ? symbol : symbol + "-EQ";
-                Map<String, Object> angelBody = new java.util.LinkedHashMap<>();
-                angelBody.put("variety", "NORMAL");
-                angelBody.put("tradingsymbol", angelSymbol);
-                angelBody.put("symboltoken", "");  // Will be resolved by Angel One if empty
-                angelBody.put("transactiontype", side.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
-                angelBody.put("exchange", exchange);
-                angelBody.put("ordertype", angelOrderType);
-                angelBody.put("producttype", angelProd);
-                angelBody.put("duration", "DAY");
-                angelBody.put("price", isMarket ? "0" : String.valueOf(price));
-                angelBody.put("squareoff", "0");
-                angelBody.put("stoploss", "0");
-                angelBody.put("quantity", String.valueOf(qty));
-                angelBody.put("triggerprice", "0");
-                return angelOneClient.placeOrder(apiKey, token, angelBody);
+                String angelSym = isFnO ? sym : sym + "-EQ";
+                Map<String, Object> b = new java.util.LinkedHashMap<>();
+                b.put("variety", "NORMAL");
+                b.put("tradingsymbol", angelSym);
+                b.put("symboltoken", "");
+                b.put("transactiontype", txn);
+                b.put("exchange", isFnO ? "NFO" : "NSE");
+                b.put("ordertype", isMarket ? "MARKET" : "LIMIT");
+                b.put("producttype", angelProd);
+                b.put("duration", "DAY");
+                b.put("price", isMarket ? "0" : String.valueOf(price));
+                b.put("squareoff", "0");
+                b.put("stoploss", "0");
+                b.put("quantity", String.valueOf(qty));
+                b.put("triggerprice", "0");
+                return angelOneClient.placeOrder(apiKey, token, b);
             }
             default:
                 return Mono.error(new RuntimeException("Unsupported broker: " + account.getBrokerId()));
