@@ -241,13 +241,15 @@ public class CopyEngineService {
                 Map<String, Object> growwBody = new java.util.LinkedHashMap<>();
                 growwBody.put("trading_symbol", symbol);
                 growwBody.put("quantity", qty);
-                growwBody.put("price", price);
+                // MARKET orders must have price=0, LIMIT orders use actual price
+                boolean isMarket = oType.equalsIgnoreCase("MARKET");
+                growwBody.put("price", isMarket ? 0 : price);
                 growwBody.put("trigger_price", 0);
                 growwBody.put("validity", "DAY");
                 growwBody.put("exchange", "NSE");
                 growwBody.put("segment", "CASH");
                 growwBody.put("product", prod.equalsIgnoreCase("CNC") ? "CNC" : "INTRADAY");
-                growwBody.put("order_type", oType.equalsIgnoreCase("LIMIT") ? "LIMIT" : "MARKET");
+                growwBody.put("order_type", isMarket ? "MARKET" : "LIMIT");
                 growwBody.put("transaction_type", side.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
                 growwBody.put("order_reference_id", "COPY-" + System.currentTimeMillis());
                 return growwClient.placeOrder(token, growwBody);
