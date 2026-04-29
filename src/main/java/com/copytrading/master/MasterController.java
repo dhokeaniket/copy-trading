@@ -64,8 +64,8 @@ public class MasterController {
 
     @PostMapping(value = "/children/bulk-unlink", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> bulkUnlinkChildren(@AuthenticationPrincipal String userId,
-                                                         @RequestBody Map<String, java.util.List<UUID>> req) {
-        return service.bulkUnlinkChildren(UUID.fromString(userId), req.get("childIds"));
+                                                         @RequestBody com.copytrading.master.dto.BulkUnlinkRequest req) {
+        return service.bulkUnlinkChildren(UUID.fromString(userId), req.getChildIds());
     }
 
     @PostMapping("/children/{childId}/pause")
@@ -123,8 +123,8 @@ public class MasterController {
     // Active account
     @PostMapping(value = "/active-account", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> setActiveAccount(@AuthenticationPrincipal String userId,
-                                                       @RequestBody Map<String, String> body) {
-        return service.setActiveAccount(UUID.fromString(userId), UUID.fromString(body.get("brokerAccountId")));
+                                                       @RequestBody com.copytrading.master.dto.ActiveAccountRequest body) {
+        return service.setActiveAccount(UUID.fromString(userId), UUID.fromString(body.getBrokerAccountId()));
     }
 
     @GetMapping("/active-account")

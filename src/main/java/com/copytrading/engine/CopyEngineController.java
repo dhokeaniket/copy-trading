@@ -64,8 +64,8 @@ public class CopyEngineController {
      * { "enabled": true }
      */
     @PostMapping(value = "/polling", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public Mono<Map<String, Object>> togglePolling(@RequestBody Map<String, Boolean> body) {
-        boolean enabled = Boolean.TRUE.equals(body.get("enabled"));
+    public Mono<Map<String, Object>> togglePolling(@RequestBody com.copytrading.engine.dto.PollingRequest body) {
+        boolean enabled = body.isEnabled();
         pollingService.setPollingEnabled(enabled);
         return Mono.just(Map.of(
                 "pollingEnabled", enabled,

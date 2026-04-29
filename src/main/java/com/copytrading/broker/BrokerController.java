@@ -157,7 +157,12 @@ public class BrokerController {
     @PostMapping(value = "/api/v1/brokers/accounts/{accountId}/orders/close-position", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> closePosition(@PathVariable UUID accountId,
                                                     @AuthenticationPrincipal String userId,
-                                                    @RequestBody Map<String, Object> body) {
+                                                    @RequestBody com.copytrading.broker.dto.ClosePositionRequest req) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("symbol", req.getSymbol());
+        body.put("qty", req.getQty());
+        body.put("type", req.getType());
+        body.put("product", req.getProduct());
         return service.closePosition(accountId, UUID.fromString(userId), body);
     }
 

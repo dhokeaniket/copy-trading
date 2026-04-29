@@ -55,8 +55,8 @@ public class ChildController {
 
     @PostMapping(value = "/subscriptions/bulk-unsubscribe", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> bulkUnsubscribe(@AuthenticationPrincipal String userId,
-                                                      @RequestBody Map<String, java.util.List<UUID>> req) {
-        return service.bulkUnsubscribe(UUID.fromString(userId), req.get("masterIds"));
+                                                      @RequestBody com.copytrading.child.dto.BulkUnsubscribeRequest req) {
+        return service.bulkUnsubscribe(UUID.fromString(userId), req.getMasterIds());
     }
 
     @GetMapping("/subscriptions")
