@@ -277,15 +277,18 @@ public class CopyEngineService {
         switch (account.getBrokerId()) {
             case "GROWW": {
                 // POST /v1/order/create — JSON body, Bearer token
+                // Detect exchange: SENSEX/BANKEX → BSE, everything else → NSE
+                String growwExchange = sym.toUpperCase().startsWith("SENSEX") || sym.toUpperCase().startsWith("BANKEX") ? "BSE" : "NSE";
+                String growwProd = isFnO ? (prod.equalsIgnoreCase("CNC") ? "NRML" : prod) : prod;
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("trading_symbol", sym);
                 b.put("quantity", qty);
                 b.put("price", isMarket ? 0 : price);
                 b.put("trigger_price", 0);
                 b.put("validity", "DAY");
-                b.put("exchange", "NSE");
+                b.put("exchange", growwExchange);
                 b.put("segment", isFnO ? "FNO" : "CASH");
-                b.put("product", prod);
+                b.put("product", growwProd);
                 b.put("order_type", isMarket ? "MARKET" : "LIMIT");
                 b.put("transaction_type", txn);
                 b.put("order_reference_id", "COPY-" + System.currentTimeMillis());

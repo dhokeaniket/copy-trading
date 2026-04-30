@@ -78,12 +78,20 @@ public class DhanApiClient {
     }
 
     public Mono<Map> placeOrder(String accessToken, Map<String, Object> body) {
+        log.info("DHAN_ORDER_REQ body={}", body);
         return apiClient.post()
                 .uri("/v2/orders")
                 .header("access-token", accessToken)
                 .header("Content-Type", "application/json")
                 .bodyValue(body)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> {
+                            log.error("DHAN_ORDER_FAILED status={} body={} request={}", r.statusCode(), e, body);
+                            return Mono.error(new RuntimeException("Dhan order " + r.statusCode() + ": " + e));
+                        }))
+                .bodyToMono(Map.class)
+                .doOnNext(r -> log.info("DHAN_ORDER_RESP: {}", r));
     }
 
     /** Search for securityId by symbol name using Dhan's search API */

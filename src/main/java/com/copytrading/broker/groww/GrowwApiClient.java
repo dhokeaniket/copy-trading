@@ -79,9 +79,19 @@ public class GrowwApiClient {
     }
 
     public Mono<Map> placeOrder(String accessToken, Map<String, Object> body) {
+        log.info("GROWW_ORDER_REQ body={}", body);
         return client.post().uri("/v1/order/create")
                 .header("Authorization", "Bearer " + accessToken)
-                .bodyValue(body).retrieve().bodyToMono(Map.class);
+                .header("Content-Type", "application/json")
+                .bodyValue(body)
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> {
+                            log.error("GROWW_ORDER_FAILED status={} body={} request={}", r.statusCode(), e, body);
+                            return Mono.error(new RuntimeException("Groww order " + r.statusCode() + ": " + e));
+                        }))
+                .bodyToMono(Map.class)
+                .doOnNext(r -> log.info("GROWW_ORDER_RESP: {}", r));
     }
 
     public Mono<Map> cancelOrder(String accessToken, String orderId, String segment) {

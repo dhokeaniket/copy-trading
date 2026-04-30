@@ -541,3 +541,48 @@ All instrument tokens (Dhan securityId, Upstox ISIN, Angel One symboltoken) are 
 | 6.12 | GET | `/api/v1/admin/trade-logs?userId=uuid&status=EXECUTED` | — | `{ "logs": [...] }` |
 | 6.13 | GET | `/api/v1/admin/brokers/accounts?userId=uuid&brokerId=GROWW` | — | `{ "accounts": [{ accountId, userId, brokerId, clientId, status }] }` |
 | 6.14 | GET | `/api/v1/admin/brokers/status` | — | `{ "brokers": [{ brokerId, name, apiStatus, latencyMs, lastChecked }] }` |
+
+
+---
+
+## NEW: Switch Broker Account for Copy Trading
+
+`PUT /api/v1/child/subscriptions/broker`
+
+**Headers:** `Authorization: Bearer <childAccessToken>`, `Content-Type: application/json`
+
+**Request Body:**
+```json
+{
+  "masterId": "3cc742bd-6c9d-405a-95e8-49691e4f26d2",
+  "brokerAccountId": "33e8ff3c-a8f2-434f-82ea-320cc7893757"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| masterId | UUID | Yes | The master trader's user ID |
+| brokerAccountId | UUID | Yes | The new broker account to use for copy trading |
+
+**Success Response (200):**
+```json
+{
+  "message": "Broker account switched",
+  "brokerAccountId": "33e8ff3c-a8f2-434f-82ea-320cc7893757",
+  "brokerId": "DHAN",
+  "brokerName": "DHAN"
+}
+```
+
+**Error Responses:**
+| Status | Response |
+|---|---|
+| 400 | `{ "error": "brokerAccountId is required" }` |
+| 403 | `{ "error": "This broker account does not belong to you" }` |
+| 404 | `{ "error": "Subscription not found" }` |
+
+**FE Implementation:**
+1. On child's subscription page, show current broker for each master subscription
+2. Show dropdown of all linked broker accounts (`GET /brokers/accounts`)
+3. On change, call `PUT /child/subscriptions/broker` with masterId + new brokerAccountId
+4. No unsubscribe needed — instant switch
