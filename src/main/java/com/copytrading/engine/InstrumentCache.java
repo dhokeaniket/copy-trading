@@ -87,23 +87,32 @@ public class InstrumentCache {
     // ── UPSTOX ──
     private void loadUpstox() {
         try {
-            // Upstox publishes JSON (not gzipped at this URL)
+            // Upstox publishes gzipped JSON — download as bytes and decompress
             client.get().uri("https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz")
-                    .retrieve().bodyToMono(String.class)
+                    .header("Accept-Encoding", "gzip")
+                    .retrieve()
+                    .bodyToMono(byte[].class)
+                    .map(bytes -> {
+                        try {
+                            var bais = new java.io.ByteArrayInputStream(bytes);
+                            var gis = new java.util.zip.GZIPInputStream(bais);
+                            return new String(gis.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                        } catch (Exception e) {
+                            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+                        }
+                    })
                     .subscribe(json -> {
                         int count = 0;
-                        // Simple parse: find "trading_symbol":"XXX" and "instrument_key":"NSE_EQ|INE..."
-                        // Each instrument is a JSON object in an array
                         String[] items = json.split("\\{");
                         for (String item : items) {
                             try {
                                 String sym = extractJsonField(item, "trading_symbol");
                                 String key = extractJsonField(item, "instrument_key");
-                                String instType = extractJsonField(item, "instrument_type");
                                 if (sym == null || key == null) continue;
-                                String clean = sym.toUpperCase().replace("-EQ", "");
+                                String clean = sym.toUpperCase().replace("-EQ", "").trim();
                                 if (key.startsWith("NSE_EQ")) {
                                     upstoxEq.put(clean, key);
+                                    upstoxEq.put(sym.toUpperCase(), key);
                                     count++;
                                 } else if (key.startsWith("NSE_FO")) {
                                     upstoxFno.put(sym.toUpperCase(), key);
