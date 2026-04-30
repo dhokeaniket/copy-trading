@@ -147,6 +147,7 @@ public class BrokerAccountService {
                     if (req.getApiKey() != null) a.setApiKey(req.getApiKey());
                     if (req.getApiSecret() != null) a.setApiSecret(req.getApiSecret());
                     if (req.getAccountNickname() != null) a.setNickname(req.getAccountNickname());
+                    if (req.getClientId() != null) a.setClientId(req.getClientId());
                     return repo.save(a).thenReturn(Map.of("message", "Account updated"));
                 });
     }
@@ -290,8 +291,33 @@ public class BrokerAccountService {
         // If tokenId provided (from browser callback), exchange for access token
         if (req != null && req.getAuthCode() != null && !req.getAuthCode().isBlank()) {
             return dhanClient.consumeConsent(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode())
-                    .flatMap(resp -> extractAndSaveSession(a, resp, "Dhan",
-                            r -> (String) r.get("accessToken")))
+                    .flatMap(resp -> {
+                        // Dhan response contains dhanClientId — save it for order placement
+                        Object cid = resp.get("dhanClientId");
+                        if (cid == null) cid = resp.get("clientId");
+                        if (cid != null && !cid.toString().isBlank()) {
+                            a.setClientId(cid.toString());
+                        }
+                        return extractAndSaveSession(a, resp, "Dhan",
+                                r -> (String) r.get("accessToken"))
+                                .flatMap(result -> {
+                                    // If clientId still empty, fetch from profile
+                                    if (a.getClientId() == null || a.getClientId().isBlank()) {
+                                        return dhanClient.getProfile(a.getAccessToken())
+                                                .flatMap(profile -> {
+                                                    Object pid = profile.get("dhanClientId");
+                                                    if (pid == null) pid = profile.get("clientId");
+                                                    if (pid != null && !pid.toString().isBlank()) {
+                                                        a.setClientId(pid.toString());
+                                                        return repo.save(a).thenReturn(result);
+                                                    }
+                                                    return Mono.just(result);
+                                                })
+                                                .onErrorResume(e2 -> Mono.just(result));
+                                    }
+                                    return Mono.just(result);
+                                });
+                    })
                     .onErrorResume(e -> {
                         if (e instanceof ResponseStatusException) return Mono.error(e);
                         log.error("DHAN_LOGIN_FAILED error={}", e.getMessage(), e);
