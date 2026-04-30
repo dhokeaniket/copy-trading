@@ -64,8 +64,8 @@ brokers:
     apiKey: ${GROWW_API_KEY:}
     apiSecret: ${GROWW_API_SECRET:}
   zerodha:
-    apiKey: ${ZERODHA_API_KEY:dm1fk4i61xyi29iu}
-    apiSecret: ${ZERODHA_API_SECRET:3eqyt7lsvr5sz90c5yabf63x930ihph9}
+    apiKey: ${ZERODHA_API_KEY:xdsce47bimlz9ndk}
+    apiSecret: ${ZERODHA_API_SECRET:df9ebtu5urrpuobhgg3lv430147d16yl}
   fyers:
     apiKey: ${FYERS_API_KEY:X3OX66WB1J-100}
     apiSecret: ${FYERS_API_SECRET:SQNAPQKU7M}
@@ -73,8 +73,8 @@ brokers:
     apiKey: ${UPSTOX_API_KEY:c7282c93-6b03-4865-8cee-38f2912ea648}
     apiSecret: ${UPSTOX_API_SECRET:dyc5vwazlr}
   dhan:
-    apiKey: ${DHAN_API_KEY:c4db3869}
-    apiSecret: ${DHAN_API_SECRET:2a2b732b-6c9f-427d-9de4-714431bff9e3}
+    apiKey: ${DHAN_API_KEY:041e078d}
+    apiSecret: ${DHAN_API_SECRET:d5fa0ddf-f6d5-4e5e-9ab7-e68c0de71d90}
   angelone:
     apiKey: ${ANGELONE_API_KEY:}
     apiSecret: ${ANGELONE_API_SECRET:}
