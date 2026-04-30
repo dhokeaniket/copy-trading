@@ -102,4 +102,11 @@ public class ChildController {
     public Mono<Map<String, Object>> getCopyLogs(@AuthenticationPrincipal String userId) {
         return service.getCopyLogs(UUID.fromString(userId));
     }
+
+    @Operation(summary = "Switch broker account", description = "Switch which broker account is used for copy trading with a specific master. No need to unsubscribe.")
+    @PutMapping(value = "/subscriptions/broker", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> switchBroker(@AuthenticationPrincipal String userId,
+                                                   @RequestBody com.copytrading.child.dto.SwitchBrokerRequest req) {
+        return service.switchBroker(UUID.fromString(userId), req.getMasterId(), req.getBrokerAccountId());
+    }
 }

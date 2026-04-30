@@ -291,6 +291,29 @@ public class ChildService {
                 .map(list -> Map.<String, Object>of("logs", list));
     }
 
+    // Switch broker account for a subscription (no unsubscribe needed)
+    public Mono<Map<String, Object>> switchBroker(UUID childId, UUID masterId, UUID brokerAccountId) {
+        if (brokerAccountId == null) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "brokerAccountId is required"));
+        }
+        return brokerRepo.findById(brokerAccountId)
+                .filter(a -> a.getUserId().equals(childId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "This broker account does not belong to you")))
+                .flatMap(account -> subs.findByMasterIdAndChildId(masterId, childId)
+                        .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Subscription not found")))
+                        .flatMap(s -> {
+                            s.setBrokerAccountId(brokerAccountId);
+                            return subs.save(s).map(saved -> {
+                                Map<String, Object> r = new java.util.LinkedHashMap<>();
+                                r.put("message", "Broker account switched");
+                                r.put("brokerAccountId", brokerAccountId.toString());
+                                r.put("brokerId", account.getBrokerId());
+                                r.put("brokerName", account.getBrokerId());
+                                return r;
+                            });
+                        }));
+    }
+
     // 5.10 Child analytics
     public Mono<Map<String, Object>> getAnalytics(UUID childId) {
         return logs.findByChildId(childId).collectList().map(tradeLogs -> {
