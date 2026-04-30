@@ -368,10 +368,10 @@ public class CopyEngineService {
                 b.put("productType", dhanProd);
                 b.put("orderType", isMarket ? "MARKET" : "LIMIT");
                 b.put("validity", "DAY");
-                b.put("quantity", String.valueOf(qty));
-                b.put("price", isMarket ? "" : String.valueOf(price));
-                b.put("triggerPrice", "");
-                b.put("disclosedQuantity", "");
+                b.put("quantity", qty);
+                b.put("price", isMarket ? 0 : price);
+                b.put("triggerPrice", 0);
+                b.put("disclosedQuantity", 0);
                 b.put("afterMarketOrder", false);
                 b.put("correlationId", "COPY" + System.currentTimeMillis());
 
