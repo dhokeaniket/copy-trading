@@ -189,7 +189,7 @@ public class CopyEngineService {
                                                          int scaledQty, double scale) {
         UUID brokerAccountId = account.getId();
         return placeOrderOnBroker(account, req.getSymbol(), scaledQty,
-                req.getSide(), req.getProduct(), req.getOrderType(), req.getPrice())
+                req.getSide(), req.getProduct(), req.getOrderType(), req.getPrice(), req.getExchange())
                 .flatMap(response -> {
                     String orderId = extractOrderId(response);
                     log.info("COPY_ORDER_PLACED child={} broker={} orderId={} symbol={} qty={}",
@@ -265,7 +265,7 @@ public class CopyEngineService {
      * Angel:   https://smartapi.angelone.in (JSON)
      */
     private Mono<Map> placeOrderOnBroker(BrokerAccount account, String symbol, int qty,
-                                          String side, String product, String orderType, double price) {
+                                          String side, String product, String orderType, double price, String exchange) {
         String sym = symbolMapper.translate(symbol, "GROWW", account.getBrokerId());
         String token = account.getAccessToken();
         String prod = product != null ? product : "MIS";
@@ -273,12 +273,14 @@ public class CopyEngineService {
         boolean isMarket = oType.equalsIgnoreCase("MARKET");
         boolean isFnO = symbolMapper.isFnO(sym);
         String txn = "BUY".equalsIgnoreCase(side) ? "BUY" : "SELL";
+        String exch = exchange != null ? exchange.toUpperCase() : "NSE";
 
         switch (account.getBrokerId()) {
             case "GROWW": {
                 // POST /v1/order/create — JSON body, Bearer token
-                // Detect exchange: SENSEX/BANKEX → BSE, everything else → NSE
-                String growwExchange = sym.toUpperCase().startsWith("SENSEX") || sym.toUpperCase().startsWith("BANKEX") ? "BSE" : "NSE";
+                // Use exchange from master's order; fallback: detect SENSEX/BANKEX → BSE
+                String growwExchange = "BSE".equals(exch) ? "BSE"
+                        : (sym.toUpperCase().startsWith("SENSEX") || sym.toUpperCase().startsWith("BANKEX")) ? "BSE" : "NSE";
                 String growwProd = isFnO ? (prod.equalsIgnoreCase("CNC") ? "NRML" : prod) : prod;
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("trading_symbol", sym);
@@ -299,7 +301,7 @@ public class CopyEngineService {
                 String apiKey = platformConfig.getZerodha().getApiKey();
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("tradingsymbol", sym);
-                b.put("exchange", isFnO ? "NFO" : "NSE");
+                b.put("exchange", isFnO ? "NFO" : ("BSE".equals(exch) ? "BSE" : "NSE"));
                 b.put("transaction_type", txn);
                 b.put("order_type", isMarket ? "MARKET" : "LIMIT");
                 b.put("quantity", qty);
@@ -358,7 +360,7 @@ public class CopyEngineService {
                 // POST /v2/orders — JSON, access-token header
                 // REQUIRED: dhanClientId, securityId (numeric), exchangeSegment
                 // securityId resolved from Dhan instrument CSV (loaded on startup)
-                String dhanExch = isFnO ? "NSE_FNO" : "NSE_EQ";
+                String dhanExch = isFnO ? "NSE_FNO" : ("BSE".equals(exch) ? "BSE_EQ" : "NSE_EQ");
                 String dhanProd = prod.equalsIgnoreCase("CNC") ? "CNC"
                         : prod.equalsIgnoreCase("NRML") ? "MARGIN" : "INTRADAY";
                 String secId = instruments.getDhanSecurityId(sym, isFnO);

@@ -74,6 +74,7 @@ public class ZerodhaApiClient {
     }
 
     public Mono<Map> placeOrder(String apiKey, String accessToken, Map<String, Object> body) {
+        log.info("ZERODHA_ORDER_REQ body={}", body);
         StringBuilder form = new StringBuilder();
         body.forEach((k, v) -> {
             if (form.length() > 0) form.append("&");
@@ -84,7 +85,14 @@ public class ZerodhaApiClient {
                 .header("Authorization", "token " + apiKey + ":" + accessToken)
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .bodyValue(form.toString())
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> {
+                            log.error("ZERODHA_ORDER_FAILED status={} body={} request={}", r.statusCode(), e, body);
+                            return Mono.error(new RuntimeException("Zerodha order " + r.statusCode() + ": " + e));
+                        }))
+                .bodyToMono(Map.class)
+                .doOnNext(r -> log.info("ZERODHA_ORDER_RESP: {}", r));
     }
 
     public Mono<Map> cancelOrder(String apiKey, String accessToken, String orderId) {

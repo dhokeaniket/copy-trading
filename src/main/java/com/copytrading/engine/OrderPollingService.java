@@ -253,6 +253,7 @@ public class OrderPollingService {
             req.setSide(side.toUpperCase());
             req.setProduct(product != null ? product : "MIS");
             req.setOrderType(detectedOrderType != null ? detectedOrderType : "MARKET");
+            req.setExchange(exchange != null ? exchange : "NSE");
             // For LIMIT orders, pass the actual price; for MARKET, price=0
             boolean isLimitOrder = "LIMIT".equalsIgnoreCase(detectedOrderType);
             req.setPrice(isLimitOrder ? detectedPrice : 0);

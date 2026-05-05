@@ -81,12 +81,20 @@ public class UpstoxApiClient {
     }
 
     public Mono<Map> placeOrder(String accessToken, Map<String, Object> body) {
+        log.info("UPSTOX_ORDER_REQ body={}", body);
         return client.post()
                 .uri("/v2/order/place")
                 .header("Authorization", "Bearer " + accessToken)
                 .header("Content-Type", "application/json")
                 .bodyValue(body)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> {
+                            log.error("UPSTOX_ORDER_FAILED status={} body={} request={}", r.statusCode(), e, body);
+                            return Mono.error(new RuntimeException("Upstox order " + r.statusCode() + ": " + e));
+                        }))
+                .bodyToMono(Map.class)
+                .doOnNext(r -> log.info("UPSTOX_ORDER_RESP: {}", r));
     }
 
     public Mono<Map> getOrders(String accessToken) {
