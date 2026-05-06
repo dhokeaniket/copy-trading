@@ -59,7 +59,11 @@ public class SymbolMapper {
             case "ZERODHA": return p.underlying + p.year + p.month + p.strike + p.type;
             case "FYERS": return "NSE:" + p.underlying + p.year + p.month + p.strike + p.type;
             case "UPSTOX": return "NSE_FO|" + p.underlying + p.year + p.month + p.strike + p.type;
-            case "DHAN": return p.underlying + "-" + p.year + p.month + "-" + p.strike + "-" + p.type;
+            case "DHAN": {
+                // Dhan format: NIFTY-May2026-25900-CE
+                String monthCap = p.month.substring(0, 1).toUpperCase() + p.month.substring(1).toLowerCase();
+                return p.underlying + "-" + monthCap + "20" + p.year + "-" + p.strike + "-" + p.type;
+            }
             case "ANGELONE": return p.underlying + p.year + p.month + p.strike + p.type;
             case "GROWW": {
                 int monthNum = 0;
