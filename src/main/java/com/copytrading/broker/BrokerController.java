@@ -181,6 +181,14 @@ public class BrokerController {
         return balanceAlertService.checkBalance(accountId, UUID.fromString(userId));
     }
 
+    @Operation(summary = "Set access token directly", description = "Directly save a broker access token (e.g. from Groww dashboard). Activates the session.")
+    @PutMapping(value = "/api/v1/brokers/accounts/{accountId}/token", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> setToken(@PathVariable UUID accountId,
+                                               @AuthenticationPrincipal String userId,
+                                               @RequestBody Map<String, String> body) {
+        return service.setAccessToken(accountId, UUID.fromString(userId), body.get("accessToken"));
+    }
+
     // Connection signal (like mobile network bars: 1-4)
     @GetMapping("/api/v1/brokers/accounts/{accountId}/signal")
     public Mono<Map<String, Object>> getConnectionSignal(@PathVariable UUID accountId,

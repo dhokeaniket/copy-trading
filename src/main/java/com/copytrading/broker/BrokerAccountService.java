@@ -152,6 +152,30 @@ public class BrokerAccountService {
                 });
     }
 
+    // Set access token directly (for tokens generated from broker dashboard)
+    public Mono<Map<String, Object>> setAccessToken(UUID accountId, UUID userId, String accessToken) {
+        if (accessToken == null || accessToken.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "accessToken is required"));
+        }
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
+                .flatMap(a -> {
+                    a.setAccessToken(accessToken);
+                    a.setSessionActive(true);
+                    a.setStatus("ACTIVE");
+                    a.setSessionExpires(java.time.Instant.now().plusSeconds(86400));
+                    return repo.save(a).map(saved -> {
+                        Map<String, Object> r = new java.util.LinkedHashMap<>();
+                        r.put("status", "SESSION_ACTIVE");
+                        r.put("message", "Access token saved. Session active until " + saved.getSessionExpires());
+                        r.put("broker", saved.getBrokerId());
+                        r.put("accountId", saved.getId().toString());
+                        return r;
+                    });
+                });
+    }
+
     // 3.6 Delete account
     public Mono<Map<String, String>> deleteAccount(UUID accountId, UUID userId) {
         return repo.findById(accountId)
