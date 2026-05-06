@@ -71,22 +71,16 @@ public class InstrumentCache {
                                 String[] c = line.split(",", -1);
                                 if (c.length < 5) continue;
                                 String exch = c[0].trim(), seg = c[1].trim(), secId = c[2].trim();
-                                String instrumentName = c.length > 3 ? c[3].trim() : "";
-                                String tradingSym = c.length > 4 ? c[4].trim() : "";
-                                if (secId.isEmpty()) continue;
-                                String sym = !tradingSym.isEmpty() ? tradingSym : instrumentName;
-                                if (sym.isEmpty()) continue;
+                                String tradingSym = c.length > 5 ? c[5].trim() : "";
+                                if (secId.isEmpty() || tradingSym.isEmpty()) continue;
                                 // Load all exchanges (NSE + BSE) equity and F&O
                                 if ("E".equalsIgnoreCase(seg)) {
-                                    String clean = sym.toUpperCase().replace("-EQ", "");
+                                    String clean = tradingSym.toUpperCase().replace("-EQ", "");
                                     dhanEq.put(clean, secId);
-                                    dhanEq.put(sym.toUpperCase(), secId);
-                                    // Also map instrument name
-                                    if (!instrumentName.isEmpty()) dhanEq.put(instrumentName.toUpperCase(), secId);
+                                    dhanEq.put(tradingSym.toUpperCase(), secId);
                                     count++;
                                 } else if ("D".equalsIgnoreCase(seg)) {
-                                    dhanFno.put(sym.toUpperCase(), secId);
-                                    if (!instrumentName.isEmpty()) dhanFno.put(instrumentName.toUpperCase(), secId);
+                                    dhanFno.put(tradingSym.toUpperCase(), secId);
                                     count++;
                                 }
                             } catch (Exception e) { /* skip */ }
