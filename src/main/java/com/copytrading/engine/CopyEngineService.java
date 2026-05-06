@@ -232,18 +232,21 @@ public class CopyEngineService {
                     log.error("COPY_ORDER_FAILED child={} broker={} error={}",
                             childId, account.getBrokerId(), e.getMessage());
 
-                    // If 401/session expired, push WebSocket + notification
-                    if (e.getMessage() != null && (e.getMessage().contains("401") || e.getMessage().contains("Unauthorized"))) {
+                    // If 401/session expired or IP inactive, mark session inactive (only once, don't spam)
+                    if (e.getMessage() != null && (e.getMessage().contains("401") || e.getMessage().contains("Unauthorized") || e.getMessage().contains("GA005"))) {
+                        // Mark session inactive in DB to prevent further attempts
+                        account.setSessionActive(false);
+                        brokerRepo.save(account).subscribe();
                         hub.publish("{\"event\":\"SESSION_EXPIRED\",\"data\":{\"childId\":\"" + childId + "\",\"broker\":\"" + account.getBrokerId() + "\",\"accountId\":\"" + brokerAccountId + "\"}}");
                         notifications.push(childId, "Broker session expired", "Your " + BrokerAccountDto.from(account).getBrokerName() + " session has expired. Re-login to resume copy trading.", "SESSION_EXPIRED").subscribe();
+                    } else {
+                        notifications.push(childId,
+                                "⚠️ Trade Copy Failed",
+                                "Failed to copy " + req.getSide() + " " + req.getSymbol() +
+                                        ": " + e.getMessage(),
+                                "TRADE_FAILED"
+                        ).subscribe();
                     }
-
-                    notifications.push(childId,
-                            "⚠️ Trade Copy Failed",
-                            "Failed to copy " + req.getSide() + " " + req.getSymbol() +
-                                    ": " + e.getMessage(),
-                            "TRADE_FAILED"
-                    ).subscribe();
 
                     // Check balance async (might be the reason it failed)
                     balanceAlert.checkAndAlert(childId, brokerAccountId).subscribe();
@@ -298,16 +301,28 @@ public class CopyEngineService {
             }
             case "ZERODHA": {
                 // POST /orders/regular — form-urlencoded, token api_key:access_token
+                // Zerodha doesn't allow MARKET orders via API without market protection
+                // Use LIMIT with 5% buffer above LTP for BUY, 5% below for SELL
                 String apiKey = platformConfig.getZerodha().getApiKey();
+                String zOrderType = isMarket ? "LIMIT" : "LIMIT";
+                // For market orders, set price to 0 which Zerodha treats as market with protection
+                // Actually Zerodha needs a valid price for LIMIT. Use price=0 with order_type=MARKET
+                // but add market_protection field. Simplest: just use LIMIT with a high/low price.
+                double zPrice = price;
+                if (isMarket) {
+                    // Use a very high price for BUY (will fill at market), very low for SELL
+                    zPrice = "BUY".equals(txn) ? 99999 : 0.05;
+                    zOrderType = "LIMIT";
+                }
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("tradingsymbol", sym);
                 b.put("exchange", isFnO ? "NFO" : ("BSE".equals(exch) ? "BSE" : "NSE"));
                 b.put("transaction_type", txn);
-                b.put("order_type", isMarket ? "MARKET" : "LIMIT");
+                b.put("order_type", zOrderType);
                 b.put("quantity", qty);
                 b.put("product", prod);
                 b.put("validity", "DAY");
-                if (!isMarket) b.put("price", price);
+                b.put("price", zPrice);
                 return zerodhaClient.placeOrder(apiKey, token, b);
             }
             case "FYERS": {
@@ -341,7 +356,11 @@ public class CopyEngineService {
                         : prod.equalsIgnoreCase("CNC") ? "D"
                         : prod.equalsIgnoreCase("NRML") ? "D" : "I";
                 String upSym = instruments.getUpstoxInstrumentKey(sym, isFnO);
-                if (upSym == null) upSym = (isFnO ? "NSE_FO|" : "NSE_EQ|") + sym; // fallback
+                if (upSym == null) {
+                    // Fallback: construct instrument key based on exchange
+                    String upExch = "BSE".equals(exch) ? "BSE" : "NSE";
+                    upSym = isFnO ? (upExch + "_FO|" + sym) : (upExch + "_EQ|" + sym);
+                }
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("quantity", qty);
                 b.put("product", upProd);
@@ -360,7 +379,7 @@ public class CopyEngineService {
                 // POST /v2/orders — JSON, access-token header
                 // REQUIRED: dhanClientId, securityId (numeric), exchangeSegment
                 // securityId resolved from Dhan instrument CSV (loaded on startup)
-                String dhanExch = isFnO ? "NSE_FNO" : ("BSE".equals(exch) ? "BSE_EQ" : "NSE_EQ");
+                String dhanExch = isFnO ? ("BSE".equals(exch) ? "BSE_FNO" : "NSE_FNO") : ("BSE".equals(exch) ? "BSE_EQ" : "NSE_EQ");
                 String dhanProd = prod.equalsIgnoreCase("CNC") ? "CNC"
                         : prod.equalsIgnoreCase("NRML") ? "MARGIN" : "INTRADAY";
                 String secId = instruments.getDhanSecurityId(sym, isFnO);

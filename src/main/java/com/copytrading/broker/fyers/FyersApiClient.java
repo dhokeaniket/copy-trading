@@ -88,12 +88,20 @@ public class FyersApiClient {
     }
 
     public Mono<Map> placeOrder(String accessToken, Map<String, Object> body) {
+        log.info("FYERS_ORDER_REQ body={}", body);
         return client.post()
                 .uri("/orders/sync")
                 .header("Authorization", accessToken)
                 .header("Content-Type", "application/json")
                 .bodyValue(body)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> {
+                            log.error("FYERS_ORDER_FAILED status={} body={} request={}", r.statusCode(), e, body);
+                            return Mono.error(new RuntimeException("Fyers order " + r.statusCode() + ": " + e));
+                        }))
+                .bodyToMono(Map.class)
+                .doOnNext(r -> log.info("FYERS_ORDER_RESP: {}", r));
     }
 
     public Mono<Map> cancelOrder(String accessToken, String orderId) {

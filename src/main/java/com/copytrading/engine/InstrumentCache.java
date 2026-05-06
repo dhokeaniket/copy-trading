@@ -63,32 +63,50 @@ public class InstrumentCache {
                     .retrieve().bodyToMono(String.class)
                     .subscribe(csv -> {
                         int count = 0;
-                        for (String line : csv.split("\n")) {
-                            if (count == 0 && line.startsWith("SEM")) { count++; continue; } // skip header
+                        String[] lines = csv.split("\n");
+                        for (int i = 0; i < lines.length; i++) {
+                            String line = lines[i];
+                            if (i == 0) continue; // skip header
                             try {
                                 String[] c = line.split(",", -1);
                                 if (c.length < 5) continue;
-                                String exch = c[0].trim(), seg = c[1].trim(), secId = c[2].trim(), sym = c[4].trim();
-                                if (secId.isEmpty() || sym.isEmpty()) continue;
-                                if ("NSE".equalsIgnoreCase(exch) && "E".equalsIgnoreCase(seg)) {
-                                    dhanEq.put(sym.toUpperCase().replace("-EQ", ""), secId);
+                                String exch = c[0].trim(), seg = c[1].trim(), secId = c[2].trim();
+                                String instrumentName = c.length > 3 ? c[3].trim() : "";
+                                String tradingSym = c.length > 4 ? c[4].trim() : "";
+                                if (secId.isEmpty()) continue;
+                                String sym = !tradingSym.isEmpty() ? tradingSym : instrumentName;
+                                if (sym.isEmpty()) continue;
+                                // Load all exchanges (NSE + BSE) equity and F&O
+                                if ("E".equalsIgnoreCase(seg)) {
+                                    String clean = sym.toUpperCase().replace("-EQ", "");
+                                    dhanEq.put(clean, secId);
+                                    dhanEq.put(sym.toUpperCase(), secId);
+                                    // Also map instrument name
+                                    if (!instrumentName.isEmpty()) dhanEq.put(instrumentName.toUpperCase(), secId);
                                     count++;
-                                } else if ("NSE".equalsIgnoreCase(exch) && "D".equalsIgnoreCase(seg)) {
+                                } else if ("D".equalsIgnoreCase(seg)) {
                                     dhanFno.put(sym.toUpperCase(), secId);
+                                    if (!instrumentName.isEmpty()) dhanFno.put(instrumentName.toUpperCase(), secId);
                                     count++;
                                 }
                             } catch (Exception e) { /* skip */ }
                         }
-                        log.info("DHAN_INSTRUMENTS: {} symbols loaded", count);
+                        log.info("DHAN_INSTRUMENTS: {} symbols loaded (NSE+BSE equity+FNO)", count);
                     }, err -> log.warn("DHAN_INSTRUMENTS_FAILED: {}", err.getMessage()));
         } catch (Exception e) { log.warn("DHAN_INIT_FAILED: {}", e.getMessage()); }
     }
 
     // ── UPSTOX ──
     private void loadUpstox() {
+        // Load NSE equity
+        loadUpstoxExchange("https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz", "NSE");
+        // Load BSE F&O (smaller file, for SENSEX/BANKEX options)
+        loadUpstoxExchange("https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz", "BSE");
+    }
+
+    private void loadUpstoxExchange(String url, String exchange) {
         try {
-            // Upstox publishes gzipped JSON — download as bytes and decompress
-            client.get().uri("https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz")
+            client.get().uri(url)
                     .header("Accept-Encoding", "gzip")
                     .retrieve()
                     .bodyToMono(byte[].class)
@@ -110,19 +128,19 @@ public class InstrumentCache {
                                 String key = extractJsonField(item, "instrument_key");
                                 if (sym == null || key == null) continue;
                                 String clean = sym.toUpperCase().replace("-EQ", "").trim();
-                                if (key.startsWith("NSE_EQ")) {
+                                if (key.contains("_EQ")) {
                                     upstoxEq.put(clean, key);
                                     upstoxEq.put(sym.toUpperCase(), key);
                                     count++;
-                                } else if (key.startsWith("NSE_FO")) {
+                                } else if (key.contains("_FO")) {
                                     upstoxFno.put(sym.toUpperCase(), key);
                                     count++;
                                 }
                             } catch (Exception e) { /* skip */ }
                         }
-                        log.info("UPSTOX_INSTRUMENTS: {} symbols loaded", count);
-                    }, err -> log.warn("UPSTOX_INSTRUMENTS_FAILED: {}", err.getMessage()));
-        } catch (Exception e) { log.warn("UPSTOX_INIT_FAILED: {}", e.getMessage()); }
+                        log.info("UPSTOX_INSTRUMENTS_{}: {} symbols loaded", exchange, count);
+                    }, err -> log.warn("UPSTOX_INSTRUMENTS_{}_FAILED: {}", exchange, err.getMessage()));
+        } catch (Exception e) { log.warn("UPSTOX_{}_INIT_FAILED: {}", exchange, e.getMessage()); }
     }
 
     // ── ANGEL ONE ──
