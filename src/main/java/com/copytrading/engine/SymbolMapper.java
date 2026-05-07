@@ -37,12 +37,17 @@ public class SymbolMapper {
                 return new ParsedSymbol(m1.group(1), m1.group(2), m1.group(3), "", m1.group(4), m1.group(5));
             }
 
-            // Try pattern: UNDERLYING + YY + M + DD + STRIKE + CE/PE (Groww format, M is month number)
-            Matcher m2 = Pattern.compile("^([A-Z]+)(\\d{2})(\\d{1,2})(\\d{2})(\\d+)(CE|PE)$").matcher(clean);
-            if (m2.matches()) {
-                int monthNum = Integer.parseInt(m2.group(3));
-                String monthName = monthNum >= 1 && monthNum <= 12 ? MONTHS[monthNum] : "";
-                return new ParsedSymbol(m2.group(1), m2.group(2), monthName, m2.group(4), m2.group(5), m2.group(6));
+            // Try pattern: UNDERLYING + YY + M + DD + STRIKE + CE/PE (Groww format, M is month number 1-12)
+            // Try 1-digit month first, then 2-digit
+            for (String monthPattern : new String[]{"(\\d{1})(\\d{2})", "(\\d{2})(\\d{2})"}) {
+                Matcher m2 = Pattern.compile("^([A-Z]+)(\\d{2})" + monthPattern + "(\\d+)(CE|PE)$").matcher(clean);
+                if (m2.matches()) {
+                    int monthNum = Integer.parseInt(m2.group(3));
+                    if (monthNum >= 1 && monthNum <= 12) {
+                        String monthName = MONTHS[monthNum];
+                        return new ParsedSymbol(m2.group(1), m2.group(2), monthName, m2.group(4), m2.group(5), m2.group(6));
+                    }
+                }
             }
 
             // Try Dhan format: UNDERLYING-YYMMM-STRIKE-CE/PE
@@ -56,16 +61,16 @@ public class SymbolMapper {
 
     private String build(ParsedSymbol p, String broker) {
         switch (broker) {
-            case "ZERODHA": return p.underlying + p.year + p.month + p.strike + p.type;
-            case "FYERS": return "NSE:" + p.underlying + p.year + p.month + p.strike + p.type;
-            case "UPSTOX": return "NSE_FO|" + p.underlying + p.year + p.month + p.strike + p.type;
+            case "ZERODHA": return p.underlying + p.year + p.month + (p.date.isEmpty() ? "" : p.date) + p.strike + p.type;
+            case "FYERS": return "NSE:" + p.underlying + p.year + p.month + (p.date.isEmpty() ? "" : p.date) + p.strike + p.type;
+            case "UPSTOX": return "NSE_FO|" + p.underlying + p.year + p.month + (p.date.isEmpty() ? "" : p.date) + p.strike + p.type;
             case "DHAN": {
                 // Dhan format: NIFTY-May2026-25900-CE
-                if (p.month == null || p.month.isEmpty()) return p.underlying + "-" + p.year + "-" + p.strike + "-" + p.type;
+                if (p.month == null || p.month.isEmpty()) return p.underlying + p.year + p.strike + p.type;
                 String monthCap = p.month.substring(0, 1).toUpperCase() + p.month.substring(1).toLowerCase();
                 return p.underlying + "-" + monthCap + "20" + p.year + "-" + p.strike + "-" + p.type;
             }
-            case "ANGELONE": return p.underlying + p.year + p.month + p.strike + p.type;
+            case "ANGELONE": return p.underlying + p.year + p.month + (p.date.isEmpty() ? "" : p.date) + p.strike + p.type;
             case "GROWW": {
                 int monthNum = 0;
                 for (int i = 1; i < MONTHS.length; i++) { if (MONTHS[i].equals(p.month)) { monthNum = i; break; } }
