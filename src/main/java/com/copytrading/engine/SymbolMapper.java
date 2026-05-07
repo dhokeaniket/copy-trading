@@ -61,6 +61,7 @@ public class SymbolMapper {
             case "UPSTOX": return "NSE_FO|" + p.underlying + p.year + p.month + p.strike + p.type;
             case "DHAN": {
                 // Dhan format: NIFTY-May2026-25900-CE
+                if (p.month == null || p.month.isEmpty()) return p.underlying + "-" + p.year + "-" + p.strike + "-" + p.type;
                 String monthCap = p.month.substring(0, 1).toUpperCase() + p.month.substring(1).toLowerCase();
                 return p.underlying + "-" + monthCap + "20" + p.year + "-" + p.strike + "-" + p.type;
             }

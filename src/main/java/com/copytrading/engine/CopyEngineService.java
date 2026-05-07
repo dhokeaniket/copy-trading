@@ -301,28 +301,16 @@ public class CopyEngineService {
             }
             case "ZERODHA": {
                 // POST /orders/regular — form-urlencoded, token api_key:access_token
-                // Zerodha doesn't allow MARKET orders via API without market protection
-                // Use LIMIT with 5% buffer above LTP for BUY, 5% below for SELL
                 String apiKey = platformConfig.getZerodha().getApiKey();
-                String zOrderType = isMarket ? "LIMIT" : "LIMIT";
-                // For market orders, set price to 0 which Zerodha treats as market with protection
-                // Actually Zerodha needs a valid price for LIMIT. Use price=0 with order_type=MARKET
-                // but add market_protection field. Simplest: just use LIMIT with a high/low price.
-                double zPrice = price;
-                if (isMarket) {
-                    // Use a very high price for BUY (will fill at market), very low for SELL
-                    zPrice = "BUY".equals(txn) ? 99999 : 0.05;
-                    zOrderType = "LIMIT";
-                }
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("tradingsymbol", sym);
                 b.put("exchange", isFnO ? "NFO" : ("BSE".equals(exch) ? "BSE" : "NSE"));
                 b.put("transaction_type", txn);
-                b.put("order_type", zOrderType);
+                b.put("order_type", isMarket ? "MARKET" : "LIMIT");
                 b.put("quantity", qty);
                 b.put("product", prod);
                 b.put("validity", "DAY");
-                b.put("price", zPrice);
+                if (!isMarket) b.put("price", price);
                 return zerodhaClient.placeOrder(apiKey, token, b);
             }
             case "FYERS": {
