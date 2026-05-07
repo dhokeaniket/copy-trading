@@ -274,7 +274,8 @@ public class CopyEngineService {
         String prod = product != null ? product : "MIS";
         String oType = orderType != null ? orderType : "MARKET";
         boolean isMarket = oType.equalsIgnoreCase("MARKET");
-        boolean isFnO = symbolMapper.isFnO(sym);
+        // Check isFnO on ORIGINAL symbol (before translation) since translated format may differ
+        boolean isFnO = symbolMapper.isFnO(symbol);
         String txn = "BUY".equalsIgnoreCase(side) ? "BUY" : "SELL";
         String exch = exchange != null ? exchange.toUpperCase() : "NSE";
 
