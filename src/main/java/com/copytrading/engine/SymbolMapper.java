@@ -60,20 +60,50 @@ public class SymbolMapper {
     }
 
     private String build(ParsedSymbol p, String broker) {
+        // For weekly options (date is present), Zerodha/Groww/Upstox/AngelOne all use numeric month format
+        // For monthly options (no date), Zerodha/Fyers/Upstox/AngelOne use month NAME format
+        int monthNum = 0;
+        for (int i = 1; i < MONTHS.length; i++) { if (MONTHS[i].equals(p.month)) { monthNum = i; break; } }
+        boolean isWeekly = !p.date.isEmpty();
+
         switch (broker) {
-            case "ZERODHA": return p.underlying + p.year + p.month + (p.date.isEmpty() ? "" : p.date) + p.strike + p.type;
-            case "FYERS": return "NSE:" + p.underlying + p.year + p.month + (p.date.isEmpty() ? "" : p.date) + p.strike + p.type;
-            case "UPSTOX": return "NSE_FO|" + p.underlying + p.year + p.month + (p.date.isEmpty() ? "" : p.date) + p.strike + p.type;
+            case "ZERODHA": {
+                if (isWeekly) {
+                    // Weekly: NIFTY2650525900CE (YY + month_num + DD + strike + CE/PE)
+                    return p.underlying + p.year + monthNum + p.date + p.strike + p.type;
+                } else {
+                    // Monthly: NIFTY26MAY25900CE (YY + MONTH_NAME + strike + CE/PE)
+                    return p.underlying + p.year + p.month + p.strike + p.type;
+                }
+            }
+            case "FYERS": {
+                if (isWeekly) {
+                    return "NSE:" + p.underlying + p.year + monthNum + p.date + p.strike + p.type;
+                } else {
+                    return "NSE:" + p.underlying + p.year + p.month + p.strike + p.type;
+                }
+            }
+            case "UPSTOX": {
+                if (isWeekly) {
+                    return "NSE_FO|" + p.underlying + p.year + monthNum + p.date + p.strike + p.type;
+                } else {
+                    return "NSE_FO|" + p.underlying + p.year + p.month + p.strike + p.type;
+                }
+            }
             case "DHAN": {
                 // Dhan format: NIFTY-May2026-25900-CE
                 if (p.month == null || p.month.isEmpty()) return p.underlying + p.year + p.strike + p.type;
                 String monthCap = p.month.substring(0, 1).toUpperCase() + p.month.substring(1).toLowerCase();
                 return p.underlying + "-" + monthCap + "20" + p.year + "-" + p.strike + "-" + p.type;
             }
-            case "ANGELONE": return p.underlying + p.year + p.month + (p.date.isEmpty() ? "" : p.date) + p.strike + p.type;
+            case "ANGELONE": {
+                if (isWeekly) {
+                    return p.underlying + p.year + monthNum + p.date + p.strike + p.type;
+                } else {
+                    return p.underlying + p.year + p.month + p.strike + p.type;
+                }
+            }
             case "GROWW": {
-                int monthNum = 0;
-                for (int i = 1; i < MONTHS.length; i++) { if (MONTHS[i].equals(p.month)) { monthNum = i; break; } }
                 return p.underlying + p.year + monthNum + (p.date.isEmpty() ? "" : p.date) + p.strike + p.type;
             }
             default: return p.underlying + p.year + p.month + p.strike + p.type;
