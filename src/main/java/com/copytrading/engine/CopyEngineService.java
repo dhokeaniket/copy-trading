@@ -302,6 +302,8 @@ public class CopyEngineService {
             }
             case "ZERODHA": {
                 // POST /orders/regular — form-urlencoded, token api_key:access_token
+                // market_protection is REQUIRED for MARKET orders via API (Zerodha policy since 2025)
+                // Value -1 = automatic system protection; 1-100 = custom % protection band
                 String apiKey = platformConfig.getZerodha().getApiKey();
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("tradingsymbol", sym);
@@ -311,7 +313,11 @@ public class CopyEngineService {
                 b.put("quantity", qty);
                 b.put("product", prod);
                 b.put("validity", "DAY");
-                if (!isMarket) b.put("price", price);
+                if (isMarket) {
+                    b.put("market_protection", 5); // 5% protection band for market orders
+                } else {
+                    b.put("price", price);
+                }
                 return zerodhaClient.placeOrder(apiKey, token, b);
             }
             case "FYERS": {
