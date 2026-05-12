@@ -188,12 +188,14 @@ public class CopyEngineService {
                                                          BrokerAccount account, CopyTradeRequest req,
                                                          int scaledQty, double scale) {
         UUID brokerAccountId = account.getId();
+        long startMs = System.currentTimeMillis();
         return placeOrderOnBroker(account, req.getSymbol(), scaledQty,
                 req.getSide(), req.getProduct(), req.getOrderType(), req.getPrice(), req.getExchange())
                 .flatMap(response -> {
+                    long latencyMs = System.currentTimeMillis() - startMs;
                     String orderId = extractOrderId(response);
-                    log.info("COPY_ORDER_PLACED child={} broker={} orderId={} symbol={} qty={}",
-                            childId, account.getBrokerId(), orderId, req.getSymbol(), scaledQty);
+                    log.info("COPY_ORDER_PLACED child={} broker={} orderId={} symbol={} qty={} latencyMs={}",
+                            childId, account.getBrokerId(), orderId, req.getSymbol(), scaledQty, latencyMs);
 
                     // Save child's trade to trades table
                     Trade childTrade = new Trade();
@@ -226,11 +228,13 @@ public class CopyEngineService {
                     balanceAlert.checkAndAlert(childId, brokerAccountId).subscribe();
 
                     return logAndReturn(masterId, childId, req, "SUCCESS",
-                            "Order placed: " + orderId, account.getBrokerId());
+                            "Order placed: " + orderId, account.getBrokerId())
+                            .map(r -> { r.put("latencyMs", latencyMs); return r; });
                 })
                 .onErrorResume(e -> {
-                    log.error("COPY_ORDER_FAILED child={} broker={} error={}",
-                            childId, account.getBrokerId(), e.getMessage());
+                    long latencyMs = System.currentTimeMillis() - startMs;
+                    log.error("COPY_ORDER_FAILED child={} broker={} error={} latencyMs={}",
+                            childId, account.getBrokerId(), e.getMessage(), latencyMs);
 
                     // If 401/session expired or IP inactive, mark session inactive (only once, don't spam)
                     if (e.getMessage() != null && (e.getMessage().contains("401") || e.getMessage().contains("Unauthorized") || e.getMessage().contains("GA005"))) {
@@ -252,7 +256,8 @@ public class CopyEngineService {
                     balanceAlert.checkAndAlert(childId, brokerAccountId).subscribe();
 
                     return logAndReturn(masterId, childId, req, "FAILED",
-                            "Order failed: " + e.getMessage(), account.getBrokerId());
+                            "Order failed: " + e.getMessage(), account.getBrokerId())
+                            .map(r -> { r.put("latencyMs", latencyMs); return r; });
                 });
     }
 

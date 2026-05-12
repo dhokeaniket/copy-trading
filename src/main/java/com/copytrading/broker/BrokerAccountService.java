@@ -312,6 +312,12 @@ public class BrokerAccountService {
     // --- DHAN LOGIN (3-step OAuth: consent → browser login → consume) ---
     private Mono<Map<String, Object>> loginDhan(BrokerAccount a, BrokerLoginRequest req) {
         var creds = platformConfig.getDhan();
+
+        // Save clientId from request if provided (ensures it's always set)
+        if (req != null && req.getClientId() != null && !req.getClientId().isBlank()) {
+            a.setClientId(req.getClientId());
+        }
+
         // If tokenId provided (from browser callback), exchange for access token
         if (req != null && req.getAuthCode() != null && !req.getAuthCode().isBlank()) {
             return dhanClient.consumeConsent(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode())
