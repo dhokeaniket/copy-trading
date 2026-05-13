@@ -104,6 +104,8 @@ public class CopyEngineService {
      * Called by manual trigger or polling engine.
      */
     public Mono<Map<String, Object>> copyTrade(UUID masterId, CopyTradeRequest req) {
+        long engineStartMs = System.currentTimeMillis();
+        String masterTriggeredAt = Instant.now().toString();
         log.info("COPY_ENGINE_START master={} symbol={} qty={} side={}",
                 masterId, req.getSymbol(), req.getQty(), req.getSide());
 
@@ -121,6 +123,7 @@ public class CopyEngineService {
                             .flatMap(results -> {
                                 long success = results.stream().filter(r -> "SUCCESS".equals(r.get("status"))).count();
                                 long failed = results.stream().filter(r -> "FAILED".equals(r.get("status"))).count();
+                                long totalLatencyMs = System.currentTimeMillis() - engineStartMs;
 
                                 // Notify master
                                 String masterMsg = "Trade " + req.getSide() + " " + req.getSymbol() +
@@ -131,11 +134,19 @@ public class CopyEngineService {
                                 Map<String, Object> r = new LinkedHashMap<>();
                                 r.put("message", "Trade copy completed");
                                 r.put("symbol", req.getSymbol());
+                                r.put("exchange", req.getExchange() != null ? req.getExchange() : "NSE");
+                                r.put("segment", symbolMapper.isFnO(req.getSymbol()) ? "FNO" : "EQUITY");
                                 r.put("side", req.getSide());
+                                r.put("product", req.getProduct());
+                                r.put("orderType", req.getOrderType());
                                 r.put("masterQty", req.getQty());
                                 r.put("childrenTotal", children.size());
                                 r.put("success", success);
                                 r.put("failed", failed);
+                                // Timing info
+                                r.put("masterTriggeredAt", masterTriggeredAt);
+                                r.put("completedAt", Instant.now().toString());
+                                r.put("totalExecutionMs", totalLatencyMs);
                                 r.put("results", results);
                                 return Mono.just(r);
                             });
@@ -498,6 +509,7 @@ public class CopyEngineService {
                     r.put("message", message);
                     if (broker != null) r.put("broker", broker);
                     r.put("scaledQty", req.getQty());
+                    r.put("placedAt", Instant.now().toString());
                     if ("SKIPPED".equals(status) && skipReason != null) {
                         r.put("skipReason", skipReason);
                     }
