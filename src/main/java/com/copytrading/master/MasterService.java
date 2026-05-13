@@ -412,11 +412,13 @@ public class MasterService {
     public Mono<Map<String, Object>> getAnalytics(UUID masterId) {
         return Mono.zip(
                 logs.findByMasterId(masterId).collectList(),
-                subs.findByMasterId(masterId).collectList()
+                subs.findByMasterId(masterId).collectList(),
+                copyLogs.findByMasterId(masterId).collectList()
         ).map(t -> {
             var tradeLogs = t.getT1();
             var children = t.getT2();
-            long totalTrades = tradeLogs.stream().filter(l -> "EXECUTED".equals(l.getStatus())).count();
+            var allCopyLogs = t.getT3();
+            long totalTrades = allCopyLogs.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
             long totalReplications = tradeLogs.stream().filter(l -> "REPLICATED".equals(l.getType())).count();
             long activeChildren = children.stream().filter(s -> "ACTIVE".equals(s.getCopyingStatus())).count();
             Map<String, Object> r = new LinkedHashMap<>();
@@ -442,9 +444,18 @@ public class MasterService {
                     Map.of("date", java.time.LocalDate.now().toString(), "value", 100)
             ));
             r.put("pnl", List.of());
-            r.put("childPerformance", children.stream().map(s -> Map.of(
-                    "childId", s.getChildId(), "scalingFactor", s.getScalingFactor(),
-                    "copyingStatus", s.getCopyingStatus(), "pnl", 0, "tradesCopied", 0)).toList());
+            r.put("childPerformance", children.stream().map(s -> {
+                long childTradesCopied = allCopyLogs.stream()
+                        .filter(l -> s.getChildId().equals(l.getChildId()) && "SUCCESS".equals(l.getChildStatus()))
+                        .count();
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("childId", s.getChildId());
+                m.put("scalingFactor", s.getScalingFactor());
+                m.put("copyingStatus", s.getCopyingStatus());
+                m.put("pnl", 0);
+                m.put("tradesCopied", childTradesCopied);
+                return m;
+            }).toList());
             return r;
         });
     }
@@ -453,5 +464,50 @@ public class MasterService {
     public Mono<Map<String, Object>> getTradeHistory(UUID masterId) {
         return logs.findByMasterId(masterId).collectList()
                 .map(list -> Map.<String, Object>of("trades", list));
+    }
+
+    // 4.8 Master dashboard (aggregated view)
+    public Mono<Map<String, Object>> getDashboard(UUID masterId) {
+        return Mono.zip(
+                subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE").collectList(),
+                copyLogs.findByMasterId(masterId).collectList(),
+                subs.findByMasterId(masterId).collectList()
+        ).map(t -> {
+            var activeChildren = t.getT1();
+            var allCopyLogs = t.getT2();
+            var allSubs = t.getT3();
+
+            long totalTradesCopied = allCopyLogs.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
+            long totalFailed = allCopyLogs.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
+            long todayTrades = allCopyLogs.stream()
+                    .filter(l -> l.getCreatedAt() != null && l.getCreatedAt().isAfter(java.time.Instant.now().minus(java.time.Duration.ofHours(12))))
+                    .filter(l -> "SUCCESS".equals(l.getChildStatus()))
+                    .count();
+
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("activeChildren", activeChildren.size());
+            r.put("totalChildren", allSubs.size());
+            r.put("totalTradesCopied", totalTradesCopied);
+            r.put("totalFailed", totalFailed);
+            r.put("todayTradesCopied", todayTrades);
+            r.put("successRate", totalTradesCopied + totalFailed > 0
+                    ? Math.round((totalTradesCopied * 100.0) / (totalTradesCopied + totalFailed)) : 0);
+            r.put("children", activeChildren.stream().map(s -> {
+                long childSuccess = allCopyLogs.stream()
+                        .filter(l -> s.getChildId().equals(l.getChildId()) && "SUCCESS".equals(l.getChildStatus()))
+                        .count();
+                long childFailed = allCopyLogs.stream()
+                        .filter(l -> s.getChildId().equals(l.getChildId()) && "FAILED".equals(l.getChildStatus()))
+                        .count();
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("childId", s.getChildId());
+                m.put("scalingFactor", s.getScalingFactor());
+                m.put("copyingStatus", s.getCopyingStatus());
+                m.put("tradesCopied", childSuccess);
+                m.put("tradesFailed", childFailed);
+                return m;
+            }).toList());
+            return r;
+        });
     }
 }

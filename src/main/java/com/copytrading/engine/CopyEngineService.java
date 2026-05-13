@@ -160,7 +160,7 @@ public class CopyEngineService {
         UUID childId = sub.getChildId();
         UUID brokerAccountId = sub.getBrokerAccountId();
         double scale = sub.getScalingFactor();
-        int scaledQty = (int) Math.max(1, Math.round(req.getQty() * scale));
+        int scaledQty = (int) Math.max(1, (long)(req.getQty() * scale));
 
         if (brokerAccountId == null) {
             // Fallback: try to find child's first active broker account and update the subscription

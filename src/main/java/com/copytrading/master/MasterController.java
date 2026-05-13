@@ -115,6 +115,11 @@ public class MasterController {
         return service.getAnalytics(UUID.fromString(userId));
     }
 
+    @GetMapping("/dashboard")
+    public Mono<Map<String, Object>> getDashboard(@AuthenticationPrincipal String userId) {
+        return service.getDashboard(UUID.fromString(userId));
+    }
+
     @GetMapping("/trade-history")
     public Mono<Map<String, Object>> getTradeHistory(@AuthenticationPrincipal String userId) {
         return service.getTradeHistory(UUID.fromString(userId));
