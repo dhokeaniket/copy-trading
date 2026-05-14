@@ -106,8 +106,9 @@ public class CopyEngineService {
     public Mono<Map<String, Object>> copyTrade(UUID masterId, CopyTradeRequest req) {
         long engineStartMs = System.currentTimeMillis();
         String masterTriggeredAt = Instant.now().toString();
-        log.info("COPY_ENGINE_START master={} symbol={} qty={} side={}",
-                masterId, req.getSymbol(), req.getQty(), req.getSide());
+        String orderKey = generateOrderKey(req.getSymbol(), req.getQty());
+        log.info("COPY_ENGINE_START master={} symbol={} qty={} side={} orderKey={}",
+                masterId, req.getSymbol(), req.getQty(), req.getSide(), orderKey);
 
         return subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE")
                 .collectList()
@@ -144,6 +145,7 @@ public class CopyEngineService {
                                 r.put("success", success);
                                 r.put("failed", failed);
                                 // Timing info
+                                r.put("orderKey", orderKey);
                                 r.put("masterTriggeredAt", masterTriggeredAt);
                                 r.put("completedAt", Instant.now().toString());
                                 r.put("totalExecutionMs", totalLatencyMs);
@@ -160,7 +162,40 @@ public class CopyEngineService {
         UUID childId = sub.getChildId();
         UUID brokerAccountId = sub.getBrokerAccountId();
         double scale = sub.getScalingFactor();
-        int scaledQty = (int) Math.max(1, (long)(req.getQty() * scale));
+        int scaledQty = (int)(req.getQty() * scale); // floor, no rounding up
+
+        // SKIP if scaled quantity is 0 (e.g. 0.1x scaling on 1 qty = 0)
+        if (scaledQty < 1) {
+            log.info("COPY_SKIP child={} reason=ZERO_QTY scale={} masterQty={} scaledQty=0", childId, scale, req.getQty());
+            return logAndReturn(masterId, childId, req, "SKIPPED",
+                    "Scaled quantity is 0 (scale=" + scale + " × qty=" + req.getQty() + " = 0). Order not placed.", null, "ZERO_QUANTITY");
+        }
+
+        // Generate unique order key: SHA256(INSTRUMENT+QTY+YYYYMMDD+HHmm)
+        String orderKey = generateOrderKey(req.getSymbol(), req.getQty());
+
+        // SELL position check: skip if child never bought this instrument via copy trading
+        if ("SELL".equalsIgnoreCase(req.getSide())) {
+            return copyLogs.findByMasterIdAndChildId(masterId, childId)
+                    .filter(cl -> req.getSymbol().equals(cl.getSymbol()) && "BUY".equalsIgnoreCase(cl.getTradeType()) && "SUCCESS".equals(cl.getChildStatus()))
+                    .hasElements()
+                    .flatMap(hasBuy -> {
+                        if (!hasBuy) {
+                            log.info("COPY_SKIP child={} reason=NO_POSITION symbol={}", childId, req.getSymbol());
+                            return logAndReturn(masterId, childId, req, "SKIPPED",
+                                    "Child has no copied BUY position for " + req.getSymbol() + ". SELL skipped.", null, "NO_POSITION");
+                        }
+                        return proceedWithOrder(masterId, childId, brokerAccountId, sub, req, scaledQty, scale, orderKey);
+                    });
+        }
+
+        return proceedWithOrder(masterId, childId, brokerAccountId, sub, req, scaledQty, scale, orderKey);
+    }
+
+    /** Proceed with order placement after all checks pass */
+    private Mono<Map<String, Object>> proceedWithOrder(UUID masterId, UUID childId, UUID brokerAccountId,
+                                                        Subscription sub, CopyTradeRequest req,
+                                                        int scaledQty, double scale, String orderKey) {
 
         if (brokerAccountId == null) {
             // Fallback: try to find child's first active broker account and update the subscription
@@ -171,7 +206,7 @@ public class CopyEngineService {
                         // Auto-fix the subscription with the found broker account
                         sub.setBrokerAccountId(account.getId());
                         return subs.save(sub)
-                                .then(placeOrderOnChild(masterId, childId, account, req, scaledQty, scale));
+                                .then(placeOrderOnChild(masterId, childId, account, req, scaledQty, scale, orderKey));
                     })
                     .switchIfEmpty(Mono.defer(() ->
                         logAndReturn(masterId, childId, req, "FAILED",
@@ -188,7 +223,7 @@ public class CopyEngineService {
                         return logAndReturn(masterId, childId, req, "FAILED",
                                 "Broker session inactive. Child needs to re-login.", account.getBrokerId());
                     }
-                    return placeOrderOnChild(masterId, childId, account, req, scaledQty, scale);
+                    return placeOrderOnChild(masterId, childId, account, req, scaledQty, scale, orderKey);
                 });
     }
 
@@ -197,7 +232,7 @@ public class CopyEngineService {
      */
     private Mono<Map<String, Object>> placeOrderOnChild(UUID masterId, UUID childId,
                                                          BrokerAccount account, CopyTradeRequest req,
-                                                         int scaledQty, double scale) {
+                                                         int scaledQty, double scale, String orderKey) {
         UUID brokerAccountId = account.getId();
         long startMs = System.currentTimeMillis();
         return placeOrderOnBroker(account, req.getSymbol(), scaledQty,
@@ -240,7 +275,7 @@ public class CopyEngineService {
 
                     return logAndReturn(masterId, childId, req, "SUCCESS",
                             "Order placed: " + orderId, account.getBrokerId())
-                            .map(r -> { r.put("latencyMs", latencyMs); return r; });
+                            .map(r -> { r.put("latencyMs", latencyMs); r.put("orderKey", orderKey); return r; });
                 })
                 .onErrorResume(e -> {
                     long latencyMs = System.currentTimeMillis() - startMs;
@@ -268,7 +303,7 @@ public class CopyEngineService {
 
                     return logAndReturn(masterId, childId, req, "FAILED",
                             "Order failed: " + e.getMessage(), account.getBrokerId())
-                            .map(r -> { r.put("latencyMs", latencyMs); return r; });
+                            .map(r -> { r.put("latencyMs", latencyMs); r.put("orderKey", orderKey); return r; });
                 });
     }
 
@@ -536,6 +571,25 @@ public class CopyEngineService {
                 "ANGELONE", "polling (1s)"
         ));
         return Mono.just(r);
+    }
+
+    /**
+     * Generate unique order key: SHA256 hash of INSTRUMENT+QTY+YYYYMMDD+HHmm
+     * Format before hash: IOB5014052026T1314 (symbol + qty + date + time)
+     * Returns first 16 chars of hex hash for brevity.
+     */
+    private static String generateOrderKey(String symbol, int qty) {
+        try {
+            java.time.ZonedDateTime now = java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata"));
+            String raw = symbol + qty + now.format(java.time.format.DateTimeFormatter.ofPattern("ddMMyyyyHHmm"));
+            byte[] hash = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 8; i++) sb.append(String.format("%02x", hash[i]));
+            return sb.toString(); // 16-char hex
+        } catch (Exception e) {
+            return "KEY" + System.currentTimeMillis();
+        }
     }
 
     private static double toDouble(Object val) {
