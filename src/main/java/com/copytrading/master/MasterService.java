@@ -79,9 +79,37 @@ public class MasterService {
 
     // Copy logs scoped to master
     public Mono<Map<String, Object>> getCopyLogs(UUID masterId) {
-        return copyLogs.findByMasterId(masterId).collectList()
-                .map(list -> Map.<String, Object>of("logs", list))
-                .onErrorResume(e -> Mono.just(Map.of("logs", List.of())));
+        return copyLogs.findByMasterId(masterId).collectList().flatMap(logsList -> {
+            // Resolve child names
+            Set<UUID> childIds = logsList.stream().map(l -> l.getChildId()).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+            return reactor.core.publisher.Flux.fromIterable(childIds)
+                    .flatMap(cid -> users.findById(cid).map(u -> Map.entry(cid, u.getName())))
+                    .collectMap(Map.Entry::getKey, Map.Entry::getValue)
+                    .defaultIfEmpty(Map.of())
+                    .map(childNames -> {
+                        var logs = logsList.stream().map(l -> {
+                            Map<String, Object> m = new java.util.LinkedHashMap<>();
+                            m.put("id", l.getId());
+                            m.put("masterId", l.getMasterId() != null ? l.getMasterId().toString() : null);
+                            m.put("childId", l.getChildId() != null ? l.getChildId().toString() : null);
+                            m.put("childName", childNames.getOrDefault(l.getChildId(), "Unknown"));
+                            m.put("symbol", l.getSymbol());
+                            m.put("qty", l.getQty());
+                            m.put("tradeType", l.getTradeType());
+                            m.put("masterStatus", l.getMasterStatus());
+                            m.put("childStatus", l.getChildStatus());
+                            m.put("errorMessage", l.getErrorMessage());
+                            m.put("skipReason", l.getSkipReason());
+                            m.put("latencyMs", l.getLatencyMs());
+                            m.put("copyGroupId", l.getCopyGroupId());
+                            m.put("engineReceivedAt", l.getEngineReceivedAt() != null ? l.getEngineReceivedAt().toString() : null);
+                            m.put("childPlacedAt", l.getChildPlacedAt() != null ? l.getChildPlacedAt().toString() : null);
+                            m.put("createdAt", l.getCreatedAt() != null ? l.getCreatedAt().toString() : null);
+                            return m;
+                        }).toList();
+                        return Map.<String, Object>of("logs", logs);
+                    });
+        }).onErrorResume(e -> Mono.just(Map.of("logs", List.of())));
     }
 
     // Earnings (with monthly breakdown + payouts)

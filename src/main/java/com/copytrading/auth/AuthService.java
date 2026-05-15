@@ -215,6 +215,7 @@ public class AuthService {
                 .flatMap(u -> {
                     if (req.getName() != null) u.setName(req.getName().trim());
                     if (req.getPhone() != null) u.setPhone(req.getPhone().trim());
+                    if (req.getTelegramChatId() != null) u.setTelegramChatId(req.getTelegramChatId().trim());
                     if (req.getNewPassword() != null && !req.getNewPassword().isBlank()) {
                         if (req.getCurrentPassword() == null || !encoder.matches(req.getCurrentPassword(), u.getPasswordHash())) {
                             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Current password is incorrect"));

@@ -99,7 +99,16 @@ public class SchemaInitializer {
                 )
                 """,
                 // Add skip_reason column to existing copy_logs tables
-                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS skip_reason VARCHAR(50)"
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS skip_reason VARCHAR(50)",
+                // Add latency_ms column to copy_logs
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS latency_ms BIGINT",
+                // Add timing and grouping columns to copy_logs
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS copy_group_id VARCHAR(36)",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS master_placed_at TIMESTAMPTZ",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS engine_received_at TIMESTAMPTZ",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS child_placed_at TIMESTAMPTZ",
+                // Add telegram_chat_id to users
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(100)"
             };
 
             for (String sql : statements) {

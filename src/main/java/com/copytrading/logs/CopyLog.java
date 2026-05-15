@@ -40,6 +40,21 @@ public class CopyLog {
     @Column("skip_reason")
     private String skipReason;
 
+    @Column("latency_ms")
+    private Long latencyMs;
+
+    @Column("copy_group_id")
+    private String copyGroupId;
+
+    @Column("master_placed_at")
+    private Instant masterPlacedAt;
+
+    @Column("engine_received_at")
+    private Instant engineReceivedAt;
+
+    @Column("child_placed_at")
+    private Instant childPlacedAt;
+
     @Column("created_at")
     private Instant createdAt;
 
@@ -65,6 +80,16 @@ public class CopyLog {
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
     public String getSkipReason() { return skipReason; }
     public void setSkipReason(String skipReason) { this.skipReason = skipReason; }
+    public Long getLatencyMs() { return latencyMs; }
+    public void setLatencyMs(Long latencyMs) { this.latencyMs = latencyMs; }
+    public String getCopyGroupId() { return copyGroupId; }
+    public void setCopyGroupId(String copyGroupId) { this.copyGroupId = copyGroupId; }
+    public Instant getMasterPlacedAt() { return masterPlacedAt; }
+    public void setMasterPlacedAt(Instant masterPlacedAt) { this.masterPlacedAt = masterPlacedAt; }
+    public Instant getEngineReceivedAt() { return engineReceivedAt; }
+    public void setEngineReceivedAt(Instant engineReceivedAt) { this.engineReceivedAt = engineReceivedAt; }
+    public Instant getChildPlacedAt() { return childPlacedAt; }
+    public void setChildPlacedAt(Instant childPlacedAt) { this.childPlacedAt = childPlacedAt; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }

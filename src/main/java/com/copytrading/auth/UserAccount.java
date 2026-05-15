@@ -37,6 +37,9 @@ public class UserAccount {
     @Column("two_factor_secret")
     private String twoFactorSecret;
 
+    @Column("telegram_chat_id")
+    private String telegramChatId;
+
     @Column("created_at")
     private Instant createdAt;
 
@@ -70,6 +73,9 @@ public class UserAccount {
 
     public String getTwoFactorSecret() { return twoFactorSecret; }
     public void setTwoFactorSecret(String twoFactorSecret) { this.twoFactorSecret = twoFactorSecret; }
+
+    public String getTelegramChatId() { return telegramChatId; }
+    public void setTelegramChatId(String telegramChatId) { this.telegramChatId = telegramChatId; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

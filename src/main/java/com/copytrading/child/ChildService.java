@@ -267,17 +267,23 @@ public class ChildService {
                         var trades = logsList.stream().map(l -> {
                             Map<String, Object> t = new LinkedHashMap<>();
                             t.put("id", l.getId());
-                            t.put("master", masterNames.getOrDefault(l.getMasterId(), "Unknown"));
+                            t.put("copyGroupId", l.getCopyGroupId());
+                            t.put("masterId", l.getMasterId() != null ? l.getMasterId().toString() : null);
+                            t.put("masterName", masterNames.getOrDefault(l.getMasterId(), "Unknown"));
                             t.put("instrument", l.getSymbol());
                             t.put("type", l.getTradeType());
                             t.put("masterQty", l.getQty() != null ? l.getQty() : 0);
                             t.put("myQty", l.getQty() != null ? l.getQty() : 0);
+                            t.put("status", l.getChildStatus());
+                            t.put("skipReason", l.getSkipReason());
+                            t.put("latencyMs", l.getLatencyMs());
+                            t.put("engineReceivedAt", l.getEngineReceivedAt() != null ? l.getEngineReceivedAt().toString() : null);
+                            t.put("childPlacedAt", l.getChildPlacedAt() != null ? l.getChildPlacedAt().toString() : null);
+                            t.put("time", l.getCreatedAt() != null ? l.getCreatedAt().toString() : null);
                             t.put("entry", 0);
                             t.put("current", 0);
                             t.put("ltp", 0);
                             t.put("pnl", 0);
-                            t.put("time", l.getCreatedAt() != null ? l.getCreatedAt().toString() : null);
-                            t.put("status", l.getChildStatus());
                             return t;
                         }).toList();
                         return Map.<String, Object>of("trades", trades);
@@ -287,8 +293,35 @@ public class ChildService {
 
     // Copy logs scoped to child
     public Mono<Map<String, Object>> getCopyLogs(UUID childId) {
-        return copyLogs.findByChildId(childId).collectList()
-                .map(list -> Map.<String, Object>of("logs", list));
+        return copyLogs.findByChildId(childId).collectList().flatMap(logsList -> {
+            Set<UUID> masterIds = logsList.stream().map(l -> l.getMasterId()).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+            return reactor.core.publisher.Flux.fromIterable(masterIds)
+                    .flatMap(mid -> users.findById(mid).map(u -> Map.entry(mid, u.getName())))
+                    .collectMap(Map.Entry::getKey, Map.Entry::getValue)
+                    .map(masterNames -> {
+                        var logs = logsList.stream().map(l -> {
+                            Map<String, Object> m = new LinkedHashMap<>();
+                            m.put("id", l.getId());
+                            m.put("masterId", l.getMasterId() != null ? l.getMasterId().toString() : null);
+                            m.put("masterName", masterNames.getOrDefault(l.getMasterId(), "Unknown"));
+                            m.put("childId", l.getChildId() != null ? l.getChildId().toString() : null);
+                            m.put("symbol", l.getSymbol());
+                            m.put("qty", l.getQty());
+                            m.put("tradeType", l.getTradeType());
+                            m.put("masterStatus", l.getMasterStatus());
+                            m.put("childStatus", l.getChildStatus());
+                            m.put("errorMessage", l.getErrorMessage());
+                            m.put("skipReason", l.getSkipReason());
+                            m.put("latencyMs", l.getLatencyMs());
+                            m.put("copyGroupId", l.getCopyGroupId());
+                            m.put("engineReceivedAt", l.getEngineReceivedAt() != null ? l.getEngineReceivedAt().toString() : null);
+                            m.put("childPlacedAt", l.getChildPlacedAt() != null ? l.getChildPlacedAt().toString() : null);
+                            m.put("createdAt", l.getCreatedAt() != null ? l.getCreatedAt().toString() : null);
+                            return m;
+                        }).toList();
+                        return Map.<String, Object>of("logs", logs);
+                    });
+        });
     }
 
     // Switch broker account for a subscription (no unsubscribe needed)

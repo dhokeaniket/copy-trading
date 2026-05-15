@@ -13,6 +13,7 @@ public class UserDto {
     private String role;
     private String status;
     private String phone;
+    private String telegramChatId;
     private boolean twoFactorEnabled;
     private Instant createdAt;
     private List<Object> brokerAccounts = List.of();
@@ -25,6 +26,7 @@ public class UserDto {
         d.role = u.getRole();
         d.status = u.getStatus();
         d.phone = u.getPhone();
+        d.telegramChatId = u.getTelegramChatId();
         d.twoFactorEnabled = u.isTwoFactorEnabled();
         d.createdAt = u.getCreatedAt();
         d.brokerAccounts = List.of(); // populated when broker module is wired
@@ -43,6 +45,8 @@ public class UserDto {
     public void setStatus(String status) { this.status = status; }
     public String getPhone() { return phone; }
     public void setPhone(String phone) { this.phone = phone; }
+    public String getTelegramChatId() { return telegramChatId; }
+    public void setTelegramChatId(String telegramChatId) { this.telegramChatId = telegramChatId; }
     public boolean isTwoFactorEnabled() { return twoFactorEnabled; }
     public void setTwoFactorEnabled(boolean twoFactorEnabled) { this.twoFactorEnabled = twoFactorEnabled; }
     public Instant getCreatedAt() { return createdAt; }

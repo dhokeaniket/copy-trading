@@ -3,6 +3,7 @@ package com.copytrading.auth.dto;
 public class UpdateProfileRequest {
     private String name;
     private String phone;
+    private String telegramChatId;
     private String currentPassword;
     private String newPassword;
 
@@ -10,6 +11,8 @@ public class UpdateProfileRequest {
     public void setName(String name) { this.name = name; }
     public String getPhone() { return phone; }
     public void setPhone(String phone) { this.phone = phone; }
+    public String getTelegramChatId() { return telegramChatId; }
+    public void setTelegramChatId(String telegramChatId) { this.telegramChatId = telegramChatId; }
     public String getCurrentPassword() { return currentPassword; }
     public void setCurrentPassword(String currentPassword) { this.currentPassword = currentPassword; }
     public String getNewPassword() { return newPassword; }

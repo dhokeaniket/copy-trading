@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
   phone         VARCHAR(30),
   two_factor_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   two_factor_secret  TEXT,
+  telegram_chat_id   VARCHAR(100),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -116,6 +117,12 @@ CREATE TABLE IF NOT EXISTS copy_logs (
   master_status    VARCHAR(30),
   child_status     VARCHAR(30),
   error_message    TEXT,
+  skip_reason      VARCHAR(50),
+  latency_ms       BIGINT,
+  copy_group_id    VARCHAR(36),
+  master_placed_at TIMESTAMPTZ,
+  engine_received_at TIMESTAMPTZ,
+  child_placed_at  TIMESTAMPTZ,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

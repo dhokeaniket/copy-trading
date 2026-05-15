@@ -5,8 +5,9 @@ public class CopyTradeRequest {
     private int qty;
     private String side;        // BUY or SELL
     private String product;     // MIS, CNC, NRML (default MIS)
-    private String orderType;   // MARKET, LIMIT (default MARKET)
+    private String orderType;   // MARKET, LIMIT, SL, SL-M
     private double price;       // 0 for MARKET orders
+    private double triggerPrice; // Required for SL and SL-M orders
     private String exchange;    // NSE, BSE (default NSE)
 
     public String getSymbol() { return symbol; }
@@ -21,6 +22,8 @@ public class CopyTradeRequest {
     public void setOrderType(String orderType) { this.orderType = orderType; }
     public double getPrice() { return price; }
     public void setPrice(double price) { this.price = price; }
+    public double getTriggerPrice() { return triggerPrice; }
+    public void setTriggerPrice(double triggerPrice) { this.triggerPrice = triggerPrice; }
     public String getExchange() { return exchange; }
     public void setExchange(String exchange) { this.exchange = exchange; }
 }
