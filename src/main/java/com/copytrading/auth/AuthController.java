@@ -51,10 +51,12 @@ public class AuthController {
                     return Mono.just(r);
                 })
                 .switchIfEmpty(Mono.defer(() -> {
+                    // Don't leak whether phone exists — always show success-like response
+                    // but internally don't send OTP
                     Map<String, Object> r = new java.util.LinkedHashMap<>();
-                    r.put("success", false);
-                    r.put("error", "PHONE_NOT_REGISTERED");
-                    r.put("message", "No account found with this phone number");
+                    r.put("success", true);
+                    r.put("data", Map.of("expiresIn", otpService.getExpirySeconds(), "retryAfter", otpService.getRetrySeconds()));
+                    r.put("message", "If this phone is registered, an OTP has been sent.");
                     return Mono.just(r);
                 }));
     }
@@ -150,5 +152,39 @@ public class AuthController {
     public Mono<Map<String, String>> disable2FA(@AuthenticationPrincipal String userId,
                                                  @RequestBody Disable2FARequest req) {
         return authService.disable2FA(UUID.fromString(userId), req.getPassword(), req.getOtp());
+    }
+
+    @PostMapping(value = "/validate-password", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Validate password strength", description = "Check password meets requirements without submitting registration")
+    public Mono<Map<String, Object>> validatePassword(@RequestBody Map<String, String> body) {
+        String password = body.getOrDefault("password", "");
+        Map<String, Object> r = new java.util.LinkedHashMap<>();
+        boolean hasLength = password.length() >= 8;
+        boolean hasNumber = password.matches(".*\\d.*");
+        boolean hasSpecial = password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>/?].*");
+        boolean hasUpper = password.matches(".*[A-Z].*");
+        boolean hasLower = password.matches(".*[a-z].*");
+
+        int score = 0;
+        if (hasLength) score++;
+        if (hasNumber) score++;
+        if (hasSpecial) score++;
+        if (hasUpper) score++;
+        if (hasLower) score++;
+        if (password.length() >= 12) score++;
+
+        String strength = score <= 2 ? "WEAK" : score <= 4 ? "MEDIUM" : "STRONG";
+
+        r.put("valid", hasLength && hasNumber && hasSpecial);
+        r.put("strength", strength);
+        r.put("score", score);
+        r.put("checks", Map.of(
+                "minLength", hasLength,
+                "hasNumber", hasNumber,
+                "hasSpecialChar", hasSpecial,
+                "hasUppercase", hasUpper,
+                "hasLowercase", hasLower
+        ));
+        return Mono.just(r);
     }
 }

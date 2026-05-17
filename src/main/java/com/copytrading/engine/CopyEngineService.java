@@ -29,6 +29,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Core trade copy engine.
@@ -45,6 +46,9 @@ import java.util.*;
 public class CopyEngineService {
 
     private static final Logger log = LoggerFactory.getLogger(CopyEngineService.class);
+
+    // Duplicate signal detection: orderKey → timestamp (prevents same signal processed twice within 60s)
+    private final ConcurrentHashMap<String, Long> recentOrderKeys = new ConcurrentHashMap<>();
 
     private final SubscriptionRepository subs;
     private final BrokerAccountRepository brokerRepo;
@@ -113,6 +117,23 @@ public class CopyEngineService {
         String copyGroupId = UUID.randomUUID().toString();
         String masterTriggeredAt = engineReceivedAt.toString();
         String orderKey = generateOrderKey(req.getSymbol(), req.getQty());
+
+        // CT-039/CT-040/CT-041: Duplicate signal detection
+        // Same master + same orderKey within 60 seconds = duplicate, reject it
+        String dedupKey = masterId + ":" + req.getSide() + ":" + orderKey;
+        Long lastSeen = recentOrderKeys.get(dedupKey);
+        if (lastSeen != null && (System.currentTimeMillis() - lastSeen) < 60_000) {
+            log.warn("COPY_DUPLICATE_SIGNAL master={} symbol={} side={} orderKey={} — ignoring duplicate within 60s",
+                    masterId, req.getSymbol(), req.getSide(), orderKey);
+            return Mono.just(Map.<String, Object>of(
+                    "message", "Duplicate signal detected — same trade already processed within 60 seconds",
+                    "duplicate", true,
+                    "orderKey", orderKey));
+        }
+        recentOrderKeys.put(dedupKey, System.currentTimeMillis());
+        // Cleanup old entries (older than 2 minutes) to prevent memory leak
+        recentOrderKeys.entrySet().removeIf(e -> (System.currentTimeMillis() - e.getValue()) > 120_000);
+
         log.info("COPY_ENGINE_START master={} symbol={} qty={} side={} orderKey={} copyGroupId={}",
                 masterId, req.getSymbol(), req.getQty(), req.getSide(), orderKey, copyGroupId);
 

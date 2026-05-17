@@ -46,8 +46,8 @@ public class AuthService {
         if (req.getName() == null || req.getEmail() == null || req.getPassword() == null || req.getRole() == null) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "name, email, password, role are required"));
         }
-        if (req.getPassword().length() < 8 || !req.getPassword().matches(".*\\d.*")) {
-            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be min 8 chars with at least one number"));
+        if (req.getPassword().length() < 8 || !req.getPassword().matches(".*\\d.*") || !req.getPassword().matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>/?].*")) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be min 8 chars with at least one number and one special character"));
         }
         String role = req.getRole().toUpperCase();
         if (!Set.of("ADMIN", "MASTER", "CHILD").contains(role)) {
@@ -55,7 +55,7 @@ public class AuthService {
         }
         return users.findByEmail(req.getEmail().toLowerCase().trim())
                 .flatMap(existing -> Mono.<Map<String, Object>>error(
-                        new ResponseStatusException(HttpStatus.CONFLICT, "Email already registered")))
+                        new ResponseStatusException(HttpStatus.CONFLICT, "Unable to create account. Please try a different email or login to your existing account.")))
                 .switchIfEmpty(Mono.defer(() -> {
                     UserAccount u = new UserAccount();
                     u.setName(req.getName().trim());
@@ -105,7 +105,7 @@ public class AuthService {
     public Mono<Map<String, Object>> loginByPhone(String phone) {
         return users.findByPhone(phone)
                 .filter(UserAccount::isActive)
-                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Phone not registered")))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials. Please check your phone number or register.")))
                 .flatMap(u -> issueTokens(u).map(tokens -> {
                     Map<String, Object> r = new java.util.LinkedHashMap<>();
                     r.put("success", true);

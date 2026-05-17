@@ -12,4 +12,6 @@ public interface CopyLogRepository extends ReactiveCrudRepository<CopyLog, Long>
     Flux<CopyLog> findByChildId(UUID childId);
 
     Flux<CopyLog> findByMasterIdAndChildId(UUID masterId, UUID childId);
+
+    Flux<CopyLog> findByCopyGroupId(String copyGroupId);
 }
