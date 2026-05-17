@@ -58,6 +58,9 @@ aws:
   accessKeyId: ${AWS_ACCESS_KEY_ID:}
   secretAccessKey: ${AWS_SECRET_ACCESS_KEY:}
   region: ${AWS_REGION:ap-south-1}
+  sns:
+    topicArn: ${AWS_SNS_TOPIC_ARN:}
+    smsType: ${AWS_SNS_SMS_TYPE:Transactional}
 
 telegram:
   bot-token: ${TELEGRAM_BOT_TOKEN:}

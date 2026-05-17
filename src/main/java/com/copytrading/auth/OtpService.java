@@ -5,6 +5,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.stereotype.Service;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.sns.SnsClient;
+import software.amazon.awssdk.services.sns.model.MessageAttributeValue;
+import software.amazon.awssdk.services.sns.model.PublishRequest;
 
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -29,11 +35,37 @@ public class OtpService {
     private final Map<String, OtpEntry> otpStore = new ConcurrentHashMap<>();
     private final ReactiveStringRedisTemplate redis;
     private final boolean redisAvailable;
+    private final SnsClient snsClient;
+    private final String smsType;
 
     public record OtpEntry(String otp, Instant expiresAt, Instant sentAt, int attempts) {}
 
-    public OtpService(ReactiveStringRedisTemplate redis) {
+    public OtpService(ReactiveStringRedisTemplate redis,
+                      @Value("${aws.accessKeyId:}") String accessKeyId,
+                      @Value("${aws.secretAccessKey:}") String secretAccessKey,
+                      @Value("${aws.region:ap-south-1}") String region,
+                      @Value("${aws.sns.smsType:Transactional}") String smsType) {
         this.redis = redis;
+        this.smsType = smsType;
+
+        // Initialize SNS client
+        SnsClient client = null;
+        if (accessKeyId != null && !accessKeyId.isBlank() && secretAccessKey != null && !secretAccessKey.isBlank()) {
+            try {
+                client = SnsClient.builder()
+                        .region(Region.of(region))
+                        .credentialsProvider(StaticCredentialsProvider.create(
+                                AwsBasicCredentials.create(accessKeyId, secretAccessKey)))
+                        .build();
+                log.info("OTP_SNS_ENABLED — SMS will be sent via AWS SNS (region={}, type={})", region, smsType);
+            } catch (Exception e) {
+                log.warn("OTP_SNS_INIT_FAILED: {}", e.getMessage());
+            }
+        } else {
+            log.warn("OTP_SNS_DISABLED — AWS credentials not configured, OTPs will be logged only");
+        }
+        this.snsClient = client;
+
         // Test Redis connectivity
         boolean available = false;
         try {
@@ -49,6 +81,9 @@ public class OtpService {
     public String generateAndStore(String phone) {
         String otp = generateOtp();
         log.info("OTP_GENERATED phone={}... otp={}", phone.substring(0, Math.min(6, phone.length())), otp);
+
+        // Send SMS via AWS SNS
+        sendSms(phone, otp);
 
         if (redisAvailable) {
             // Store in Redis: otp:<phone> = otp value, with TTL
@@ -123,4 +158,32 @@ public class OtpService {
 
     public int getExpirySeconds() { return OTP_EXPIRY_SECONDS; }
     public int getRetrySeconds() { return RETRY_AFTER_SECONDS; }
+
+    private void sendSms(String phone, String otp) {
+        if (snsClient == null) {
+            log.info("OTP_SMS_SKIPPED (no SNS client) phone={}... otp={}", phone.substring(0, Math.min(6, phone.length())), otp);
+            return;
+        }
+        try {
+            String message = "Your Ascentra verification code is: " + otp + ". Valid for 5 minutes. Do not share this code.";
+            PublishRequest request = PublishRequest.builder()
+                    .message(message)
+                    .phoneNumber(phone)
+                    .messageAttributes(Map.of(
+                            "AWS.SNS.SMS.SMSType", MessageAttributeValue.builder()
+                                    .stringValue(smsType)
+                                    .dataType("String")
+                                    .build(),
+                            "AWS.SNS.SMS.SenderID", MessageAttributeValue.builder()
+                                    .stringValue("ASCENTRA")
+                                    .dataType("String")
+                                    .build()
+                    ))
+                    .build();
+            snsClient.publish(request);
+            log.info("OTP_SMS_SENT phone={}...", phone.substring(0, Math.min(6, phone.length())));
+        } catch (Exception e) {
+            log.error("OTP_SMS_FAILED phone={}... error={}", phone.substring(0, Math.min(6, phone.length())), e.getMessage());
+        }
+    }
 }
