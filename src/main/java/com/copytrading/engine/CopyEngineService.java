@@ -16,6 +16,7 @@ import com.copytrading.logs.CopyLog;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.notification.NotificationService;
 import com.copytrading.notification.TelegramService;
+import com.copytrading.risk.RiskService;
 import com.copytrading.subscription.Subscription;
 import com.copytrading.subscription.SubscriptionRepository;
 import com.copytrading.trade.Trade;
@@ -56,6 +57,7 @@ public class CopyEngineService {
     private final CopyLogRepository copyLogs;
     private final NotificationService notifications;
     private final TelegramService telegram;
+    private final RiskService riskService;
     private final BalanceAlertService balanceAlert;
     private final TradeRepository tradeRepo;
     private final TradeUpdatesHub hub;
@@ -75,6 +77,7 @@ public class CopyEngineService {
                              CopyLogRepository copyLogs,
                              NotificationService notifications,
                              TelegramService telegram,
+                             RiskService riskService,
                              BalanceAlertService balanceAlert,
                              TradeRepository tradeRepo,
                              TradeUpdatesHub hub,
@@ -93,6 +96,7 @@ public class CopyEngineService {
         this.copyLogs = copyLogs;
         this.notifications = notifications;
         this.telegram = telegram;
+        this.riskService = riskService;
         this.balanceAlert = balanceAlert;
         this.tradeRepo = tradeRepo;
         this.hub = hub;
@@ -213,27 +217,36 @@ public class CopyEngineService {
         // Generate unique order key: SHA256(INSTRUMENT+QTY+YYYYMMDD+HHmm)
         String orderKey = generateOrderKey(req.getSymbol(), req.getQty());
 
-        // SELL position check: skip if child never bought this instrument via copy trading
-        // Also skip if child joined AFTER the master's BUY (they never had the position)
-        if ("SELL".equalsIgnoreCase(req.getSide())) {
-            return copyLogs.findByMasterIdAndChildId(masterId, childId)
-                    .filter(cl -> req.getSymbol().equals(cl.getSymbol())
-                            && "BUY".equalsIgnoreCase(cl.getTradeType())
-                            && "SUCCESS".equals(cl.getChildStatus())
-                            // Only count BUYs that happened AFTER child subscribed
-                            && (childSubscribedAt == null || cl.getCreatedAt() == null || cl.getCreatedAt().isAfter(childSubscribedAt)))
-                    .hasElements()
-                    .flatMap(hasBuy -> {
-                        if (!hasBuy) {
-                            log.info("COPY_SKIP child={} reason=NO_POSITION symbol={} subscribedAt={}", childId, req.getSymbol(), childSubscribedAt);
-                            return logAndReturn(masterId, childId, req, "SKIPPED",
-                                    "Child has no copied BUY position for " + req.getSymbol() + " since subscription. SELL skipped.", null, "NO_POSITION", null, copyGroupId, engineReceivedAt);
-                        }
-                        return proceedWithOrder(masterId, childId, brokerAccountId, sub, req, scaledQty, scale, orderKey, copyGroupId, engineReceivedAt);
-                    });
-        }
+        // CT-069/CT-070/CT-071: Risk limit check before placing order
+        return riskService.checkRiskLimits(childId)
+                .flatMap(riskResult -> {
+                    if (!riskResult.isEmpty()) {
+                        log.info("COPY_SKIP child={} reason=RISK_LIMIT detail={}", childId, riskResult);
+                        return logAndReturn(masterId, childId, req, "SKIPPED",
+                                "Risk limit: " + riskResult, null, "RISK_LIMIT", null, copyGroupId, engineReceivedAt);
+                    }
 
-        return proceedWithOrder(masterId, childId, brokerAccountId, sub, req, scaledQty, scale, orderKey, copyGroupId, engineReceivedAt);
+                    // SELL position check: skip if child never bought this instrument via copy trading
+                    // Also skip if child joined AFTER the master's BUY (they never had the position)
+                    if ("SELL".equalsIgnoreCase(req.getSide())) {
+                        return copyLogs.findByMasterIdAndChildId(masterId, childId)
+                                .filter(cl -> req.getSymbol().equals(cl.getSymbol())
+                                        && "BUY".equalsIgnoreCase(cl.getTradeType())
+                                        && "SUCCESS".equals(cl.getChildStatus())
+                                        && (childSubscribedAt == null || cl.getCreatedAt() == null || cl.getCreatedAt().isAfter(childSubscribedAt)))
+                                .hasElements()
+                                .flatMap(hasBuy -> {
+                                    if (!hasBuy) {
+                                        log.info("COPY_SKIP child={} reason=NO_POSITION symbol={} subscribedAt={}", childId, req.getSymbol(), childSubscribedAt);
+                                        return logAndReturn(masterId, childId, req, "SKIPPED",
+                                                "Child has no copied BUY position for " + req.getSymbol() + " since subscription. SELL skipped.", null, "NO_POSITION", null, copyGroupId, engineReceivedAt);
+                                    }
+                                    return proceedWithOrder(masterId, childId, brokerAccountId, sub, req, scaledQty, scale, orderKey, copyGroupId, engineReceivedAt);
+                                });
+                    }
+
+                    return proceedWithOrder(masterId, childId, brokerAccountId, sub, req, scaledQty, scale, orderKey, copyGroupId, engineReceivedAt);
+                });
     }
 
     /** Proceed with order placement after all checks pass */

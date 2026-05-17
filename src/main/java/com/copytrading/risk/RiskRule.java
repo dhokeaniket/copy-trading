@@ -9,17 +9,36 @@ import java.util.UUID;
 
 @Table("risk_rules")
 public class RiskRule {
-    @Id @Column("user_id") private UUID userId;
-    @Column("max_trades_per_day") private int maxTradesPerDay = 50;
-    @Column("max_open_positions") private int maxOpenPositions = 20;
-    @Column("max_capital_exposure") private double maxCapitalExposure = 80;
-    @Column("margin_check_enabled") private boolean marginCheckEnabled = true;
-    @Column("updated_at") private Instant updatedAt;
 
-    public UUID getUserId() { return userId; } public void setUserId(UUID v) { this.userId = v; }
-    public int getMaxTradesPerDay() { return maxTradesPerDay; } public void setMaxTradesPerDay(int v) { this.maxTradesPerDay = v; }
-    public int getMaxOpenPositions() { return maxOpenPositions; } public void setMaxOpenPositions(int v) { this.maxOpenPositions = v; }
-    public double getMaxCapitalExposure() { return maxCapitalExposure; } public void setMaxCapitalExposure(double v) { this.maxCapitalExposure = v; }
-    public boolean isMarginCheckEnabled() { return marginCheckEnabled; } public void setMarginCheckEnabled(boolean v) { this.marginCheckEnabled = v; }
-    public Instant getUpdatedAt() { return updatedAt; } public void setUpdatedAt(Instant v) { this.updatedAt = v; }
+    @Id
+    @Column("user_id")
+    private UUID userId;
+
+    @Column("max_trades_per_day")
+    private int maxTradesPerDay;
+
+    @Column("max_open_positions")
+    private int maxOpenPositions;
+
+    @Column("max_capital_exposure")
+    private double maxCapitalExposure;
+
+    @Column("margin_check_enabled")
+    private boolean marginCheckEnabled;
+
+    @Column("updated_at")
+    private Instant updatedAt;
+
+    public UUID getUserId() { return userId; }
+    public void setUserId(UUID userId) { this.userId = userId; }
+    public int getMaxTradesPerDay() { return maxTradesPerDay; }
+    public void setMaxTradesPerDay(int maxTradesPerDay) { this.maxTradesPerDay = maxTradesPerDay; }
+    public int getMaxOpenPositions() { return maxOpenPositions; }
+    public void setMaxOpenPositions(int maxOpenPositions) { this.maxOpenPositions = maxOpenPositions; }
+    public double getMaxCapitalExposure() { return maxCapitalExposure; }
+    public void setMaxCapitalExposure(double maxCapitalExposure) { this.maxCapitalExposure = maxCapitalExposure; }
+    public boolean isMarginCheckEnabled() { return marginCheckEnabled; }
+    public void setMarginCheckEnabled(boolean marginCheckEnabled) { this.marginCheckEnabled = marginCheckEnabled; }
+    public Instant getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 }
