@@ -3,6 +3,7 @@ package com.copytrading.master;
 import com.copytrading.master.dto.BulkLinkRequest;
 import com.copytrading.master.dto.LinkChildRequest;
 import com.copytrading.master.dto.UpdateScalingRequest;
+import com.copytrading.positions.PositionsService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
@@ -20,8 +21,12 @@ import java.util.UUID;
 public class MasterController {
 
     private final MasterService service;
+    private final PositionsService positionsService;
 
-    public MasterController(MasterService service) { this.service = service; }
+    public MasterController(MasterService service, PositionsService positionsService) {
+        this.service = service;
+        this.positionsService = positionsService;
+    }
 
     @Operation(summary = "List children", description = "List all children linked to this master")
     @GetMapping("/children")
@@ -158,5 +163,11 @@ public class MasterController {
     @GetMapping("/payouts")
     public Mono<Map<String, Object>> getPayouts(@AuthenticationPrincipal String userId) {
         return service.getPayouts(UUID.fromString(userId));
+    }
+
+    @Operation(summary = "Get live positions", description = "Fetch real open positions from master's active broker with live P&L")
+    @GetMapping("/positions")
+    public Mono<Map<String, Object>> getPositions(@AuthenticationPrincipal String userId) {
+        return positionsService.getMasterPositions(UUID.fromString(userId));
     }
 }

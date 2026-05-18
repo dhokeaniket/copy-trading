@@ -4,6 +4,7 @@ import com.copytrading.child.dto.BulkSubscribeRequest;
 import com.copytrading.child.dto.ChildScalingRequest;
 import com.copytrading.child.dto.MasterIdRequest;
 import com.copytrading.child.dto.SubscribeRequest;
+import com.copytrading.positions.PositionsService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
@@ -21,8 +22,12 @@ import java.util.UUID;
 public class ChildController {
 
     private final ChildService service;
+    private final PositionsService positionsService;
 
-    public ChildController(ChildService service) { this.service = service; }
+    public ChildController(ChildService service, PositionsService positionsService) {
+        this.service = service;
+        this.positionsService = positionsService;
+    }
 
     @GetMapping("/masters")
     public Mono<Map<String, Object>> listMasters() { return service.listMasters(); }
@@ -108,5 +113,11 @@ public class ChildController {
     public Mono<Map<String, Object>> switchBroker(@AuthenticationPrincipal String userId,
                                                    @RequestBody com.copytrading.child.dto.SwitchBrokerRequest req) {
         return service.switchBroker(UUID.fromString(userId), req.getMasterId(), req.getBrokerAccountId());
+    }
+
+    @Operation(summary = "Get live positions", description = "Fetch real open positions from child's active broker with live P&L")
+    @GetMapping("/positions")
+    public Mono<Map<String, Object>> getPositions(@AuthenticationPrincipal String userId) {
+        return positionsService.getChildPositions(UUID.fromString(userId));
     }
 }

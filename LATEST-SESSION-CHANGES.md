@@ -362,3 +362,133 @@ The `copyGroupId` is a UUID that links all copies from a single master trade eve
 | `ChildService.java` | Enriched copy logs & copied trades with masterName, timing, copyGroupId |
 | `MasterService.java` | Enriched copy logs with childName, timing, copyGroupId |
 | `application.yml` | Added telegram config section |
+
+
+---
+
+## 11. Password Validation Endpoint (Real-time strength check)
+
+### POST /api/v1/auth/validate-password (PUBLIC — no auth needed)
+```json
+// Request
+{"password": "Test@1234"}
+
+// Response
+{
+  "valid": true,
+  "strength": "STRONG",
+  "score": 5,
+  "checks": {
+    "minLength": true,
+    "hasNumber": true,
+    "hasSpecialChar": true,
+    "hasUppercase": true,
+    "hasLowercase": true
+  }
+}
+```
+
+**Strength levels:** WEAK (score 0-2), MEDIUM (score 3-4), STRONG (score 5-6)
+
+**Frontend Integration:**
+- Call this on every keystroke (debounced 300ms) in the password field
+- Show real-time strength meter with color: red=WEAK, yellow=MEDIUM, green=STRONG
+- Show checkmarks next to each requirement as they're met
+- Disable "Create Account" button until `valid: true`
+
+---
+
+## 12. Risk Rules API
+
+### GET /api/v1/risk/rules (auth required)
+```json
+{
+  "userId": "uuid",
+  "maxTradesPerDay": 50,
+  "maxOpenPositions": 20,
+  "maxCapitalExposure": 80,
+  "marginCheckEnabled": true,
+  "updatedAt": "2026-05-18T..."
+}
+```
+
+### PUT /api/v1/risk/rules (auth required)
+```json
+// Request
+{
+  "maxTradesPerDay": 30,
+  "maxOpenPositions": 10,
+  "maxCapitalExposure": 70,
+  "marginCheckEnabled": true
+}
+
+// Response
+{
+  "message": "Risk rules updated",
+  "maxTradesPerDay": 30,
+  "maxOpenPositions": 10,
+  "maxCapitalExposure": 70,
+  "marginCheckEnabled": true
+}
+```
+
+### GET /api/v1/risk/check (auth required)
+```json
+// If allowed
+{"allowed": true, "reason": null}
+
+// If blocked
+{"allowed": false, "reason": "MAX_TRADES_PER_DAY: Limit 30 reached (30 today)"}
+```
+
+**Frontend Integration:**
+- Add "Risk Settings" section in child's Settings page
+- Show sliders/inputs for max trades, max positions, max exposure %
+- Show current risk status badge (green=OK, red=limit reached)
+- When copy trade is skipped due to risk, show reason in trade history
+
+---
+
+## 13. Duplicate Signal Detection
+
+The backend now rejects duplicate copy-trade signals within 60 seconds. If the same master sends the same symbol+qty+side within 1 minute, the second request returns:
+
+```json
+{
+  "message": "Duplicate signal detected — same trade already processed within 60 seconds",
+  "duplicate": true,
+  "orderKey": "a3f2b1c4d5e6f7a8"
+}
+```
+
+**Frontend Integration:**
+- If response contains `"duplicate": true`, show info toast: "Trade already processed"
+- Don't show it as an error — it's a safety feature
+
+---
+
+## 14. Secure Error Messages (Breaking Change)
+
+Error messages no longer leak information:
+
+| Old (insecure) | New (secure) |
+|---|---|
+| "Email already registered" | "Unable to create account. Please try a different email or login to your existing account." |
+| "Phone not registered" | "Invalid credentials. Please check your phone number or register." |
+| Send OTP for unknown phone → error | Send OTP for unknown phone → success response (but no SMS sent) |
+
+**Frontend Integration:**
+- Update error handling — don't rely on specific error text for logic
+- Use HTTP status codes: 401=bad credentials, 409=account conflict, 400=validation error
+- Show generic recovery actions: "Forgot Password?" / "Create Account" links
+
+---
+
+## 15. Registration Password Requirements (Updated)
+
+Password now requires **all three**:
+- Minimum 8 characters
+- At least 1 number
+- At least 1 special character (`!@#$%^&*()_+-=[]{}|;:'"<>,.?/`)
+
+Old requirement was only 8 chars + 1 number. Update your frontend validation to match.

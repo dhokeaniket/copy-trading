@@ -4,6 +4,8 @@ import com.copytrading.auth.UserAccountRepository;
 import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.logs.TradeLogRepository;
+import com.copytrading.positions.PositionDto;
+import com.copytrading.positions.PositionsService;
 import com.copytrading.subscription.Subscription;
 import com.copytrading.subscription.SubscriptionRepository;
 import org.springframework.http.HttpStatus;
@@ -15,6 +17,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 public class ChildService {
@@ -24,15 +27,17 @@ public class ChildService {
     private final TradeLogRepository logs;
     private final CopyLogRepository copyLogs;
     private final BrokerAccountRepository brokerRepo;
+    private final PositionsService positionsService;
 
     public ChildService(SubscriptionRepository subs, UserAccountRepository users,
                         TradeLogRepository logs, CopyLogRepository copyLogs,
-                        BrokerAccountRepository brokerRepo) {
+                        BrokerAccountRepository brokerRepo, PositionsService positionsService) {
         this.subs = subs;
         this.users = users;
         this.logs = logs;
         this.copyLogs = copyLogs;
         this.brokerRepo = brokerRepo;
+        this.positionsService = positionsService;
     }
 
     // 5.1 List available masters
@@ -255,11 +260,26 @@ public class ChildService {
                 .thenReturn(Map.of("message", "Copying resumed"));
     }
 
-    // 5.9 Copied trades
+    // 5.9 Copied trades (enriched with live P&L from broker positions)
     public Mono<Map<String, Object>> getCopiedTrades(UUID childId) {
-        return copyLogs.findByChildId(childId).collectList().flatMap(logsList -> {
+        // Fetch live positions in parallel with copy logs
+        Mono<List<PositionDto>> positionsMono = positionsService.getPositionsForUser(childId)
+                .onErrorResume(e -> Mono.just(List.of()));
+
+        return Mono.zip(copyLogs.findByChildId(childId).collectList(), positionsMono).flatMap(tuple -> {
+            var logsList = tuple.getT1();
+            var livePositions = tuple.getT2();
+
+            // Build a lookup map: symbol -> PositionDto (for matching)
+            Map<String, PositionDto> positionMap = livePositions.stream()
+                    .collect(Collectors.toMap(
+                            p -> p.getSymbol().toUpperCase(),
+                            p -> p,
+                            (a, b) -> a // keep first if duplicate
+                    ));
+
             // Get master names for each log
-            Set<UUID> masterIds = logsList.stream().map(l -> l.getMasterId()).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+            Set<UUID> masterIds = logsList.stream().map(l -> l.getMasterId()).filter(Objects::nonNull).collect(Collectors.toSet());
             return reactor.core.publisher.Flux.fromIterable(masterIds)
                     .flatMap(mid -> users.findById(mid).map(u -> Map.entry(mid, u.getName())))
                     .collectMap(Map.Entry::getKey, Map.Entry::getValue)
@@ -280,10 +300,26 @@ public class ChildService {
                             t.put("engineReceivedAt", l.getEngineReceivedAt() != null ? l.getEngineReceivedAt().toString() : null);
                             t.put("childPlacedAt", l.getChildPlacedAt() != null ? l.getChildPlacedAt().toString() : null);
                             t.put("time", l.getCreatedAt() != null ? l.getCreatedAt().toString() : null);
-                            t.put("entry", 0);
-                            t.put("current", 0);
-                            t.put("ltp", 0);
-                            t.put("pnl", 0);
+
+                            // Enrich with live position data if symbol matches
+                            String symbol = l.getSymbol() != null ? l.getSymbol().toUpperCase() : "";
+                            PositionDto pos = positionMap.get(symbol);
+                            if (pos == null && symbol.contains("-")) {
+                                // Try without suffix (e.g., RELIANCE-EQ -> RELIANCE)
+                                pos = positionMap.get(symbol.split("-")[0]);
+                            }
+
+                            if (pos != null) {
+                                t.put("entry", pos.getAvgPrice());
+                                t.put("current", pos.getLtp());
+                                t.put("ltp", pos.getLtp());
+                                t.put("pnl", pos.getPnl());
+                            } else {
+                                t.put("entry", 0);
+                                t.put("current", 0);
+                                t.put("ltp", 0);
+                                t.put("pnl", 0);
+                            }
                             return t;
                         }).toList();
                         return Map.<String, Object>of("trades", trades);
