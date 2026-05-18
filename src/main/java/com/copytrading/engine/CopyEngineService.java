@@ -227,19 +227,26 @@ public class CopyEngineService {
                     }
 
                     // SELL position check: skip if child never bought this instrument via copy trading
-                    // Also skip if child joined AFTER the master's BUY (they never had the position)
+                    // Scenario: Master buys RELIANCE, then child links, then master sells RELIANCE.
+                    // The child never had the BUY copied, so the SELL must NOT be copied (would create naked short).
                     if ("SELL".equalsIgnoreCase(req.getSide())) {
                         return copyLogs.findByMasterIdAndChildId(masterId, childId)
                                 .filter(cl -> req.getSymbol().equals(cl.getSymbol())
                                         && "BUY".equalsIgnoreCase(cl.getTradeType())
-                                        && "SUCCESS".equals(cl.getChildStatus())
-                                        && (childSubscribedAt == null || cl.getCreatedAt() == null || cl.getCreatedAt().isAfter(childSubscribedAt)))
+                                        && "SUCCESS".equals(cl.getChildStatus()))
+                                .filter(cl -> {
+                                    // The BUY must have been copied AFTER the child subscribed
+                                    // If subscription time is unknown, require the BUY log to exist at all
+                                    if (childSubscribedAt == null) return true;
+                                    if (cl.getCreatedAt() == null) return false; // no timestamp = can't verify, treat as invalid
+                                    return !cl.getCreatedAt().isBefore(childSubscribedAt); // BUY at or after subscription time
+                                })
                                 .hasElements()
                                 .flatMap(hasBuy -> {
                                     if (!hasBuy) {
                                         log.info("COPY_SKIP child={} reason=NO_POSITION symbol={} subscribedAt={}", childId, req.getSymbol(), childSubscribedAt);
                                         return logAndReturn(masterId, childId, req, "SKIPPED",
-                                                "Child has no copied BUY position for " + req.getSymbol() + " since subscription. SELL skipped.", null, "NO_POSITION", null, copyGroupId, engineReceivedAt);
+                                                "Child has no copied BUY position for " + req.getSymbol() + " since subscription. SELL skipped to prevent orphan sell.", null, "NO_POSITION", null, copyGroupId, engineReceivedAt);
                                     }
                                     return proceedWithOrder(masterId, childId, brokerAccountId, sub, req, scaledQty, scale, orderKey, copyGroupId, engineReceivedAt);
                                 });
