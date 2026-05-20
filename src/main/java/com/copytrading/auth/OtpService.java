@@ -37,6 +37,7 @@ public class OtpService {
     private final boolean redisAvailable;
     private final SnsClient snsClient;
     private final String smsType;
+    private final String senderId;
 
     public record OtpEntry(String otp, Instant expiresAt, Instant sentAt, int attempts) {}
 
@@ -44,9 +45,11 @@ public class OtpService {
                       @Value("${aws.accessKeyId:}") String accessKeyId,
                       @Value("${aws.secretAccessKey:}") String secretAccessKey,
                       @Value("${aws.region:ap-south-1}") String region,
-                      @Value("${aws.sns.smsType:Transactional}") String smsType) {
+                      @Value("${aws.sns.smsType:Transactional}") String smsType,
+                      @Value("${aws.sns.senderId:}") String senderId) {
         this.redis = redis;
         this.smsType = smsType;
+        this.senderId = senderId != null ? senderId.trim() : "";
 
         // Initialize SNS client
         SnsClient client = null;
@@ -161,29 +164,34 @@ public class OtpService {
 
     private void sendSms(String phone, String otp) {
         if (snsClient == null) {
-            log.info("OTP_SMS_SKIPPED (no SNS client) phone={}... otp={}", phone.substring(0, Math.min(6, phone.length())), otp);
+            log.warn("OTP_SMS_SKIPPED (no SNS client — set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY on server) phone={}... otp={}",
+                    phone.substring(0, Math.min(6, phone.length())), otp);
             return;
         }
         try {
             String message = "Your Ascentra verification code is: " + otp + ". Valid for 5 minutes. Do not share this code.";
-            PublishRequest request = PublishRequest.builder()
+            var builder = PublishRequest.builder()
                     .message(message)
                     .phoneNumber(phone)
                     .messageAttributes(Map.of(
                             "AWS.SNS.SMS.SMSType", MessageAttributeValue.builder()
                                     .stringValue(smsType)
                                     .dataType("String")
-                                    .build(),
-                            "AWS.SNS.SMS.SenderID", MessageAttributeValue.builder()
-                                    .stringValue("ASCENTRA")
-                                    .dataType("String")
                                     .build()
-                    ))
-                    .build();
-            snsClient.publish(request);
-            log.info("OTP_SMS_SENT phone={}...", phone.substring(0, Math.min(6, phone.length())));
+                    ));
+            // India DLT: unregistered Sender IDs block delivery. Omit unless registered in AWS SNS / DLT.
+            if (!senderId.isBlank()) {
+                builder.messageAttributes(Map.of(
+                        "AWS.SNS.SMS.SMSType", MessageAttributeValue.builder()
+                                .stringValue(smsType).dataType("String").build(),
+                        "AWS.SNS.SMS.SenderID", MessageAttributeValue.builder()
+                                .stringValue(senderId).dataType("String").build()
+                ));
+            }
+            var result = snsClient.publish(builder.build());
+            log.info("OTP_SMS_SENT phone={}... messageId={}", phone.substring(0, Math.min(6, phone.length())), result.messageId());
         } catch (Exception e) {
-            log.error("OTP_SMS_FAILED phone={}... error={}", phone.substring(0, Math.min(6, phone.length())), e.getMessage());
+            log.error("OTP_SMS_FAILED phone={}... error={}", phone.substring(0, Math.min(6, phone.length())), e.getMessage(), e);
         }
     }
 }

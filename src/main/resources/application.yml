@@ -61,6 +61,8 @@ aws:
   sns:
     topicArn: ${AWS_SNS_TOPIC_ARN:}
     smsType: ${AWS_SNS_SMS_TYPE:Transactional}
+    # Leave empty unless Sender ID is registered (required for India DLT). Unregistered IDs block SMS.
+    senderId: ${AWS_SNS_SENDER_ID:}
 
 telegram:
   bot-token: ${TELEGRAM_BOT_TOKEN:}
@@ -77,8 +79,8 @@ brokers:
     apiKey: ${FYERS_API_KEY:X3OX66WB1J-100}
     apiSecret: ${FYERS_API_SECRET:SQNAPQKU7M}
   upstox:
-    apiKey: ${UPSTOX_API_KEY:c7282c93-6b03-4865-8cee-38f2912ea648}
-    apiSecret: ${UPSTOX_API_SECRET:dyc5vwazlr}
+    apiKey: ${UPSTOX_API_KEY:63d0dbd0-1e58-42d3-9557-3292f4e41780}
+    apiSecret: ${UPSTOX_API_SECRET:9gq7cl1wmn}
   dhan:
     apiKey: ${DHAN_API_KEY:041e078d}
     apiSecret: ${DHAN_API_SECRET:d5fa0ddf-f6d5-4e5e-9ab7-e68c0de71d90}

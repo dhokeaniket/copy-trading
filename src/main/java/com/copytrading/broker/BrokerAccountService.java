@@ -481,27 +481,64 @@ public class BrokerAccountService {
                 });
     }
 
-    // 3.8 Check session status (enhanced with connectionHealth, margin, brokerName)
+    // 3.8 Check session status (DB + live broker ping when session looks active)
     public Mono<Map<String, Object>> getSessionStatus(UUID accountId, UUID userId) {
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
-                .map(a -> {
-                    boolean active = a.isSessionActive() && a.getSessionExpires() != null
-                            && a.getSessionExpires().isAfter(Instant.now());
-                    String health = active ? "good" : (a.getAccessToken() != null ? "degraded" : "down");
-                    Map<String, Object> r = new LinkedHashMap<>();
-                    r.put("accountId", a.getId());
-                    r.put("status", a.getStatus());
-                    r.put("sessionActive", active);
-                    r.put("broker", a.getBrokerId());
-                    r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
-                    r.put("clientId", a.getClientId());
-                    r.put("connectionHealth", health);
-                    r.put("lastSyncedAt", a.getSessionExpires() != null ? Instant.now().toString() : null);
-                    r.put("expiresAt", a.getSessionExpires() != null ? a.getSessionExpires().toString() : null);
-                    return r;
+                .flatMap(a -> {
+                    Map<String, Object> r = buildSessionStatusMap(a);
+                    boolean active = Boolean.TRUE.equals(r.get("sessionActive"));
+                    if (!active || a.getAccessToken() == null) {
+                        return Mono.just(r);
+                    }
+                    return getMargin(accountId, userId)
+                            .map(margin -> {
+                                applyLiveHealth(r, margin);
+                                r.put("lastSyncedAt", Instant.now().toString());
+                                return r;
+                            })
+                            .onErrorResume(e -> {
+                                r.put("connectionHealth", "degraded");
+                                r.put("liveCheckError", e.getMessage());
+                                r.put("action", "RE_LOGIN");
+                                return Mono.just(r);
+                            });
                 });
+    }
+
+    private Map<String, Object> buildSessionStatusMap(BrokerAccount a) {
+        boolean active = a.isSessionActive() && a.getSessionExpires() != null
+                && a.getSessionExpires().isAfter(Instant.now());
+        String health = active ? "good" : (a.getAccessToken() != null ? "degraded" : "down");
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("accountId", a.getId());
+        r.put("status", a.getStatus());
+        r.put("sessionActive", active);
+        r.put("broker", a.getBrokerId());
+        r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
+        r.put("clientId", a.getClientId());
+        r.put("connectionHealth", health);
+        r.put("lastSyncedAt", a.getLinkedAt() != null ? a.getLinkedAt().toString() : null);
+        r.put("expiresAt", a.getSessionExpires() != null ? a.getSessionExpires().toString() : null);
+        return r;
+    }
+
+    private void applyLiveHealth(Map<String, Object> status, Map<String, Object> margin) {
+        if (marginResponseHasError(margin)) {
+            status.put("connectionHealth", "degraded");
+            status.put("sessionActive", false);
+            status.put("error", margin.get("error"));
+            status.put("errorCode", margin.getOrDefault("errorCode", "SESSION_EXPIRED"));
+            status.put("action", margin.getOrDefault("action", "RE_LOGIN"));
+        } else {
+            status.put("connectionHealth", "good");
+            status.put("availableMargin", margin.getOrDefault("availableMargin", 0));
+        }
+    }
+
+    private boolean marginResponseHasError(Map<String, Object> margin) {
+        return margin != null && margin.containsKey("error");
     }
 
     // 3.8b Test connection — tries to fetch margin to verify broker is reachable
@@ -521,10 +558,18 @@ public class BrokerAccountService {
                             .map(margin -> {
                                 Map<String, Object> r = new LinkedHashMap<>();
                                 r.put("accountId", a.getId().toString());
+                                r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
+                                if (marginResponseHasError(margin)) {
+                                    r.put("connectionHealth", "degraded");
+                                    r.put("sessionActive", false);
+                                    r.put("message", margin.get("error"));
+                                    r.put("errorCode", margin.get("errorCode"));
+                                    r.put("action", margin.get("action"));
+                                    return (Map<String, Object>) r;
+                                }
                                 r.put("connectionHealth", "good");
                                 r.put("sessionActive", true);
                                 r.put("margin", margin.getOrDefault("availableMargin", 0));
-                                r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
                                 r.put("message", "Connection successful");
                                 return (Map<String, Object>) r;
                             })
@@ -572,6 +617,12 @@ public class BrokerAccountService {
                 fallback.put("error", friendlyBrokerError(a.getBrokerId(), e.getMessage()));
                 fallback.put("errorCode", "SESSION_EXPIRED");
                 fallback.put("action", "RE_LOGIN");
+                if (isAuthError(e)) {
+                    a.setSessionActive(false);
+                    a.setStatus("AUTH_REQUIRED");
+                    a.setAccessToken(null);
+                    return repo.save(a).thenReturn(fallback);
+                }
                 return Mono.just(fallback);
             });
         });
@@ -1002,6 +1053,13 @@ public class BrokerAccountService {
                     long start = System.currentTimeMillis();
                     return getMargin(accountId, userId)
                             .map(margin -> {
+                                if (marginResponseHasError(margin)) {
+                                    Map<String, Object> r = buildSignal(a, 1, "error",
+                                            String.valueOf(margin.getOrDefault("error", "Broker API error")));
+                                    r.put("errorCode", margin.get("errorCode"));
+                                    r.put("action", margin.get("action"));
+                                    return r;
+                                }
                                 long latency = System.currentTimeMillis() - start;
                                 int bars;
                                 String quality;
@@ -1266,6 +1324,12 @@ public class BrokerAccountService {
     private static double toDouble(Object val) {
         if (val instanceof Number n) return n.doubleValue();
         try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return 0; }
+    }
+
+    private static boolean isAuthError(Throwable e) {
+        String msg = e != null ? e.getMessage() : null;
+        return msg != null && (msg.contains("401") || msg.contains("403")
+                || msg.contains("Unauthorized") || msg.contains("Invalid"));
     }
 
     private static String friendlyBrokerError(String broker, String rawError) {

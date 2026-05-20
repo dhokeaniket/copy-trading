@@ -61,7 +61,10 @@ public class GrowwApiClient {
     public Mono<Map> getMargin(String accessToken) {
         return client.get().uri("/v1/margins/detail/user")
                 .header("Authorization", "Bearer " + accessToken)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Groww " + r.statusCode() + ": " + e))))
+                .bodyToMono(Map.class);
     }
 
     public Mono<Map> getPositions(String accessToken, String segment) {
@@ -119,7 +122,10 @@ public class GrowwApiClient {
     public Mono<Map> getProfile(String accessToken) {
         return client.get().uri("/v1/user/profile")
                 .header("Authorization", "Bearer " + accessToken)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Groww " + r.statusCode() + ": " + e))))
+                .bodyToMono(Map.class);
     }
 
     public Mono<Map> listTrades(String accessToken, String segment) {

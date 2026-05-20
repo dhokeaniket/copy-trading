@@ -21,7 +21,6 @@ jobs:
             cd /home/ec2-user/copy-trading
             git stash || true
             git checkout -- . || true
-            rm -f gradle.properties
             git pull origin main
             chmod +x gradlew
             export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
