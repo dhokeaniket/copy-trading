@@ -182,6 +182,11 @@ public class OrderPollingService {
             String status = extractField(order, "status", "order_status");
             if (orderId == null || orderId.isBlank()) continue;
 
+            // Skip until order is filled — do NOT mark as known while still open/pending
+            if (!isFilledOrderStatus(status)) {
+                continue;
+            }
+
             // 3-layer dedup: in-memory set → processingOrders lock → (DB checked on startup/reset)
             if (known.contains(orderId)) continue;
             if (!processingOrders.add(orderId)) continue;
@@ -189,11 +194,6 @@ public class OrderPollingService {
 
             // Also mark in Redis (survives restarts)
             pollingCache.markOrderKnown(masterId, orderId).subscribe();
-
-            if (!"COMPLETE".equalsIgnoreCase(status) && !"EXECUTED".equalsIgnoreCase(status)
-                    && !"TRADED".equalsIgnoreCase(status)) {
-                continue;
-            }
 
             // Extract order details
             String symbol = extractField(order, "tradingsymbol", "trading_symbol", "symbol", "tradingSymbol");
@@ -268,6 +268,12 @@ public class OrderPollingService {
             newCount++;
         }
         return newCount;
+    }
+
+    private static boolean isFilledOrderStatus(String status) {
+        if (status == null || status.isBlank()) return false;
+        String s = status.trim().toUpperCase();
+        return "COMPLETE".equals(s) || "COMPLETED".equals(s) || "EXECUTED".equals(s) || "TRADED".equals(s);
     }
 
     private String extractField(Map<String, Object> map, String... keys) {
