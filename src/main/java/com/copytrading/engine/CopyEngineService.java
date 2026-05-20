@@ -138,8 +138,10 @@ public class CopyEngineService {
         // Cleanup old entries (older than 2 minutes) to prevent memory leak
         recentOrderKeys.entrySet().removeIf(e -> (System.currentTimeMillis() - e.getValue()) > 120_000);
 
-        log.info("COPY_ENGINE_START master={} symbol={} qty={} side={} orderKey={} copyGroupId={}",
-                masterId, req.getSymbol(), req.getQty(), req.getSide(), orderKey, copyGroupId);
+        req.setProduct(BrokerProductMapper.normalizeProduct(req.getProduct()));
+
+        log.info("COPY_ENGINE_START master={} symbol={} qty={} side={} product={} orderKey={} copyGroupId={}",
+                masterId, req.getSymbol(), req.getQty(), req.getSide(), req.getProduct(), orderKey, copyGroupId);
 
         return subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE")
                 .collectList()
@@ -299,6 +301,15 @@ public class CopyEngineService {
                                                          BrokerAccount account, CopyTradeRequest req,
                                                          int scaledQty, double scale, String orderKey,
                                                          String copyGroupId, Instant engineReceivedAt) {
+        boolean isFnO = symbolMapper.isFnO(req.getSymbol());
+        if (BrokerProductMapper.shouldSkipIntradayCopy(req.getProduct(), isFnO)) {
+            String msg = BrokerProductMapper.marketClosedMessage();
+            log.info("COPY_SKIP child={} reason=MARKET_CLOSED symbol={} product={}", childId, req.getSymbol(), req.getProduct());
+            notifications.push(childId, "Copy trade skipped", msg, "MARKET_CLOSED").subscribe();
+            notifications.push(masterId, "Copy trade skipped",
+                    msg + " (" + req.getSide() + " " + req.getSymbol() + " for child)", "MARKET_CLOSED").subscribe();
+            return logAndReturn(masterId, childId, req, "SKIPPED", msg, account.getBrokerId(), "MARKET_CLOSED", null, copyGroupId, engineReceivedAt);
+        }
         UUID brokerAccountId = account.getId();
         long startMs = System.currentTimeMillis();
         return placeOrderOnBroker(account, req.getSymbol(), scaledQty,
@@ -389,7 +400,7 @@ public class CopyEngineService {
                                           double triggerPrice, String exchange) {
         String sym = symbolMapper.translate(symbol, "GROWW", account.getBrokerId());
         String token = account.getAccessToken();
-        String prod = product != null ? product : "MIS";
+        String prod = BrokerProductMapper.normalizeProduct(product);
         String oType = orderType != null ? orderType : "MARKET";
         boolean isMarket = oType.equalsIgnoreCase("MARKET");
         boolean isSL = oType.equalsIgnoreCase("SL") || oType.equalsIgnoreCase("SL-M");
@@ -496,8 +507,7 @@ public class CopyEngineService {
                 // REQUIRED: dhanClientId, securityId (numeric), exchangeSegment
                 // securityId resolved from Dhan instrument CSV (loaded on startup)
                 String dhanExch = isFnO ? ("BSE".equals(exch) ? "BSE_FNO" : "NSE_FNO") : ("BSE".equals(exch) ? "BSE_EQ" : "NSE_EQ");
-                String dhanProd = prod.equalsIgnoreCase("CNC") ? "CNC"
-                        : prod.equalsIgnoreCase("NRML") ? "MARGIN" : "INTRADAY";
+                String dhanProd = BrokerProductMapper.toDhanProductType(prod, isFnO);
                 String secId = instruments.getDhanSecurityId(sym, isFnO);
                 String clientId = account.getClientId() != null ? account.getClientId() : "";
 

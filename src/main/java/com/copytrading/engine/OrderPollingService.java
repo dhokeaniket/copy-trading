@@ -251,7 +251,7 @@ public class OrderPollingService {
             req.setSymbol(symbol);
             req.setQty(qty);
             req.setSide(side.toUpperCase());
-            req.setProduct(product != null ? product : "MIS");
+            req.setProduct(BrokerProductMapper.normalizeProduct(product));
             req.setOrderType(detectedOrderType != null ? detectedOrderType : "MARKET");
             req.setExchange(exchange != null ? exchange : "NSE");
             // For LIMIT orders, pass the actual price; for MARKET, price=0
