@@ -99,9 +99,12 @@ public class UpstoxApiClient {
 
     public Mono<Map> getOrders(String accessToken) {
         return client.get()
-                .uri("/v2/order/retrieve/all")
+                .uri("/v2/order/retrieve-all")
                 .header("Authorization", "Bearer " + accessToken)
-                .retrieve().bodyToMono(Map.class);
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Upstox orders " + r.statusCode() + ": " + e))))
+                .bodyToMono(Map.class);
     }
 
     public Mono<Map> getTrades(String accessToken) {
