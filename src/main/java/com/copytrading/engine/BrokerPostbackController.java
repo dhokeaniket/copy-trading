@@ -10,7 +10,6 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
-import java.time.Instant;
 import java.util.*;
 
 /**
@@ -32,13 +31,16 @@ public class BrokerPostbackController {
     private final BrokerAccountRepository brokerRepo;
     private final TradeRepository tradeRepo;
     private final TradeUpdatesHub hub;
+    private final CanonicalOrderMapper canonicalMapper;
 
     public BrokerPostbackController(CopyEngineService copyEngine, BrokerAccountRepository brokerRepo,
-                                     TradeRepository tradeRepo, TradeUpdatesHub hub) {
+                                     TradeRepository tradeRepo, TradeUpdatesHub hub,
+                                     CanonicalOrderMapper canonicalMapper) {
         this.copyEngine = copyEngine;
         this.brokerRepo = brokerRepo;
         this.tradeRepo = tradeRepo;
         this.hub = hub;
+        this.canonicalMapper = canonicalMapper;
     }
 
     /**
@@ -49,60 +51,29 @@ public class BrokerPostbackController {
     public Mono<Map<String, String>> zerodhaPostback(@RequestBody Map<String, Object> payload) {
         log.info("ZERODHA_POSTBACK received: {}", payload);
 
-        String status = String.valueOf(payload.getOrDefault("status", ""));
-        if (!"COMPLETE".equalsIgnoreCase(status)) {
-            return Mono.just(Map.of("message", "Ignored non-complete order: " + status));
+        CanonicalOrder canonical = canonicalMapper.fromBrokerOrder(payload, "ZERODHA");
+        if (!canonical.isReadyForCopy()) {
+            return Mono.just(Map.of("message", "Ignored order status: " + canonical.getStatus()));
         }
 
-        String symbol = String.valueOf(payload.getOrDefault("tradingsymbol", ""));
-        String side = String.valueOf(payload.getOrDefault("transaction_type", ""));
-        int qty = payload.containsKey("quantity") ? ((Number) payload.get("quantity")).intValue() : 0;
-        String product = String.valueOf(payload.getOrDefault("product", "MIS"));
-        String orderId = String.valueOf(payload.getOrDefault("order_id", ""));
         String userId = String.valueOf(payload.getOrDefault("user_id", ""));
 
-        if (symbol.isBlank() || side.isBlank() || qty == 0) {
-            return Mono.just(Map.of("message", "Missing required fields"));
-        }
-
-        // Find the master who owns this Zerodha account
         return brokerRepo.findByBrokerId("ZERODHA")
                 .filter(a -> a.getClientId() != null && a.getClientId().equals(userId))
                 .next()
                 .flatMap(account -> {
                     UUID masterId = account.getUserId();
-                    log.info("ZERODHA_POSTBACK_MATCHED master={} symbol={} side={} qty={}", masterId, symbol, side, qty);
+                    canonical.setSourceBrokerId(account.getBrokerId());
+                    log.info("ZERODHA_POSTBACK_MATCHED master={} symbol={} side={} qty={}",
+                            masterId, canonical.getSymbol(), canonical.getSide(), canonical.getFilledQty());
 
-                    // Save master trade
-                    Trade t = new Trade();
-                    t.setUserId(masterId);
-                    t.setBrokerAccountId(account.getId());
-                    t.setBrokerOrderId(orderId);
-                    t.setInstrument(symbol);
-                    t.setExchange("NSE");
-                    t.setTransactionType(side);
-                    t.setQuantity(qty);
-                    t.setProduct(product);
-                    t.setStatus("EXECUTED");
-                    t.setOrderType("MARKET");
-                    t.setSegment("EQUITY");
-                    t.setPlacedAt(Instant.now());
-                    t.setExecutedAt(Instant.now());
-                    tradeRepo.save(t).subscribe();
+                    tradeRepo.save(canonicalMapper.toMasterTrade(canonical, masterId, account.getId())).subscribe();
 
-                    hub.publish("{\"event\":\"TRADE_DETECTED\",\"source\":\"POSTBACK\",\"broker\":\"ZERODHA\",\"instrument\":\"" + symbol + "\",\"side\":\"" + side + "\",\"qty\":" + qty + ",\"latency\":\"<100ms\"}");
+                    hub.publish("{\"event\":\"TRADE_DETECTED\",\"source\":\"POSTBACK\",\"broker\":\"ZERODHA\",\"instrument\":\""
+                            + canonical.getSymbol() + "\",\"side\":\"" + canonical.getSide() + "\",\"qty\":"
+                            + canonical.getFilledQty() + ",\"latency\":\"<100ms\"}");
 
-                    // Copy to children
-                    CopyTradeRequest req = new CopyTradeRequest();
-                    req.setSymbol(symbol);
-                    req.setQty(qty);
-                    req.setSide(side);
-                    req.setProduct(product);
-                    req.setOrderType("MARKET");
-                    req.setPrice(0);
-                    req.setMasterBrokerId(account.getBrokerId());
-
-                    return copyEngine.copyTrade(masterId, req)
+                    return copyEngine.copyTrade(masterId, canonicalMapper.toCopyTradeRequest(canonical))
                             .thenReturn(Map.of("message", "Trade detected and copied via postback"));
                 })
                 .defaultIfEmpty(Map.of("message", "No matching master account found for user_id: " + userId));

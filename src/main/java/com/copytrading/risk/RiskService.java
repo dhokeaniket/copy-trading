@@ -107,6 +107,52 @@ public class RiskService {
         }
     }
 
+    /**
+     * Live risk dashboard for UI: limits, today's usage, margin utilization %.
+     */
+    public Mono<Map<String, Object>> getRiskStatus(UUID childId, UUID brokerAccountId) {
+        return getRiskRules(childId).flatMap(rule -> {
+            Instant todayStart = Instant.now().minus(Duration.ofHours(12));
+            Mono<Long> todayTradesMono = copyLogs.findByChildId(childId)
+                    .filter(cl -> cl.getCreatedAt() != null && cl.getCreatedAt().isAfter(todayStart))
+                    .filter(cl -> "SUCCESS".equals(cl.getChildStatus()))
+                    .count();
+            Mono<Long> openPositionsMono = trades.findByUserIdAndStatus(childId, "EXECUTED").count();
+            Mono<Map<String, Object>> marginMono = brokerAccountId != null
+                    ? brokerService.getMargin(brokerAccountId, childId)
+                            .onErrorReturn(Map.of("availableMargin", 0, "totalFunds", 0, "usedMargin", 0))
+                    : Mono.just(Map.of("availableMargin", 0, "totalFunds", 0, "usedMargin", 0));
+
+            return Mono.zip(todayTradesMono, openPositionsMono, marginMono)
+                    .map(t -> {
+                        long todayTrades = t.getT1();
+                        long openPositions = t.getT2();
+                        Map<String, Object> margin = t.getT3();
+                        double total = toDouble(margin.getOrDefault("totalFunds", 0));
+                        double available = toDouble(margin.getOrDefault("availableMargin", 0));
+                        double usedPct = total > 0 ? ((total - available) / total) * 100.0 : 0;
+
+                        Map<String, Object> m = new java.util.LinkedHashMap<>();
+                        m.put("maxTradesPerDay", rule.getMaxTradesPerDay());
+                        m.put("tradesToday", todayTrades);
+                        m.put("tradesRemaining", Math.max(0, rule.getMaxTradesPerDay() - todayTrades));
+                        m.put("maxOpenPositions", rule.getMaxOpenPositions());
+                        m.put("openPositions", openPositions);
+                        m.put("positionsRemaining", Math.max(0, rule.getMaxOpenPositions() - openPositions));
+                        m.put("maxCapitalExposure", rule.getMaxCapitalExposure());
+                        m.put("marginCheckEnabled", rule.isMarginCheckEnabled());
+                        m.put("marginUtilizationPct", Math.round(usedPct * 10) / 10.0);
+                        m.put("marginBlocked", rule.isMarginCheckEnabled() && usedPct >= rule.getMaxCapitalExposure());
+                        m.put("availableMargin", available);
+                        m.put("totalFunds", total);
+                        m.put("allowed", todayTrades < rule.getMaxTradesPerDay()
+                                && openPositions < rule.getMaxOpenPositions()
+                                && (!rule.isMarginCheckEnabled() || usedPct < rule.getMaxCapitalExposure()));
+                        return m;
+                    });
+        });
+    }
+
     public Mono<RiskRule> getRiskRules(UUID userId) {
         return riskRepo.findByUserId(userId)
                 .switchIfEmpty(Mono.just(defaultRules(userId)));

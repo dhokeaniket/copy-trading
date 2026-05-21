@@ -42,6 +42,7 @@ public class OrderPollingService {
     private final TradeUpdatesHub hub;
     private final PollingStateCache pollingCache;
     private final NotificationService notifications;
+    private final CanonicalOrderMapper canonicalMapper;
 
     // In-memory fallback for known orders (used alongside Redis)
     private final ConcurrentHashMap<UUID, Set<String>> knownOrders = new ConcurrentHashMap<>();
@@ -66,7 +67,8 @@ public class OrderPollingService {
                                TradeRepository tradeRepo,
                                TradeUpdatesHub hub,
                                PollingStateCache pollingCache,
-                               NotificationService notifications) {
+                               NotificationService notifications,
+                               CanonicalOrderMapper canonicalMapper) {
         this.activeAccountRepo = activeAccountRepo;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -76,6 +78,7 @@ public class OrderPollingService {
         this.hub = hub;
         this.pollingCache = pollingCache;
         this.notifications = notifications;
+        this.canonicalMapper = canonicalMapper;
     }
 
     public boolean isPollingEnabled() { return pollingEnabled; }
@@ -178,79 +181,35 @@ public class OrderPollingService {
             if (!(orderObj instanceof Map)) continue;
             Map<String, Object> order = (Map<String, Object>) orderObj;
 
-            String orderId = OrderNormalizer.extractOrderId(order);
-            String status = OrderNormalizer.extractStatus(order);
-            if (orderId == null || orderId.isBlank()) continue;
+            CanonicalOrder canonical = canonicalMapper.fromBrokerOrder(order, account.getBrokerId());
+            if (!canonical.isReadyForCopy()) continue;
 
-            int filledQty = OrderNormalizer.extractFilledQty(order);
-            if (!OrderNormalizer.shouldProcessForCopy(status, filledQty)) {
-                continue;
-            }
+            String orderId = canonical.getOrderId();
+            String symbol = canonical.getSymbol();
+            String side = canonical.getSide();
+            int qty = canonical.getFilledQty();
 
             // 3-layer dedup: in-memory set → processingOrders lock → (DB checked on startup/reset)
             if (known.contains(orderId)) continue;
             if (!processingOrders.add(orderId)) continue;
             known.add(orderId);
 
-            // Also mark in Redis (survives restarts)
             pollingCache.markOrderKnown(masterId, orderId).subscribe();
 
-            String symbol = OrderNormalizer.extractSymbol(order);
-            String side = OrderNormalizer.extractSide(order);
-            String product = OrderNormalizer.extractField(order, "product", "productType", "product_type");
-            String detectedOrderType = OrderNormalizer.extractField(order, "order_type", "orderType");
-            double detectedPrice = OrderNormalizer.extractPrice(order);
-            double triggerPrice = OrderNormalizer.extractTriggerPrice(order);
-            String exchange = OrderNormalizer.extractField(order, "exchange");
-            String segment = OrderNormalizer.extractField(order, "segment");
+            log.info("NEW_ORDER_DETECTED master={} broker={} orderId={} symbol={} side={} qty={} segment={}",
+                    masterId, account.getBrokerId(), orderId, symbol, side, qty, canonical.getSegment());
 
-            if (symbol == null || side == null || filledQty < 1) continue;
-
-            int qty = filledQty;
-
-            log.info("NEW_ORDER_DETECTED master={} broker={} orderId={} symbol={} side={} qty={}",
-                    masterId, account.getBrokerId(), orderId, symbol, side, qty);
-
-            // Save master's trade to DB (so master sees it in trade history)
-            Trade masterTrade = new Trade();
-            masterTrade.setUserId(masterId);
-            masterTrade.setBrokerAccountId(account.getId());
-            masterTrade.setBrokerOrderId(orderId);
-            masterTrade.setInstrument(symbol);
-            masterTrade.setExchange(exchange != null ? exchange : "NSE");
-            boolean detectedFnO = symbol != null && (symbol.matches(".*\\d+(CE|PE)$") || symbol.toUpperCase().contains("FUT"));
-            masterTrade.setSegment(detectedFnO ? "FNO" : (segment != null ? segment : "EQUITY"));
-            masterTrade.setOrderType(detectedOrderType != null ? detectedOrderType : "MARKET");
-            masterTrade.setTransactionType(side.toUpperCase());
-            masterTrade.setQuantity(qty);
-            masterTrade.setPrice(detectedPrice);
-            masterTrade.setProduct(product != null ? product : "MIS");
-            masterTrade.setStatus("EXECUTED");
-            masterTrade.setPlacedAt(Instant.now());
-            masterTrade.setExecutedAt(Instant.now());
+            Trade masterTrade = canonicalMapper.toMasterTrade(canonical, masterId, account.getId());
             tradeRepo.save(masterTrade).subscribe(
                     saved -> log.info("MASTER_TRADE_SAVED id={} symbol={}", saved.getId(), symbol),
                     err -> log.warn("MASTER_TRADE_SAVE_FAIL: {}", err.getMessage())
             );
 
-            // Publish WebSocket event
             hub.publish("{\"event\":\"TRADE_DETECTED\",\"masterId\":\"" + masterId +
                     "\",\"instrument\":\"" + symbol + "\",\"side\":\"" + side +
                     "\",\"qty\":" + qty + ",\"broker\":\"" + account.getBrokerId() + "\"}");
 
-            // Trigger copy to all children
-            CopyTradeRequest req = new CopyTradeRequest();
-            req.setSymbol(symbol);
-            req.setQty(qty);
-            req.setSide(side.toUpperCase());
-            req.setProduct(BrokerProductMapper.normalizeProduct(product));
-            req.setOrderType(detectedOrderType != null ? detectedOrderType : "MARKET");
-            req.setExchange(exchange != null ? exchange : "NSE");
-            // For LIMIT orders, pass the actual price; for MARKET, price=0
-            boolean isLimitOrder = "LIMIT".equalsIgnoreCase(detectedOrderType);
-            req.setPrice(isLimitOrder ? detectedPrice : 0);
-            req.setTriggerPrice(triggerPrice);
-            req.setMasterBrokerId(account.getBrokerId());
+            CopyTradeRequest req = canonicalMapper.toCopyTradeRequest(canonical);
 
             copyEngine.copyTrade(masterId, req)
                     .subscribe(

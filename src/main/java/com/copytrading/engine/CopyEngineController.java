@@ -7,7 +7,10 @@ import reactor.core.publisher.Mono;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import com.copytrading.subscription.CopySides;
+
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -90,5 +93,29 @@ public class CopyEngineController {
         r.put("autoResetEnabled", true);
         r.put("pollingEnabled", pollingService.isPollingEnabled());
         return Mono.just(r);
+    }
+
+    /** FE metadata: skip reasons, copy sides, notification types. */
+    @GetMapping("/metadata")
+    public Mono<Map<String, Object>> getMetadata() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("copySidesOptions", List.of(
+                Map.of("id", CopySides.BUY_ONLY, "label", "Buy only (safe default)",
+                        "description", "Copy BUY; SELL only with copied BUY + live position"),
+                Map.of("id", CopySides.BUY_AND_SELL, "label", "Buy and sell",
+                        "description", "Copy BUY and SELL when child has live long qty"),
+                Map.of("id", CopySides.MIRROR, "label", "Mirror master",
+                        "description", "Copy all sides; optional naked short if allowShortSelling")
+        ));
+        m.put("skipReasons", List.of(
+                "ZERO_QUANTITY", "SUB_LOT_SIZE", "RISK_LIMIT", "MAX_CAPITAL_EXPOSURE",
+                "NO_POSITION", "INSUFFICIENT_POSITION", "SELL_BLOCKED", "MARKET_CLOSED",
+                "SESSION_EXPIRED"
+        ));
+        m.put("notificationTypes", List.of(
+                "TRADE_COPIED", "TRADE_FAILED", "MARKET_CLOSED", "SESSION_EXPIRED",
+                "SESSION_EXPIRING", "SESSION_REMINDER"
+        ));
+        return Mono.just(m);
     }
 }

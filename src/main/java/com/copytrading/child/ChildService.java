@@ -228,6 +228,8 @@ public class ChildService {
                     r.put("masterId", s.getMasterId());
                     r.put("masterName", m.getName());
                     r.put("scalingFactor", s.getScalingFactor());
+                    r.put("copySides", CopySides.normalize(s.getCopySides()));
+                    r.put("allowShortSelling", s.isAllowShortSelling());
                     r.put("copyingStatus", s.getCopyingStatus());
                     r.put("subscribedAt", s.getCreatedAt());
                     r.put("brokerAccountId", s.getBrokerAccountId());
@@ -252,6 +254,24 @@ public class ChildService {
         return subs.findByChildId(childId).next()
                 .map(s -> Map.<String, Object>of("scalingFactor", s.getScalingFactor()))
                 .switchIfEmpty(Mono.just(Map.of("scalingFactor", 1.0)));
+    }
+
+    public Mono<Map<String, Object>> updateCopySettings(UUID childId, UUID masterId, String copySides,
+                                                        Boolean allowShortSelling) {
+        return subs.findByMasterIdAndChildId(masterId, childId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Subscription not found")))
+                .flatMap(s -> {
+                    applyCopyPreferences(s, copySides, allowShortSelling);
+                    return subs.save(s);
+                })
+                .map(s -> {
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("masterId", masterId);
+                    r.put("copySides", CopySides.normalize(s.getCopySides()));
+                    r.put("allowShortSelling", s.isAllowShortSelling());
+                    r.put("message", "Copy settings updated");
+                    return r;
+                });
     }
 
     // 5.6 Update scaling

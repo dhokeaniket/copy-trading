@@ -54,13 +54,24 @@ public class RiskController {
     }
 
     @GetMapping("/check")
-    public Mono<Map<String, Object>> checkRisk(@AuthenticationPrincipal String userId) {
-        return riskService.checkRiskLimits(UUID.fromString(userId))
-                .map(result -> {
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    m.put("allowed", result.isEmpty());
-                    m.put("reason", result.isEmpty() ? null : result);
-                    return m;
-                });
+    public Mono<Map<String, Object>> checkRisk(@AuthenticationPrincipal String userId,
+                                                @RequestParam(required = false) UUID brokerAccountId) {
+        UUID childId = UUID.fromString(userId);
+        Mono<String> checkMono = brokerAccountId != null
+                ? riskService.checkRiskLimits(childId, brokerAccountId)
+                : riskService.checkRiskLimits(childId);
+        return checkMono.map(result -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("allowed", result.isEmpty());
+            m.put("reason", result.isEmpty() ? null : result);
+            return m;
+        });
+    }
+
+    /** Live risk dashboard for child UI (limits vs current usage + margin %). */
+    @GetMapping("/status")
+    public Mono<Map<String, Object>> getRiskStatus(@AuthenticationPrincipal String userId,
+                                                     @RequestParam(required = false) UUID brokerAccountId) {
+        return riskService.getRiskStatus(UUID.fromString(userId), brokerAccountId);
     }
 }

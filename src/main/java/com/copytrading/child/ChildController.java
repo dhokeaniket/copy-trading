@@ -2,6 +2,7 @@ package com.copytrading.child;
 
 import com.copytrading.child.dto.BulkSubscribeRequest;
 import com.copytrading.child.dto.ChildScalingRequest;
+import com.copytrading.child.dto.CopySettingsRequest;
 import com.copytrading.child.dto.MasterIdRequest;
 import com.copytrading.child.dto.SubscribeRequest;
 import com.copytrading.positions.PositionsService;
@@ -80,6 +81,14 @@ public class ChildController {
     public Mono<Map<String, Object>> updateScaling(@AuthenticationPrincipal String userId,
                                                     @RequestBody ChildScalingRequest req) {
         return service.updateScaling(UUID.fromString(userId), req.getMasterId(), req.getScalingFactor());
+    }
+
+    @Operation(summary = "Update copy sides / short selling", description = "BUY_ONLY, BUY_AND_SELL, or MIRROR for a master subscription")
+    @PatchMapping(value = "/subscriptions/copy-settings", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> updateCopySettings(@AuthenticationPrincipal String userId,
+                                                          @RequestBody CopySettingsRequest req) {
+        return service.updateCopySettings(UUID.fromString(userId), req.getMasterId(),
+                req.getCopySides(), req.getAllowShortSelling());
     }
 
     @PostMapping(value = "/copying/pause", consumes = MediaType.APPLICATION_JSON_VALUE)

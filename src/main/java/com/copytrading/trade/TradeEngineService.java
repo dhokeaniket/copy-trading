@@ -1,5 +1,6 @@
 package com.copytrading.trade;
 
+import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.broker.BrokerAccountService;
 import com.copytrading.engine.CopyEngineService;
 import com.copytrading.engine.CopyTradeRequest;
@@ -22,6 +23,7 @@ public class TradeEngineService {
     private static final Logger log = LoggerFactory.getLogger(TradeEngineService.class);
 
     private final TradeRepository trades;
+    private final BrokerAccountRepository brokerRepo;
     private final BrokerAccountService brokerService;
     private final CopyEngineService copyEngine;
     private final CopyLogRepository copyLogs;
@@ -29,11 +31,13 @@ public class TradeEngineService {
     private final NotificationService notifications;
     private final TradeUpdatesHub hub;
 
-    public TradeEngineService(TradeRepository trades, BrokerAccountService brokerService,
+    public TradeEngineService(TradeRepository trades, BrokerAccountRepository brokerRepo,
+                              BrokerAccountService brokerService,
                               CopyEngineService copyEngine, CopyLogRepository copyLogs,
                               SubscriptionRepository subs, NotificationService notifications,
                               TradeUpdatesHub hub) {
         this.trades = trades;
+        this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
         this.copyEngine = copyEngine;
         this.copyLogs = copyLogs;
@@ -93,7 +97,11 @@ public class TradeEngineService {
                             req.setProduct(product);
                             req.setOrderType(orderType);
                             req.setPrice(price);
-                            return copyEngine.copyTrade(userId, req).map(copyResult -> {
+                            req.setExchange(exchange);
+                            return brokerRepo.findById(brokerAccountId)
+                                    .doOnNext(a -> req.setMasterBrokerId(a.getBrokerId()))
+                                    .then(copyEngine.copyTrade(userId, req))
+                                    .map(copyResult -> {
                                 int replCount = (int) copyResult.getOrDefault("childrenTotal", 0);
                                 saved.setReplicationsTriggered(replCount);
                                 Map<String, Object> r = new LinkedHashMap<>();
