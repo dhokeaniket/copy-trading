@@ -74,4 +74,33 @@ public class RiskController {
                                                      @RequestParam(required = false) UUID brokerAccountId) {
         return riskService.getRiskStatus(UUID.fromString(userId), brokerAccountId);
     }
+
+    @GetMapping("/exposure")
+    public Mono<Map<String, Object>> getExposure(@AuthenticationPrincipal String userId,
+                                                  @RequestParam(required = false) UUID brokerAccountId) {
+        return riskService.getExposure(UUID.fromString(userId), brokerAccountId);
+    }
+
+    @PostMapping(value = "/check-trade", consumes = org.springframework.http.MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> checkTrade(@AuthenticationPrincipal String userId,
+                                                 @RequestParam(required = false) UUID brokerAccountId,
+                                                 @RequestBody Map<String, Object> body) {
+        return riskService.checkTrade(UUID.fromString(userId), brokerAccountId, body);
+    }
+
+    @PostMapping(value = "/pause", consumes = org.springframework.http.MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> pause(@AuthenticationPrincipal String userId,
+                                            @RequestBody Map<String, Object> body) {
+        String reason = body.containsKey("reason") ? String.valueOf(body.get("reason")) : "Manual pause";
+        java.time.Instant until = null;
+        if (body.containsKey("pauseUntil")) {
+            try { until = java.time.Instant.parse(String.valueOf(body.get("pauseUntil"))); } catch (Exception ignored) {}
+        }
+        return riskService.pauseCopy(UUID.fromString(userId), reason, until);
+    }
+
+    @PostMapping("/resume")
+    public Mono<Map<String, Object>> resume(@AuthenticationPrincipal String userId) {
+        return riskService.resumeCopy(UUID.fromString(userId));
+    }
 }

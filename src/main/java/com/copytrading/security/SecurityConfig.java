@@ -60,6 +60,8 @@ public class SecurityConfig {
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/validate-password"),
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/brokers/callback"),
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/brokers/postback/**"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/engine/postback/**"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/telegram/webhook"),
                         new PathPatternParserServerWebExchangeMatcher("/api/auth/**")
                 )
         ));
@@ -84,6 +86,8 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/auth/validate-password").permitAll()
                         .pathMatchers("/api/v1/brokers/callback").permitAll()
                         .pathMatchers("/api/v1/brokers/postback/**").permitAll()
+                        .pathMatchers("/api/v1/engine/postback/**").permitAll()
+                        .pathMatchers("/api/v1/telegram/webhook").permitAll()
                         .pathMatchers("/ws/**").permitAll()
                         .pathMatchers("/api/auth/**").permitAll()
                         .pathMatchers("/api/v1/admin/**").hasRole("ADMIN")

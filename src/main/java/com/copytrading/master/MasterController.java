@@ -130,6 +130,12 @@ public class MasterController {
         return service.getTradeHistory(UUID.fromString(userId));
     }
 
+    @Operation(summary = "Master trade P&L", description = "Spec §2.4 — master P&L summary with trades")
+    @GetMapping("/trade-pnl")
+    public Mono<Map<String, Object>> getTradePnl(@AuthenticationPrincipal String userId) {
+        return service.getTradePnlSummary(UUID.fromString(userId));
+    }
+
     // Active account
     @PostMapping(value = "/active-account", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> setActiveAccount(@AuthenticationPrincipal String userId,

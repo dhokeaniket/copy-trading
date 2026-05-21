@@ -10,6 +10,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -45,6 +46,12 @@ public class RiskService {
     public Mono<String> checkRiskLimits(UUID childId, UUID brokerAccountId) {
         return riskRepo.findByUserId(childId)
                 .flatMap(rule -> {
+                    if (rule.isCopyPaused()) {
+                        return Mono.just("COPY_PAUSED: Copy trading is paused");
+                    }
+                    if (rule.getPausedUntil() != null && Instant.now().isBefore(rule.getPausedUntil())) {
+                        return Mono.just("COPY_PAUSED: Paused until " + rule.getPausedUntil());
+                    }
                     Instant todayStart = Instant.now().minus(Duration.ofHours(12));
                     return copyLogs.findByChildId(childId)
                             .filter(cl -> cl.getCreatedAt() != null && cl.getCreatedAt().isAfter(todayStart))
@@ -144,13 +151,84 @@ public class RiskService {
                         m.put("marginUtilizationPct", Math.round(usedPct * 10) / 10.0);
                         m.put("marginBlocked", rule.isMarginCheckEnabled() && usedPct >= rule.getMaxCapitalExposure());
                         m.put("availableMargin", available);
+                        m.put("usedMargin", total - available);
                         m.put("totalFunds", total);
+                        m.put("copyPaused", rule.isCopyPaused());
+                        m.put("pausedUntil", rule.getPausedUntil());
                         m.put("allowed", todayTrades < rule.getMaxTradesPerDay()
                                 && openPositions < rule.getMaxOpenPositions()
                                 && (!rule.isMarginCheckEnabled() || usedPct < rule.getMaxCapitalExposure()));
                         return m;
                     });
         });
+    }
+
+    public Mono<Map<String, Object>> getExposure(UUID childId, UUID brokerAccountId) {
+        return getRiskStatus(childId, brokerAccountId)
+                .map(status -> {
+                    Map<String, Object> e = new java.util.LinkedHashMap<>();
+                    e.put("totalCapital", status.getOrDefault("totalFunds", 0));
+                    e.put("deployedCapital", status.getOrDefault("usedMargin", 0));
+                    e.put("exposurePercent", status.getOrDefault("marginUtilizationPct", 0));
+                    e.put("openPositions", status.getOrDefault("openPositions", 0));
+                    e.put("tradesPlacedToday", status.getOrDefault("tradesToday", 0));
+                    e.put("marginAvailable", status.getOrDefault("availableMargin", 0));
+                    return e;
+                });
+    }
+
+    public Mono<Map<String, Object>> checkTrade(UUID childId, UUID brokerAccountId, Map<String, Object> trade) {
+        return checkRiskLimits(childId, brokerAccountId)
+                .map(reason -> {
+                    Map<String, Object> r = new java.util.LinkedHashMap<>();
+                    boolean allowed = reason == null || reason.isEmpty();
+                    r.put("allowed", allowed);
+                    r.put("warnings", List.of());
+                    r.put("checks", List.of(Map.of(
+                            "rule", "composite",
+                            "status", allowed ? "OK" : "BLOCKED",
+                            "message", allowed ? "OK" : reason
+                    )));
+                    r.put("symbol", trade.get("symbol"));
+                    return r;
+                });
+    }
+
+    public Mono<Map<String, Object>> pauseCopy(UUID childId, String reason, Instant pauseUntil) {
+        return riskRepo.findByUserId(childId)
+                .switchIfEmpty(Mono.defer(() -> {
+                    RiskRule r = defaultRules(childId);
+                    return riskRepo.save(r);
+                }))
+                .flatMap(rule -> {
+                    rule.setCopyPaused(true);
+                    rule.setPausedUntil(pauseUntil);
+                    rule.setUpdatedAt(Instant.now());
+                    return riskRepo.save(rule);
+                })
+                .map(rule -> Map.of(
+                        "paused", true,
+                        "pausedAt", Instant.now().toString(),
+                        "pausedUntil", pauseUntil != null ? pauseUntil.toString() : null,
+                        "reason", reason != null ? reason : "Manual pause"
+                ));
+    }
+
+    public Mono<Map<String, Object>> resumeCopy(UUID childId) {
+        return riskRepo.findByUserId(childId)
+                .flatMap(rule -> {
+                    rule.setCopyPaused(false);
+                    rule.setPausedUntil(null);
+                    rule.setUpdatedAt(Instant.now());
+                    return riskRepo.save(rule);
+                })
+                .map(rule -> {
+                    Map<String, Object> r = new java.util.LinkedHashMap<>();
+                    r.put("paused", false);
+                    r.put("message", "Copy trading resumed");
+                    return r;
+                })
+                .defaultIfEmpty(Map.of("paused", false, "message", "No risk rules found"));
     }
 
     public Mono<RiskRule> getRiskRules(UUID userId) {

@@ -538,4 +538,23 @@ public class MasterService {
             return r;
         });
     }
+
+    /** Spec §2.4 — master trade P&L summary (from trade logs). */
+    public Mono<Map<String, Object>> getTradePnlSummary(UUID masterId) {
+        return logs.findByMasterId(masterId).collectList()
+                .map(list -> {
+                    Map<String, Object> summary = new LinkedHashMap<>();
+                    summary.put("totalRealisedPnl", 0);
+                    summary.put("totalUnrealisedPnl", 0);
+                    summary.put("todayPnl", 0);
+                    summary.put("totalTrades", list.size());
+                    summary.put("winRate", 0);
+                    summary.put("avgWin", 0);
+                    summary.put("avgLoss", 0);
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("summary", summary);
+                    r.put("trades", list);
+                    return r;
+                });
+    }
 }

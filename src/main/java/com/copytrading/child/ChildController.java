@@ -118,6 +118,12 @@ public class ChildController {
         return service.getCopyLogs(UUID.fromString(userId));
     }
 
+    @Operation(summary = "Child copy trade timeline", description = "Spec §1 — latency timeline for child user")
+    @GetMapping("/trade-timeline")
+    public Mono<Map<String, Object>> tradeTimeline(@AuthenticationPrincipal String userId) {
+        return service.getTradeTimeline(UUID.fromString(userId));
+    }
+
     @Operation(summary = "Switch broker account", description = "Switch which broker account is used for copy trading with a specific master. No need to unsubscribe.")
     @PutMapping(value = "/subscriptions/broker", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> switchBroker(@AuthenticationPrincipal String userId,

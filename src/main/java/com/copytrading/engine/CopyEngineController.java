@@ -21,10 +21,13 @@ public class CopyEngineController {
 
     private final CopyEngineService copyEngine;
     private final OrderPollingService pollingService;
+    private final EngineHistoryService historyService;
 
-    public CopyEngineController(CopyEngineService copyEngine, OrderPollingService pollingService) {
+    public CopyEngineController(CopyEngineService copyEngine, OrderPollingService pollingService,
+                                EngineHistoryService historyService) {
         this.copyEngine = copyEngine;
         this.pollingService = pollingService;
+        this.historyService = historyService;
     }
 
     /**
@@ -96,6 +99,48 @@ public class CopyEngineController {
     }
 
     /** FE metadata: skip reasons, copy sides, notification types. */
+    @GetMapping("/trade-history")
+    public Mono<Map<String, Object>> tradeHistory(@AuthenticationPrincipal String userId,
+                                                    @RequestParam(defaultValue = "0") int page,
+                                                    @RequestParam(defaultValue = "20") int size,
+                                                    @RequestParam(required = false) String from,
+                                                    @RequestParam(required = false) String to,
+                                                    @RequestParam(required = false) String symbol,
+                                                    @RequestParam(required = false) String side) {
+        return historyService.getTradeHistory(UUID.fromString(userId), page, size, from, to, symbol, side);
+    }
+
+    @GetMapping("/trade-history/{eventId}")
+    public Mono<Map<String, Object>> tradeHistoryDetail(@AuthenticationPrincipal String userId,
+                                                         @PathVariable String eventId) {
+        return historyService.getTradeEventDetail(UUID.fromString(userId), eventId);
+    }
+
+    @GetMapping("/latency-stats")
+    public Mono<Map<String, Object>> latencyStats(@AuthenticationPrincipal String userId,
+                                                   @RequestParam(defaultValue = "7") int days) {
+        return historyService.getLatencyStats(UUID.fromString(userId), days);
+    }
+
+    @GetMapping("/config")
+    public Mono<Map<String, Object>> engineConfig() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("detectionMethods", Map.of(
+                "ZERODHA", "postback",
+                "FYERS", "polling_1s",
+                "UPSTOX", "polling_1s",
+                "DHAN", "polling_1s",
+                "GROWW", "polling_1s",
+                "ANGELONE", "polling_1s"
+        ));
+        m.put("serverRegion", System.getenv().getOrDefault("AWS_REGION", "eu-north-1"));
+        m.put("connectionPooling", true);
+        m.put("inMemoryCacheEnabled", true);
+        m.put("sessionCacheTTL", 300);
+        m.put("pollingIntervalMs", 1000);
+        return Mono.just(m);
+    }
+
     @GetMapping("/metadata")
     public Mono<Map<String, Object>> getMetadata() {
         Map<String, Object> m = new LinkedHashMap<>();

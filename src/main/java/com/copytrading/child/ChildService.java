@@ -4,6 +4,7 @@ import com.copytrading.auth.UserAccountRepository;
 import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.logs.TradeLogRepository;
+import com.copytrading.engine.EngineHistoryService;
 import com.copytrading.positions.PositionDto;
 import com.copytrading.positions.PositionsService;
 import com.copytrading.subscription.CopySides;
@@ -29,16 +30,24 @@ public class ChildService {
     private final CopyLogRepository copyLogs;
     private final BrokerAccountRepository brokerRepo;
     private final PositionsService positionsService;
+    private final EngineHistoryService engineHistory;
 
     public ChildService(SubscriptionRepository subs, UserAccountRepository users,
                         TradeLogRepository logs, CopyLogRepository copyLogs,
-                        BrokerAccountRepository brokerRepo, PositionsService positionsService) {
+                        BrokerAccountRepository brokerRepo, PositionsService positionsService,
+                        EngineHistoryService engineHistory) {
         this.subs = subs;
         this.users = users;
         this.logs = logs;
         this.copyLogs = copyLogs;
         this.brokerRepo = brokerRepo;
         this.positionsService = positionsService;
+        this.engineHistory = engineHistory;
+    }
+
+    public Mono<Map<String, Object>> getTradeTimeline(UUID childId) {
+        return engineHistory.getChildTimeline(childId)
+                .map(trades -> Map.<String, Object>of("trades", trades));
     }
 
     // 5.1 List available masters

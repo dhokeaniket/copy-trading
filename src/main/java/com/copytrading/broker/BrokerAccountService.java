@@ -1157,6 +1157,13 @@ public class BrokerAccountService {
         });
     }
 
+    public Mono<Map<String, Object>> getBrokerProfile(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
+                .flatMap(this::getBrokerProfile);
+    }
+
     private Mono<Map<String, Object>> getBrokerProfile(BrokerAccount a) {
         switch (a.getBrokerId()) {
             case "GROWW":

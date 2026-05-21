@@ -19,10 +19,13 @@ public class BrokerController {
 
     private final BrokerAccountService service;
     private final BalanceAlertService balanceAlertService;
+    private final BrokerProfileService profileService;
 
-    public BrokerController(BrokerAccountService service, BalanceAlertService balanceAlertService) {
+    public BrokerController(BrokerAccountService service, BalanceAlertService balanceAlertService,
+                            BrokerProfileService profileService) {
         this.service = service;
         this.balanceAlertService = balanceAlertService;
+        this.profileService = profileService;
     }
 
     @Operation(summary = "List supported brokers", description = "Returns all supported brokers with login methods")
@@ -102,6 +105,20 @@ public class BrokerController {
     public Mono<Map<String, Object>> getMargin(@PathVariable UUID accountId,
                                                 @AuthenticationPrincipal String userId) {
         return service.getMargin(accountId, UUID.fromString(userId));
+    }
+
+    @Operation(summary = "Normalized broker profile", description = "Spec §3.1 — unified account profile")
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/profile")
+    public Mono<Map<String, Object>> getAccountProfile(@PathVariable UUID accountId,
+                                                          @AuthenticationPrincipal String userId) {
+        return profileService.getProfile(accountId, UUID.fromString(userId), false);
+    }
+
+    @Operation(summary = "Refresh broker profile", description = "Spec §3.8 — force refresh from broker API")
+    @PostMapping("/api/v1/brokers/accounts/{accountId}/refresh-profile")
+    public Mono<Map<String, Object>> refreshAccountProfile(@PathVariable UUID accountId,
+                                                              @AuthenticationPrincipal String userId) {
+        return profileService.getProfile(accountId, UUID.fromString(userId), true);
     }
 
     // 3.10 GET /brokers/accounts/:accountId/positions

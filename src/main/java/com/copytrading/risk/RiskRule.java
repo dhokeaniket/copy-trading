@@ -29,6 +29,12 @@ public class RiskRule {
     @Column("updated_at")
     private Instant updatedAt;
 
+    @Column("copy_paused")
+    private boolean copyPaused;
+
+    @Column("paused_until")
+    private Instant pausedUntil;
+
     public UUID getUserId() { return userId; }
     public void setUserId(UUID userId) { this.userId = userId; }
     public int getMaxTradesPerDay() { return maxTradesPerDay; }
@@ -41,4 +47,8 @@ public class RiskRule {
     public void setMarginCheckEnabled(boolean marginCheckEnabled) { this.marginCheckEnabled = marginCheckEnabled; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+    public boolean isCopyPaused() { return copyPaused; }
+    public void setCopyPaused(boolean copyPaused) { this.copyPaused = copyPaused; }
+    public Instant getPausedUntil() { return pausedUntil; }
+    public void setPausedUntil(Instant pausedUntil) { this.pausedUntil = pausedUntil; }
 }
