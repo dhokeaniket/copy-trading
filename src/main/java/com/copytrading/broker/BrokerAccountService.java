@@ -7,6 +7,7 @@ import com.copytrading.broker.groww.GrowwApiClient;
 import com.copytrading.broker.upstox.UpstoxApiClient;
 import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import com.copytrading.broker.angelone.AngelOneApiClient;
+import com.copytrading.security.BrokerCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -31,12 +32,14 @@ public class BrokerAccountService {
     private final DhanApiClient dhanClient;
     private final AngelOneApiClient angelOneClient;
     private final PlatformBrokerConfig platformConfig;
+    private final BrokerCredentials credentials;
 
     public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
                                 ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
                                 UpstoxApiClient upstoxClient, DhanApiClient dhanClient,
                                 AngelOneApiClient angelOneClient,
-                                PlatformBrokerConfig platformConfig) {
+                                PlatformBrokerConfig platformConfig,
+                                BrokerCredentials credentials) {
         this.repo = repo;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
@@ -45,6 +48,11 @@ public class BrokerAccountService {
         this.dhanClient = dhanClient;
         this.angelOneClient = angelOneClient;
         this.platformConfig = platformConfig;
+        this.credentials = credentials;
+    }
+
+    private String sessionToken(BrokerAccount a) {
+        return credentials.accessToken(a);
     }
 
     // 3.1 List supported brokers
@@ -112,6 +120,7 @@ public class BrokerAccountService {
         } else {
             a.setStatus("AUTH_REQUIRED");
         }
+        credentials.encryptSensitiveFields(a);
         return repo.save(a).map(saved -> {
             log.info("BROKER_LINKED id={} user={} broker={}", saved.getId(), userId, broker);
             Map<String, Object> r = new LinkedHashMap<>();
@@ -333,7 +342,7 @@ public class BrokerAccountService {
                                 .flatMap(result -> {
                                     // If clientId still empty, fetch from profile
                                     if (a.getClientId() == null || a.getClientId().isBlank()) {
-                                        return dhanClient.getProfile(a.getAccessToken())
+                                        return dhanClient.getProfile(sessionToken(a))
                                                 .flatMap(profile -> {
                                                     Object pid = profile.get("dhanClientId");
                                                     if (pid == null) pid = profile.get("clientId");
@@ -422,6 +431,7 @@ public class BrokerAccountService {
         a.setSessionActive(true);
         a.setStatus("ACTIVE");
         a.setSessionExpires(Instant.now().plusSeconds(86400));
+        credentials.encryptSensitiveFields(a);
         return repo.save(a).map(s -> {
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("status", "SESSION_ACTIVE");
@@ -489,7 +499,7 @@ public class BrokerAccountService {
                 .flatMap(a -> {
                     Map<String, Object> r = buildSessionStatusMap(a);
                     boolean active = Boolean.TRUE.equals(r.get("sessionActive"));
-                    if (!active || a.getAccessToken() == null) {
+                    if (!active || sessionToken(a) == null) {
                         return Mono.just(r);
                     }
                     return getMargin(accountId, userId)
@@ -510,7 +520,7 @@ public class BrokerAccountService {
     private Map<String, Object> buildSessionStatusMap(BrokerAccount a) {
         boolean active = a.isSessionActive() && a.getSessionExpires() != null
                 && a.getSessionExpires().isAfter(Instant.now());
-        String health = active ? "good" : (a.getAccessToken() != null ? "degraded" : "down");
+        String health = active ? "good" : (sessionToken(a) != null ? "degraded" : "down");
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("accountId", a.getId());
         r.put("status", a.getStatus());
@@ -547,7 +557,7 @@ public class BrokerAccountService {
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
                 .flatMap(a -> {
-                    if (!a.isSessionActive() || a.getAccessToken() == null) {
+                    if (!a.isSessionActive() || sessionToken(a) == null) {
                         return Mono.just(Map.<String, Object>of(
                                 "accountId", a.getId().toString(),
                                 "connectionHealth", "down",
@@ -586,7 +596,7 @@ public class BrokerAccountService {
     // 3.9 Get margin (real for all live brokers)
     public Mono<Map<String, Object>> getMargin(UUID accountId, UUID userId) {
         return getAccountOwned(accountId, userId).flatMap(a -> {
-            if (!a.isSessionActive() || a.getAccessToken() == null) {
+            if (!a.isSessionActive() || sessionToken(a) == null) {
                 Map<String, Object> r = sessionRequiredResponse(a);
                 r.put("availableMargin", 0); r.put("usedMargin", 0); r.put("totalFunds", 0); r.put("collateral", 0);
                 return Mono.just(r);
@@ -594,18 +604,18 @@ public class BrokerAccountService {
             Mono<Map<String, Object>> result;
             switch (a.getBrokerId()) {
                 case "GROWW":
-                    result = growwClient.getMargin(a.getAccessToken()).map(resp -> parseGrowwMargin(resp)); break;
+                    result = growwClient.getMargin(sessionToken(a)).map(resp -> parseGrowwMargin(resp)); break;
                 case "ZERODHA":
-                    result = zerodhaClient.getMargins(platformConfig.getZerodha().getApiKey(), a.getAccessToken()).map(resp -> parseZerodhaMargin(resp)); break;
+                    result = zerodhaClient.getMargins(platformConfig.getZerodha().getApiKey(), sessionToken(a)).map(resp -> parseZerodhaMargin(resp)); break;
                 case "FYERS":
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     result = fyersClient.getFunds(fyersAuth).map(resp -> parseFyersMargin(resp)); break;
                 case "UPSTOX":
-                    result = upstoxClient.getFundsMargin(a.getAccessToken()).map(resp -> parseUpstoxMargin(resp)); break;
+                    result = upstoxClient.getFundsMargin(sessionToken(a)).map(resp -> parseUpstoxMargin(resp)); break;
                 case "DHAN":
-                    result = dhanClient.getFunds(a.getAccessToken()).map(resp -> parseDhanMargin(resp)); break;
+                    result = dhanClient.getFunds(sessionToken(a)).map(resp -> parseDhanMargin(resp)); break;
                 case "ANGELONE":
-                    result = angelOneClient.getRMS(platformConfig.getAngelone().getApiKey(), a.getAccessToken()).map(resp -> parseAngelOneMargin(resp)); break;
+                    result = angelOneClient.getRMS(platformConfig.getAngelone().getApiKey(), sessionToken(a)).map(resp -> parseAngelOneMargin(resp)); break;
                 default:
                     result = Mono.just(mockMargin()); break;
             }
@@ -631,42 +641,42 @@ public class BrokerAccountService {
     // 3.10 Get positions (real for all live brokers)
     public Mono<Map<String, Object>> getPositions(UUID accountId, UUID userId) {
         return getAccountOwned(accountId, userId).flatMap(a -> {
-            if (!a.isSessionActive() || a.getAccessToken() == null) {
+            if (!a.isSessionActive() || sessionToken(a) == null) {
                 Map<String, Object> r = sessionRequiredResponse(a);
                 r.put("positions", List.of());
                 return Mono.just(r);
             }
             switch (a.getBrokerId()) {
                 case "GROWW":
-                    return growwClient.getPositions(a.getAccessToken(), null)
+                    return growwClient.getPositions(sessionToken(a), null)
                             .map(resp -> {
                                 Object payload = resp.get("payload");
                                 return Map.<String, Object>of("positions", payload != null ? payload : List.of());
                             });
                 case "ZERODHA":
-                    return zerodhaClient.getPositions(platformConfig.getZerodha().getApiKey(), a.getAccessToken())
+                    return zerodhaClient.getPositions(platformConfig.getZerodha().getApiKey(), sessionToken(a))
                             .map(resp -> {
                                 Object data = resp.get("data");
                                 return Map.<String, Object>of("positions", data != null ? data : List.of());
                             });
                 case "FYERS":
-                    String fyersPosAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    String fyersPosAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     return fyersClient.getPositions(fyersPosAuth)
                             .map(resp -> {
                                 Object netPositions = resp.get("netPositions");
                                 return Map.<String, Object>of("positions", netPositions != null ? netPositions : List.of());
                             });
                 case "UPSTOX":
-                    return upstoxClient.getPositions(a.getAccessToken())
+                    return upstoxClient.getPositions(sessionToken(a))
                             .map(resp -> {
                                 Object data = resp.get("data");
                                 return Map.<String, Object>of("positions", data != null ? data : List.of());
                             });
                 case "DHAN":
-                    return dhanClient.getPositions(a.getAccessToken())
+                    return dhanClient.getPositions(sessionToken(a))
                             .map(resp -> Map.<String, Object>of("positions", resp));
                 case "ANGELONE":
-                    return angelOneClient.getPositions(platformConfig.getAngelone().getApiKey(), a.getAccessToken())
+                    return angelOneClient.getPositions(platformConfig.getAngelone().getApiKey(), sessionToken(a))
                             .map(resp -> {
                                 Object data = resp.get("data");
                                 return Map.<String, Object>of("positions", data != null ? data : List.of());
@@ -709,29 +719,29 @@ public class BrokerAccountService {
     // --- Orders ---
     public Mono<Map<String, Object>> getOrders(UUID accountId, UUID userId) {
         return getAccountOwned(accountId, userId).flatMap(a -> {
-            if (!a.isSessionActive() || a.getAccessToken() == null) {
+            if (!a.isSessionActive() || sessionToken(a) == null) {
                 Map<String, Object> r = sessionRequiredResponse(a); r.put("orders", List.of()); return Mono.just(r);
             }
             switch (a.getBrokerId()) {
                 case "GROWW":
-                    return growwClient.listOrders(a.getAccessToken(), null)
+                    return growwClient.listOrders(sessionToken(a), null)
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("payload", resp)));
                 case "ZERODHA":
-                    return zerodhaClient.getOrders(platformConfig.getZerodha().getApiKey(), a.getAccessToken())
+                    return zerodhaClient.getOrders(platformConfig.getZerodha().getApiKey(), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
                 case "FYERS":
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     return fyersClient.getOrders(fyersAuth)
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("orderBook", resp)));
                 case "UPSTOX":
-                    return upstoxClient.getOrders(a.getAccessToken())
+                    return upstoxClient.getOrders(sessionToken(a))
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
                 case "DHAN":
-                    return dhanClient.getOrders(a.getAccessToken())
+                    return dhanClient.getOrders(sessionToken(a))
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("orders", resp)))
                             .onErrorResume(e -> Mono.just(Map.of("orders", List.of(), "error", e.getMessage())));
                 case "ANGELONE":
-                    return angelOneClient.getOrders(platformConfig.getAngelone().getApiKey(), a.getAccessToken())
+                    return angelOneClient.getOrders(platformConfig.getAngelone().getApiKey(), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
                 default:
                     return Mono.just(Map.<String, Object>of("orders", List.of()));
@@ -742,29 +752,29 @@ public class BrokerAccountService {
     // --- Trades ---
     public Mono<Map<String, Object>> getTrades(UUID accountId, UUID userId) {
         return getAccountOwned(accountId, userId).flatMap(a -> {
-            if (!a.isSessionActive() || a.getAccessToken() == null) {
+            if (!a.isSessionActive() || sessionToken(a) == null) {
                 Map<String, Object> r = sessionRequiredResponse(a); r.put("trades", List.of()); return Mono.just(r);
             }
             switch (a.getBrokerId()) {
                 case "GROWW":
-                    return growwClient.listTrades(a.getAccessToken(), null)
+                    return growwClient.listTrades(sessionToken(a), null)
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("payload", resp)));
                 case "ZERODHA":
-                    return zerodhaClient.getTrades(platformConfig.getZerodha().getApiKey(), a.getAccessToken())
+                    return zerodhaClient.getTrades(platformConfig.getZerodha().getApiKey(), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
                 case "FYERS":
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     return fyersClient.getTrades(fyersAuth)
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("tradeBook", resp)));
                 case "UPSTOX":
-                    return upstoxClient.getTrades(a.getAccessToken())
+                    return upstoxClient.getTrades(sessionToken(a))
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
                 case "DHAN":
-                    return dhanClient.getTrades(a.getAccessToken())
+                    return dhanClient.getTrades(sessionToken(a))
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("trades", resp)))
                             .onErrorResume(e -> Mono.just(Map.of("trades", List.of(), "error", e.getMessage())));
                 case "ANGELONE":
-                    return angelOneClient.getTrades(platformConfig.getAngelone().getApiKey(), a.getAccessToken())
+                    return angelOneClient.getTrades(platformConfig.getAngelone().getApiKey(), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
                 default:
                     return Mono.just(Map.<String, Object>of("trades", List.of()));
@@ -775,29 +785,29 @@ public class BrokerAccountService {
     // --- Holdings ---
     public Mono<Map<String, Object>> getHoldings(UUID accountId, UUID userId) {
         return getAccountOwned(accountId, userId).flatMap(a -> {
-            if (!a.isSessionActive() || a.getAccessToken() == null) {
+            if (!a.isSessionActive() || sessionToken(a) == null) {
                 Map<String, Object> r = sessionRequiredResponse(a); r.put("holdings", List.of()); return Mono.just(r);
             }
             switch (a.getBrokerId()) {
                 case "GROWW":
-                    return growwClient.getHoldings(a.getAccessToken())
+                    return growwClient.getHoldings(sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("payload", resp)));
                 case "ZERODHA":
-                    return zerodhaClient.getHoldings(platformConfig.getZerodha().getApiKey(), a.getAccessToken())
+                    return zerodhaClient.getHoldings(platformConfig.getZerodha().getApiKey(), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
                 case "FYERS":
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     return fyersClient.getHoldings(fyersAuth)
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("holdings", resp)));
                 case "UPSTOX":
-                    return upstoxClient.getHoldings(a.getAccessToken())
+                    return upstoxClient.getHoldings(sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
                 case "DHAN":
-                    return dhanClient.getHoldings(a.getAccessToken())
+                    return dhanClient.getHoldings(sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("holdings", resp)))
                             .onErrorResume(e -> Mono.just(Map.of("holdings", List.of(), "error", e.getMessage())));
                 case "ANGELONE":
-                    return angelOneClient.getHoldings(platformConfig.getAngelone().getApiKey(), a.getAccessToken())
+                    return angelOneClient.getHoldings(platformConfig.getAngelone().getApiKey(), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
                 default:
                     return Mono.just(Map.<String, Object>of("holdings", List.of()));
@@ -816,17 +826,17 @@ public class BrokerAccountService {
 
             switch (a.getBrokerId()) {
                 case "GROWW":
-                    return growwClient.placeOrder(a.getAccessToken(), Map.of(
+                    return growwClient.placeOrder(sessionToken(a), Map.of(
                             "symbol", symbol, "qty", qty, "type", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL",
                             "product", product, "order_type", "MARKET", "price", 0
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 case "ZERODHA":
-                    return zerodhaClient.placeOrder(platformConfig.getZerodha().getApiKey(), a.getAccessToken(), Map.of(
+                    return zerodhaClient.placeOrder(platformConfig.getZerodha().getApiKey(), sessionToken(a), Map.of(
                             "tradingsymbol", symbol, "quantity", qty, "transaction_type", type,
                             "product", product, "order_type", "MARKET", "exchange", "NSE"
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 case "FYERS": {
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     int side = type.equalsIgnoreCase("BUY") ? 1 : -1;
                     return fyersClient.placeOrder(fyersAuth, Map.of(
                             "symbol", symbol, "qty", qty, "side", side,
@@ -834,12 +844,12 @@ public class BrokerAccountService {
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 }
                 case "UPSTOX":
-                    return upstoxClient.placeOrder(a.getAccessToken(), Map.of(
+                    return upstoxClient.placeOrder(sessionToken(a), Map.of(
                             "instrument_token", symbol, "quantity", qty, "transaction_type", type,
                             "product", product, "order_type", "MARKET", "price", 0
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 case "DHAN":
-                    return dhanClient.placeOrder(a.getAccessToken(), Map.of(
+                    return dhanClient.placeOrder(sessionToken(a), Map.of(
                             "tradingSymbol", symbol, "quantity", qty, "transactionType", type,
                             "productType", product, "orderType", "MARKET", "exchangeSegment", "NSE_EQ"
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
@@ -859,7 +869,7 @@ public class BrokerAccountService {
                     angelBody.put("stoploss", "0");
                     angelBody.put("quantity", String.valueOf(qty));
                     angelBody.put("triggerprice", "0");
-                    return angelOneClient.placeOrder(apiKey, a.getAccessToken(), angelBody)
+                    return angelOneClient.placeOrder(apiKey, sessionToken(a), angelBody)
                             .map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 }
                 default:
@@ -873,24 +883,24 @@ public class BrokerAccountService {
         return getActiveAccount(accountId, userId).flatMap(a -> {
             switch (a.getBrokerId()) {
                 case "GROWW":
-                    return growwClient.cancelOrder(a.getAccessToken(), orderId, "EQ")
+                    return growwClient.cancelOrder(sessionToken(a), orderId, "EQ")
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "ZERODHA":
-                    return zerodhaClient.cancelOrder(platformConfig.getZerodha().getApiKey(), a.getAccessToken(), orderId)
+                    return zerodhaClient.cancelOrder(platformConfig.getZerodha().getApiKey(), sessionToken(a), orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "FYERS": {
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     return fyersClient.cancelOrder(fyersAuth, orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 }
                 case "UPSTOX":
-                    return upstoxClient.cancelOrder(a.getAccessToken(), orderId)
+                    return upstoxClient.cancelOrder(sessionToken(a), orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "DHAN":
-                    return dhanClient.cancelOrder(a.getAccessToken(), orderId)
+                    return dhanClient.cancelOrder(sessionToken(a), orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "ANGELONE":
-                    return angelOneClient.cancelOrder(platformConfig.getAngelone().getApiKey(), a.getAccessToken(), "NORMAL", orderId)
+                    return angelOneClient.cancelOrder(platformConfig.getAngelone().getApiKey(), sessionToken(a), "NORMAL", orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 default:
                     return Mono.just(Map.<String, Object>of("message", "Unsupported broker"));
@@ -1042,7 +1052,7 @@ public class BrokerAccountService {
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
                 .flatMap(a -> {
                     // No session at all → signal 0 (no bars, red)
-                    if (!a.isSessionActive() || a.getAccessToken() == null) {
+                    if (!a.isSessionActive() || sessionToken(a) == null) {
                         return Mono.just(buildSignal(a, 0, "disconnected", "No active session. Login required."));
                     }
                     // Session expired → signal 1 (1 bar, red)
@@ -1150,7 +1160,7 @@ public class BrokerAccountService {
     private Mono<Map<String, Object>> getBrokerProfile(BrokerAccount a) {
         switch (a.getBrokerId()) {
             case "GROWW":
-                return growwClient.getProfile(a.getAccessToken())
+                return growwClient.getProfile(sessionToken(a))
                         .map(resp -> {
                             Map<String, Object> p = new LinkedHashMap<>();
                             Object payload = resp.get("payload");
@@ -1166,7 +1176,7 @@ public class BrokerAccountService {
                             return p;
                         });
             case "ZERODHA":
-                return zerodhaClient.getProfile(platformConfig.getZerodha().getApiKey(), a.getAccessToken())
+                return zerodhaClient.getProfile(platformConfig.getZerodha().getApiKey(), sessionToken(a))
                         .map(resp -> {
                             Map<String, Object> p = new LinkedHashMap<>();
                             Object data = resp.get("data");
@@ -1184,7 +1194,7 @@ public class BrokerAccountService {
                             return p;
                         });
             case "FYERS": {
-                String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + a.getAccessToken();
+                String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                 return fyersClient.getProfile(fyersAuth)
                         .map(resp -> {
                             Map<String, Object> p = new LinkedHashMap<>();
@@ -1203,7 +1213,7 @@ public class BrokerAccountService {
                         });
             }
             case "UPSTOX":
-                return upstoxClient.getProfile(a.getAccessToken())
+                return upstoxClient.getProfile(sessionToken(a))
                         .map(resp -> {
                             Map<String, Object> p = new LinkedHashMap<>();
                             Object data = resp.get("data");
@@ -1220,7 +1230,7 @@ public class BrokerAccountService {
                             return p;
                         });
             case "DHAN":
-                return dhanClient.getProfile(a.getAccessToken())
+                return dhanClient.getProfile(sessionToken(a))
                         .map(resp -> {
                             Map<String, Object> p = new LinkedHashMap<>();
                             p.put("name", resp.getOrDefault("userName", resp.getOrDefault("name", "")));
@@ -1230,7 +1240,7 @@ public class BrokerAccountService {
                             return p;
                         });
             case "ANGELONE":
-                return angelOneClient.getProfile(platformConfig.getAngelone().getApiKey(), a.getAccessToken())
+                return angelOneClient.getProfile(platformConfig.getAngelone().getApiKey(), sessionToken(a))
                         .map(resp -> {
                             Map<String, Object> p = new LinkedHashMap<>();
                             Object data = resp.get("data");
@@ -1256,7 +1266,7 @@ public class BrokerAccountService {
     private Mono<BrokerAccount> getActiveAccount(UUID accountId, UUID userId) {
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
-                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                .filter(a -> a.isSessionActive() && sessionToken(a) != null)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "No active broker session. Login first.")));
     }
 

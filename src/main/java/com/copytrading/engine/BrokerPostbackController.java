@@ -100,6 +100,7 @@ public class BrokerPostbackController {
                     req.setProduct(product);
                     req.setOrderType("MARKET");
                     req.setPrice(0);
+                    req.setMasterBrokerId(account.getBrokerId());
 
                     return copyEngine.copyTrade(masterId, req)
                             .thenReturn(Map.of("message", "Trade detected and copied via postback"));

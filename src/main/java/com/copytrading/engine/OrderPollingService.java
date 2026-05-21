@@ -178,12 +178,12 @@ public class OrderPollingService {
             if (!(orderObj instanceof Map)) continue;
             Map<String, Object> order = (Map<String, Object>) orderObj;
 
-            String orderId = extractField(order, "order_id", "orderId", "id", "groww_order_id");
-            String status = extractField(order, "status", "order_status");
+            String orderId = OrderNormalizer.extractOrderId(order);
+            String status = OrderNormalizer.extractStatus(order);
             if (orderId == null || orderId.isBlank()) continue;
 
-            // Skip until order is filled — do NOT mark as known while still open/pending
-            if (!isFilledOrderStatus(status)) {
+            int filledQty = OrderNormalizer.extractFilledQty(order);
+            if (!OrderNormalizer.shouldProcessForCopy(status, filledQty)) {
                 continue;
             }
 
@@ -195,26 +195,18 @@ public class OrderPollingService {
             // Also mark in Redis (survives restarts)
             pollingCache.markOrderKnown(masterId, orderId).subscribe();
 
-            // Extract order details
-            String symbol = extractField(order, "tradingsymbol", "trading_symbol", "symbol", "tradingSymbol");
-            String side = extractField(order, "transaction_type", "side", "transactionType");
-            String qtyStr = extractField(order, "quantity", "qty", "filled_quantity");
-            String product = extractField(order, "product", "productType", "product_type");
-            String detectedOrderType = extractField(order, "order_type", "orderType");
-            String priceStr = extractField(order, "price", "average_fill_price", "averagePrice");
-            String exchange = extractField(order, "exchange");
-            String segment = extractField(order, "segment");
+            String symbol = OrderNormalizer.extractSymbol(order);
+            String side = OrderNormalizer.extractSide(order);
+            String product = OrderNormalizer.extractField(order, "product", "productType", "product_type");
+            String detectedOrderType = OrderNormalizer.extractField(order, "order_type", "orderType");
+            double detectedPrice = OrderNormalizer.extractPrice(order);
+            double triggerPrice = OrderNormalizer.extractTriggerPrice(order);
+            String exchange = OrderNormalizer.extractField(order, "exchange");
+            String segment = OrderNormalizer.extractField(order, "segment");
 
-            if (symbol == null || side == null || qtyStr == null) continue;
+            if (symbol == null || side == null || filledQty < 1) continue;
 
-            int qty;
-            try { qty = (int) Double.parseDouble(qtyStr); } catch (Exception e) { continue; }
-            double detectedPrice = 0;
-            try { if (priceStr != null) detectedPrice = Double.parseDouble(priceStr); } catch (Exception e) { /* ignore */ }
-
-            // Normalize side
-            if ("1".equals(side)) side = "BUY";
-            else if ("-1".equals(side)) side = "SELL";
+            int qty = filledQty;
 
             log.info("NEW_ORDER_DETECTED master={} broker={} orderId={} symbol={} side={} qty={}",
                     masterId, account.getBrokerId(), orderId, symbol, side, qty);
@@ -226,7 +218,7 @@ public class OrderPollingService {
             masterTrade.setBrokerOrderId(orderId);
             masterTrade.setInstrument(symbol);
             masterTrade.setExchange(exchange != null ? exchange : "NSE");
-            boolean detectedFnO = symbol != null && symbol.matches(".*\\d+(CE|PE)$");
+            boolean detectedFnO = symbol != null && (symbol.matches(".*\\d+(CE|PE)$") || symbol.toUpperCase().contains("FUT"));
             masterTrade.setSegment(detectedFnO ? "FNO" : (segment != null ? segment : "EQUITY"));
             masterTrade.setOrderType(detectedOrderType != null ? detectedOrderType : "MARKET");
             masterTrade.setTransactionType(side.toUpperCase());
@@ -257,6 +249,8 @@ public class OrderPollingService {
             // For LIMIT orders, pass the actual price; for MARKET, price=0
             boolean isLimitOrder = "LIMIT".equalsIgnoreCase(detectedOrderType);
             req.setPrice(isLimitOrder ? detectedPrice : 0);
+            req.setTriggerPrice(triggerPrice);
+            req.setMasterBrokerId(account.getBrokerId());
 
             copyEngine.copyTrade(masterId, req)
                     .subscribe(
@@ -268,20 +262,6 @@ public class OrderPollingService {
             newCount++;
         }
         return newCount;
-    }
-
-    private static boolean isFilledOrderStatus(String status) {
-        if (status == null || status.isBlank()) return false;
-        String s = status.trim().toUpperCase();
-        return "COMPLETE".equals(s) || "COMPLETED".equals(s) || "EXECUTED".equals(s) || "TRADED".equals(s);
-    }
-
-    private String extractField(Map<String, Object> map, String... keys) {
-        for (String key : keys) {
-            Object val = map.get(key);
-            if (val != null) return val.toString();
-        }
-        return null;
     }
 
     /** Clear known orders for a master (e.g. at start of new trading day) */

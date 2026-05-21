@@ -6,6 +6,7 @@ import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.logs.TradeLogRepository;
 import com.copytrading.positions.PositionDto;
 import com.copytrading.positions.PositionsService;
+import com.copytrading.subscription.CopySides;
 import com.copytrading.subscription.Subscription;
 import com.copytrading.subscription.SubscriptionRepository;
 import org.springframework.http.HttpStatus;
@@ -73,6 +74,11 @@ public class ChildService {
     // New child → PENDING_APPROVAL (master must approve)
     // Previously approved child (unsubscribed & re-subscribing) → ACTIVE directly
     public Mono<Map<String, Object>> subscribe(UUID childId, UUID masterId, UUID brokerAccountId, Double scalingFactor) {
+        return subscribe(childId, masterId, brokerAccountId, scalingFactor, null, null);
+    }
+
+    public Mono<Map<String, Object>> subscribe(UUID childId, UUID masterId, UUID brokerAccountId, Double scalingFactor,
+                                             String copySides, Boolean allowShortSelling) {
         if (brokerAccountId == null) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "brokerAccountId is required. Please link a broker account before subscribing."));
         }
@@ -93,6 +99,7 @@ public class ChildService {
                         existing.setCopyingStatus("ACTIVE");
                         existing.setBrokerAccountId(brokerAccountId);
                         existing.setCreatedAt(Instant.now());
+                        applyCopyPreferences(existing, copySides, allowShortSelling);
                         return subs.save(existing).map(saved -> {
                             Map<String, Object> r = new LinkedHashMap<>();
                             r.put("subscriptionId", saved.getId());
@@ -105,6 +112,7 @@ public class ChildService {
                     existing.setCopyingStatus("PENDING_APPROVAL");
                     existing.setBrokerAccountId(brokerAccountId);
                     existing.setCreatedAt(Instant.now());
+                    applyCopyPreferences(existing, copySides, allowShortSelling);
                     return subs.save(existing).map(saved -> {
                         Map<String, Object> r = new LinkedHashMap<>();
                         r.put("subscriptionId", saved.getId());
@@ -123,6 +131,7 @@ public class ChildService {
                     s.setCopyingStatus("PENDING_APPROVAL");
                     s.setApprovedOnce(false);
                     s.setCreatedAt(Instant.now());
+                    applyCopyPreferences(s, copySides, allowShortSelling);
                     return subs.save(s).map(saved -> {
                         Map<String, Object> r = new LinkedHashMap<>();
                         r.put("subscriptionId", saved.getId());
@@ -131,6 +140,17 @@ public class ChildService {
                         return r;
                     });
                 })));
+    }
+
+    private static void applyCopyPreferences(Subscription s, String copySides, Boolean allowShortSelling) {
+        if (copySides != null && !copySides.isBlank()) {
+            s.setCopySides(CopySides.normalize(copySides));
+        } else if (s.getCopySides() == null) {
+            s.setCopySides(CopySides.BUY_ONLY);
+        }
+        if (allowShortSelling != null) {
+            s.setAllowShortSelling(allowShortSelling);
+        }
     }
 
     // 5.2b Bulk subscribe to multiple masters (with approval logic)

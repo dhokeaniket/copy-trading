@@ -36,6 +36,9 @@ public class InstrumentCache {
     private final ConcurrentHashMap<String, String> angelEq = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> angelFno = new ConcurrentHashMap<>();
 
+    // F&O lot size by trading symbol (from Angel scrip master)
+    private final ConcurrentHashMap<String, Integer> lotSizeBySymbol = new ConcurrentHashMap<>();
+
     public InstrumentCache(WebClient.Builder builder) {
         this.client = builder.codecs(c -> c.defaultCodecs().maxInMemorySize(50 * 1024 * 1024)).build();
     }
@@ -151,7 +154,14 @@ public class InstrumentCache {
                                 String token = extractJsonField(item, "token");
                                 String sym = extractJsonField(item, "symbol");
                                 String exchSeg = extractJsonField(item, "exch_seg");
+                                String lotStr = extractJsonField(item, "lotsize");
                                 if (token == null || sym == null || exchSeg == null) continue;
+                                if (lotStr != null && !lotStr.isBlank()) {
+                                    try {
+                                        int lot = (int) Double.parseDouble(lotStr.trim());
+                                        if (lot > 0) lotSizeBySymbol.put(sym.toUpperCase(), lot);
+                                    } catch (Exception ignored) { /* skip */ }
+                                }
                                 if ("NSE".equalsIgnoreCase(exchSeg)) {
                                     angelEq.put(sym.toUpperCase(), token);
                                     // Also map without -EQ suffix
@@ -191,6 +201,23 @@ public class InstrumentCache {
         if (symbol == null) return null;
         String upper = symbol.toUpperCase().trim();
         return isFnO ? angelFno.get(upper) : angelEq.get(upper);
+    }
+
+    /** Exchange lot size for F&amp;O symbol; defaults to index heuristics then 1. */
+    public int getLotSize(String symbol) {
+        if (symbol == null) return 1;
+        String upper = symbol.toUpperCase().trim();
+        Integer cached = lotSizeBySymbol.get(upper);
+        if (cached != null && cached > 0) return cached;
+        String clean = upper.replaceFirst("^NSE_FO\\|", "").replaceFirst("^NSE:", "");
+        cached = lotSizeBySymbol.get(clean);
+        if (cached != null && cached > 0) return cached;
+        if (clean.startsWith("BANKNIFTY")) return 15;
+        if (clean.startsWith("FINNIFTY")) return 25;
+        if (clean.startsWith("MIDCPNIFTY")) return 50;
+        if (clean.startsWith("NIFTY")) return 25;
+        if (clean.startsWith("SENSEX")) return 10;
+        return 1;
     }
 
     public int totalSize() {

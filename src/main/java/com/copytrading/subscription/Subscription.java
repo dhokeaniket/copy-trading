@@ -34,6 +34,13 @@ public class Subscription {
     @Column("created_at")
     private Instant createdAt;
 
+    /** BUY_ONLY (default), BUY_AND_SELL, MIRROR — see {@link CopySides}. */
+    @Column("copy_sides")
+    private String copySides;
+
+    @Column("allow_short_selling")
+    private boolean allowShortSelling;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public UUID getMasterId() { return masterId; }
@@ -50,4 +57,8 @@ public class Subscription {
     public void setApprovedOnce(boolean approvedOnce) { this.approvedOnce = approvedOnce; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public String getCopySides() { return copySides; }
+    public void setCopySides(String copySides) { this.copySides = copySides; }
+    public boolean isAllowShortSelling() { return allowShortSelling; }
+    public void setAllowShortSelling(boolean allowShortSelling) { this.allowShortSelling = allowShortSelling; }
 }

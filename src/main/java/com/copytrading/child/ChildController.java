@@ -36,7 +36,8 @@ public class ChildController {
     @ResponseStatus(HttpStatus.CREATED)
     public Mono<Map<String, Object>> subscribe(@AuthenticationPrincipal String userId,
                                                 @RequestBody SubscribeRequest req) {
-        return service.subscribe(UUID.fromString(userId), req.getMasterId(), req.getBrokerAccountId(), req.getScalingFactor());
+        return service.subscribe(UUID.fromString(userId), req.getMasterId(), req.getBrokerAccountId(),
+                req.getScalingFactor(), req.getCopySides(), req.getAllowShortSelling());
     }
 
     @PostMapping(value = "/subscriptions/bulk", consumes = MediaType.APPLICATION_JSON_VALUE)

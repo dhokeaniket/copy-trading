@@ -1,6 +1,6 @@
 package com.copytrading.risk;
 
-import com.copytrading.logs.CopyLog;
+import com.copytrading.broker.BrokerAccountService;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.trade.TradeRepository;
 import org.slf4j.Logger;
@@ -10,11 +10,11 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 /**
  * Risk control service — enforces per-child risk limits before allowing copy trades.
- * Covers: CT-069 (max daily loss), CT-070 (max open trades), CT-071 (max margin utilization)
  */
 @Service
 public class RiskService {
@@ -24,22 +24,28 @@ public class RiskService {
     private final RiskRuleRepository riskRepo;
     private final CopyLogRepository copyLogs;
     private final TradeRepository trades;
+    private final BrokerAccountService brokerService;
 
-    public RiskService(RiskRuleRepository riskRepo, CopyLogRepository copyLogs, TradeRepository trades) {
+    public RiskService(RiskRuleRepository riskRepo, CopyLogRepository copyLogs, TradeRepository trades,
+                       BrokerAccountService brokerService) {
         this.riskRepo = riskRepo;
         this.copyLogs = copyLogs;
         this.trades = trades;
+        this.brokerService = brokerService;
+    }
+
+    public Mono<String> checkRiskLimits(UUID childId) {
+        return checkRiskLimits(childId, null);
     }
 
     /**
      * Check if a child is allowed to take a new copy trade.
      * Returns empty string if allowed, or a rejection reason if blocked.
      */
-    public Mono<String> checkRiskLimits(UUID childId) {
+    public Mono<String> checkRiskLimits(UUID childId, UUID brokerAccountId) {
         return riskRepo.findByUserId(childId)
                 .flatMap(rule -> {
-                    // Check max trades per day (CT-070)
-                    Instant todayStart = Instant.now().minus(Duration.ofHours(12)); // ~market day window
+                    Instant todayStart = Instant.now().minus(Duration.ofHours(12));
                     return copyLogs.findByChildId(childId)
                             .filter(cl -> cl.getCreatedAt() != null && cl.getCreatedAt().isAfter(todayStart))
                             .filter(cl -> "SUCCESS".equals(cl.getChildStatus()))
@@ -48,36 +54,64 @@ public class RiskService {
                                 if (todayTrades >= rule.getMaxTradesPerDay()) {
                                     log.info("RISK_BLOCKED child={} reason=MAX_TRADES_PER_DAY limit={} current={}",
                                             childId, rule.getMaxTradesPerDay(), todayTrades);
-                                    return Mono.just("MAX_TRADES_PER_DAY: Limit " + rule.getMaxTradesPerDay() + " reached (" + todayTrades + " today)");
+                                    return Mono.just("MAX_TRADES_PER_DAY: Limit " + rule.getMaxTradesPerDay()
+                                            + " reached (" + todayTrades + " today)");
                                 }
-
-                                // Check max open positions (CT-070)
                                 return trades.findByUserIdAndStatus(childId, "EXECUTED")
                                         .count()
-                                        .map(openPositions -> {
+                                        .flatMap(openPositions -> {
                                             if (openPositions >= rule.getMaxOpenPositions()) {
                                                 log.info("RISK_BLOCKED child={} reason=MAX_OPEN_POSITIONS limit={} current={}",
                                                         childId, rule.getMaxOpenPositions(), openPositions);
-                                                return "MAX_OPEN_POSITIONS: Limit " + rule.getMaxOpenPositions() + " reached (" + openPositions + " open)";
+                                                return Mono.just("MAX_OPEN_POSITIONS: Limit " + rule.getMaxOpenPositions()
+                                                        + " reached (" + openPositions + " open)");
                                             }
-                                            return ""; // All checks passed
+                                            return checkMarginUtilization(childId, brokerAccountId, rule);
                                         });
                             });
                 })
-                .defaultIfEmpty(""); // No risk rules configured = allow all
+                .defaultIfEmpty("");
     }
 
-    /**
-     * Get or create default risk rules for a user.
-     */
+    private Mono<String> checkMarginUtilization(UUID childId, UUID brokerAccountId, RiskRule rule) {
+        if (!rule.isMarginCheckEnabled() || brokerAccountId == null) {
+            return Mono.just("");
+        }
+        return brokerService.getMargin(brokerAccountId, childId)
+                .map(margin -> marginUtilizationMessage(margin, rule.getMaxCapitalExposure()))
+                .onErrorResume(e -> {
+                    log.warn("RISK_MARGIN_CHECK_SKIP child={} err={}", childId, e.getMessage());
+                    return Mono.just("");
+                });
+    }
+
+    static String marginUtilizationMessage(Map<String, Object> margin, double maxExposurePct) {
+        double total = toDouble(margin.getOrDefault("totalFunds", 0));
+        double available = toDouble(margin.getOrDefault("availableMargin", 0));
+        if (total <= 0) return "";
+        double usedPct = ((total - available) / total) * 100.0;
+        if (usedPct >= maxExposurePct) {
+            return "MAX_CAPITAL_EXPOSURE: Margin utilization " + String.format("%.1f", usedPct)
+                    + "% exceeds limit " + maxExposurePct + "%";
+        }
+        return "";
+    }
+
+    private static double toDouble(Object o) {
+        if (o == null) return 0;
+        if (o instanceof Number n) return n.doubleValue();
+        try {
+            return Double.parseDouble(o.toString());
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     public Mono<RiskRule> getRiskRules(UUID userId) {
         return riskRepo.findByUserId(userId)
                 .switchIfEmpty(Mono.just(defaultRules(userId)));
     }
 
-    /**
-     * Save/update risk rules for a user.
-     */
     public Mono<RiskRule> saveRiskRules(UUID userId, int maxTradesPerDay, int maxOpenPositions,
                                          double maxCapitalExposure, boolean marginCheckEnabled) {
         return riskRepo.findByUserId(userId)

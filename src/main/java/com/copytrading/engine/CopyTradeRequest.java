@@ -9,6 +9,7 @@ public class CopyTradeRequest {
     private double price;       // 0 for MARKET orders
     private double triggerPrice; // Required for SL and SL-M orders
     private String exchange;    // NSE, BSE (default NSE)
+    private String masterBrokerId; // Source broker for symbol translation (UPSTOX, GROWW, …)
 
     public String getSymbol() { return symbol; }
     public void setSymbol(String symbol) { this.symbol = symbol; }
@@ -26,4 +27,6 @@ public class CopyTradeRequest {
     public void setTriggerPrice(double triggerPrice) { this.triggerPrice = triggerPrice; }
     public String getExchange() { return exchange; }
     public void setExchange(String exchange) { this.exchange = exchange; }
+    public String getMasterBrokerId() { return masterBrokerId; }
+    public void setMasterBrokerId(String masterBrokerId) { this.masterBrokerId = masterBrokerId; }
 }
