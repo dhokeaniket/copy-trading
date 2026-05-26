@@ -125,6 +125,18 @@ public class MasterController {
         return service.getDashboard(UUID.fromString(userId));
     }
 
+    @Operation(summary = "Copy trading page", description = "Active master account, followers with live margin/P&L, alerts, polling")
+    @GetMapping("/copy-trading")
+    public Mono<Map<String, Object>> getCopyTradingPage(@AuthenticationPrincipal String userId) {
+        return service.getCopyTradingPage(UUID.fromString(userId));
+    }
+
+    @Operation(summary = "P&L analytics", description = "Master + follower unrealized P&L, margins, daily copy chart")
+    @GetMapping("/pnl-analytics")
+    public Mono<Map<String, Object>> getPnlAnalytics(@AuthenticationPrincipal String userId) {
+        return service.getPnlAnalytics(UUID.fromString(userId));
+    }
+
     @GetMapping("/trade-history")
     public Mono<Map<String, Object>> getTradeHistory(@AuthenticationPrincipal String userId) {
         return service.getTradeHistory(UUID.fromString(userId));

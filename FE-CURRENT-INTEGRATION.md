@@ -541,7 +541,52 @@ Common codes (show user-friendly text):
 
 ---
 
-## 10. Screen → API quick map
+## 10. Master copy trading & P&L (fixes follower table ₹0)
+
+### 10.1 Copy trading page (preferred — one call)
+
+```http
+GET /api/v1/master/copy-trading
+Authorization: Bearer <token>
+```
+
+Returns: `activeAccount` (master margin), `children[]` (live margin + P&L), `dashboard`, `alerts`, `pollingIntervalMs`.
+
+**Each child row includes:**
+
+| Field | UI column |
+|-------|-----------|
+| `margin` / `marginAvailable` | MARGIN |
+| `pnlToday` / `pnl` | P&L TODAY (unrealized from open positions) |
+| `pos` / `openPositionsCount` | POS |
+| `scalingFactor` / `multiplier` | MULTIPLIER |
+| `sessionActive`, `lowMargin` | Warnings |
+
+**Note:** Margin is **₹0** when child broker session expired or not linked — show reconnect CTA, not a backend bug.
+
+### 10.2 P&L analytics page
+
+```http
+GET /api/v1/master/pnl-analytics
+```
+
+Returns `summary` (combined unrealized P&L, copy success rate), `childPerformance`, `dailyChart` (7 days).
+
+### 10.3 Other master endpoints
+
+```http
+GET /api/v1/master/children          # enriched list (margin + pnl)
+GET /api/v1/master/dashboard         # must include /master/ prefix + JWT
+GET /api/v1/master/active-account    # master margin + connected flag
+GET /api/v1/master/trade-pnl
+GET /api/v1/master/analytics
+```
+
+**FE bug to fix:** Calls to `/dashboard` or `/trades` without `/api/v1/master/` and without `Authorization` header return **401 empty body**.
+
+---
+
+## 11. Screen → API quick map
 
 | Screen | APIs |
 |--------|------|
@@ -556,12 +601,14 @@ Common codes (show user-friendly text):
 | Risk settings | `GET/PUT /risk/rules`, `GET /risk/status`, pause/resume |
 | Copy logs (child) | `GET /child/copy/logs` |
 | Copy logs (master) | `GET /master/copy/logs` |
+| **Master copy trading** | **`GET /master/copy-trading`** |
+| **Master P&L analytics** | **`GET /master/pnl-analytics`** |
 | Latency | `GET /engine/latency-stats`, `GET /child/trade-timeline` |
 | Master P&L | `GET /master/trade-pnl` |
 
 ---
 
-## 11. What is still stubbed / partial (set expectations)
+## 12. What is still stubbed / partial (set expectations)
 
 | Feature | FE expectation |
 |---------|----------------|
@@ -574,7 +621,7 @@ Common codes (show user-friendly text):
 
 ---
 
-## 12. TypeScript types (copy-paste)
+## 13. TypeScript types (copy-paste)
 
 ```typescript
 export type Role = 'MASTER' | 'CHILD' | 'ADMIN';
@@ -650,7 +697,7 @@ export interface RiskStatus {
 
 ---
 
-## 13. FE release checklist
+## 14. FE release checklist
 
 ### Required for existing app (no breaking changes)
 
@@ -676,7 +723,7 @@ export interface RiskStatus {
 
 ---
 
-## 14. Test accounts (staging)
+## 15. Test accounts (staging)
 
 | Email | Password | Role |
 |-------|----------|------|
@@ -686,7 +733,7 @@ Use production base URL only if that account exists there.
 
 ---
 
-## 15. Support / questions
+## 16. Support / questions
 
 - Backend behaviour: [PLATFORM-GUIDE.md](./PLATFORM-GUIDE.md)  
 - Telegram EC2/webhook: [TELEGRAM-SETUP.md](./TELEGRAM-SETUP.md)  

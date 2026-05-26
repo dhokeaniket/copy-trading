@@ -2,8 +2,14 @@ package com.copytrading.master;
 
 import com.copytrading.auth.UserAccountRepository;
 import com.copytrading.broker.BrokerAccountRepository;
+import com.copytrading.broker.BrokerAccountService;
+import com.copytrading.broker.BrokerProfileService;
+import com.copytrading.config.EnginePollingProperties;
+import com.copytrading.engine.OrderPollingService;
+import com.copytrading.logs.CopyLog;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.logs.TradeLogRepository;
+import com.copytrading.positions.PositionsService;
 import com.copytrading.subscription.Subscription;
 import com.copytrading.subscription.SubscriptionRepository;
 import org.springframework.http.HttpStatus;
@@ -13,6 +19,8 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.*;
 
 @Service
@@ -24,12 +32,24 @@ public class MasterService {
     private final CopyLogRepository copyLogs;
     private final MasterActiveAccountRepository activeAccountRepo;
     private final BrokerAccountRepository brokerRepo;
+    private final BrokerAccountService brokerService;
+    private final BrokerProfileService brokerProfileService;
+    private final PositionsService positionsService;
+    private final OrderPollingService orderPollingService;
+    private final EnginePollingProperties pollingProperties;
     private final DatabaseClient db;
+
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
     public MasterService(SubscriptionRepository subs, UserAccountRepository users,
                          TradeLogRepository logs, CopyLogRepository copyLogs,
                          MasterActiveAccountRepository activeAccountRepo,
                          BrokerAccountRepository brokerRepo,
+                         BrokerAccountService brokerService,
+                         BrokerProfileService brokerProfileService,
+                         PositionsService positionsService,
+                         OrderPollingService orderPollingService,
+                         EnginePollingProperties pollingProperties,
                          DatabaseClient db) {
         this.subs = subs;
         this.users = users;
@@ -37,6 +57,11 @@ public class MasterService {
         this.copyLogs = copyLogs;
         this.activeAccountRepo = activeAccountRepo;
         this.brokerRepo = brokerRepo;
+        this.brokerService = brokerService;
+        this.brokerProfileService = brokerProfileService;
+        this.positionsService = positionsService;
+        this.orderPollingService = orderPollingService;
+        this.pollingProperties = pollingProperties;
         this.db = db;
     }
 
@@ -60,15 +85,49 @@ public class MasterService {
 
     public Mono<Map<String, Object>> getActiveAccount(UUID masterId) {
         return activeAccountRepo.findById(masterId)
-                .map(a -> Map.<String, Object>of("brokerAccountId", a.getBrokerAccountId().toString()))
-                .defaultIfEmpty(Map.of("brokerAccountId", "", "message", "No active account set"))
+                .flatMap(a -> enrichActiveAccount(masterId, a.getBrokerAccountId()))
+                .switchIfEmpty(Mono.fromCallable(() -> {
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("brokerAccountId", "");
+                    r.put("connected", false);
+                    r.put("message", "No master account connected. Engine has nothing to poll.");
+                    return r;
+                }))
                 .onErrorResume(e -> {
-                    // Table may not exist yet
                     Map<String, Object> fallback = new LinkedHashMap<>();
                     fallback.put("brokerAccountId", "");
+                    fallback.put("connected", false);
                     fallback.put("message", "No active account set");
                     return Mono.just(fallback);
                 });
+    }
+
+    private Mono<Map<String, Object>> enrichActiveAccount(UUID masterId, UUID brokerAccountId) {
+        return brokerRepo.findById(brokerAccountId)
+                .filter(a -> a.getUserId().equals(masterId))
+                .flatMap(a -> brokerProfileService.getProfile(brokerAccountId, masterId, false)
+                        .map(profile -> {
+                            Map<String, Object> r = new LinkedHashMap<>();
+                            r.put("brokerAccountId", brokerAccountId.toString());
+                            r.put("connected", true);
+                            r.put("broker", a.getBrokerId());
+                            r.put("nickname", a.getNickname());
+                            r.put("clientId", a.getClientId());
+                            r.put("sessionActive", profile.getOrDefault("sessionActive", a.isSessionActive()));
+                            r.put("isTokenExpired", profile.getOrDefault("isTokenExpired", false));
+                            r.put("marginAvailable", profile.getOrDefault("marginAvailable", 0));
+                            r.put("marginUsed", profile.getOrDefault("marginUsed", 0));
+                            r.put("margin", profile.getOrDefault("marginAvailable", 0));
+                            r.put("marginUsedPercent", profile.getOrDefault("marginUsedPercent", 0));
+                            r.put("fundsUtilizationStatus", profile.getOrDefault("fundsUtilizationStatus", "GREEN"));
+                            r.put("openPositionsCount", profile.getOrDefault("openPositionsCount", 0));
+                            r.put("message", "Active account set");
+                            return r;
+                        }))
+                .switchIfEmpty(Mono.just(Map.of(
+                        "brokerAccountId", brokerAccountId.toString(),
+                        "connected", false,
+                        "message", "Active account not found")));
     }
 
     public Mono<Map<String, String>> clearActiveAccount(UUID masterId) {
@@ -139,21 +198,225 @@ public class MasterService {
         return Mono.just(Map.<String, Object>of("payouts", List.of(), "totalPaid", 0, "currency", "INR"));
     }
 
-    // 4.1 List children
+    // 4.1 List children (with live margin + P&L for follower table)
     public Mono<Map<String, Object>> listChildren(UUID masterId) {
         return subs.findByMasterId(masterId)
-                .flatMap(s -> users.findById(s.getChildId()).map(u -> {
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    m.put("childId", s.getChildId());
-                    m.put("name", u.getName());
-                    m.put("email", u.getEmail());
-                    m.put("scalingFactor", s.getScalingFactor());
-                    m.put("copyingStatus", s.getCopyingStatus());
-                    m.put("subscribedAt", s.getCreatedAt());
-                    return m;
-                }))
+                .flatMap(s -> buildFollowerRow(s), 2)
                 .collectList()
                 .map(list -> Map.of("children", (Object) list));
+    }
+
+    /** All-in-one payload for master Copy Trading page. */
+    public Mono<Map<String, Object>> getCopyTradingPage(UUID masterId) {
+        return Mono.zip(
+                getActiveAccount(masterId),
+                listChildren(masterId),
+                getDashboard(masterId),
+                copyLogs.findByMasterId(masterId).collectList()
+        ).map(t -> {
+            Map<String, Object> active = t.getT1();
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> children = (List<Map<String, Object>>) t.getT2().get("children");
+            Map<String, Object> dashboard = t.getT3();
+            List<CopyLog> allLogs = t.getT4();
+
+            List<Map<String, Object>> alerts = buildLowMarginAlerts(children);
+            if (!Boolean.TRUE.equals(active.get("connected")) || active.get("brokerAccountId") == null
+                    || "".equals(String.valueOf(active.getOrDefault("brokerAccountId", "")))) {
+                alerts.add(0, Map.of(
+                        "level", "ERROR",
+                        "code", "NO_MASTER_ACCOUNT",
+                        "message", "No master account connected. Engine has nothing to poll."));
+            } else if (Boolean.FALSE.equals(active.get("sessionActive"))
+                    || Boolean.TRUE.equals(active.get("isTokenExpired"))) {
+                alerts.add(0, Map.of(
+                        "level", "ERROR",
+                        "code", "MASTER_SESSION_EXPIRED",
+                        "message", "Master broker session expired — reconnect to resume polling.",
+                        "broker", active.get("broker")));
+            }
+
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("activeAccount", active);
+            r.put("children", children);
+            r.put("dashboard", dashboard);
+            r.put("alerts", alerts);
+            r.put("pollingEnabled", orderPollingService.isPollingEnabled());
+            r.put("pollingIntervalMs", pollingProperties.getIntervalMs());
+            r.put("replicationActive", orderPollingService.isPollingEnabled()
+                    && Boolean.TRUE.equals(active.get("connected"))
+                    && Boolean.TRUE.equals(active.getOrDefault("sessionActive", false)));
+            r.put("todayCopiesSuccess", countTodaySuccess(allLogs));
+            return r;
+        });
+    }
+
+    /** Master P&L analytics — aggregate + per-child + 7-day copy activity chart. */
+    public Mono<Map<String, Object>> getPnlAnalytics(UUID masterId) {
+        Instant startOfDay = LocalDate.now(IST).atStartOfDay(IST).toInstant();
+        return Mono.zip(
+                getActiveAccount(masterId),
+                listChildren(masterId),
+                positionsService.getMasterPositions(masterId).onErrorReturn(Map.of("totalPnl", 0, "positions", List.of())),
+                copyLogs.findByMasterId(masterId).collectList()
+        ).map(t -> {
+            Map<String, Object> active = t.getT1();
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> children = (List<Map<String, Object>>) t.getT2().get("children");
+            Map<String, Object> masterPos = t.getT3();
+            List<CopyLog> logs = t.getT4();
+
+            double masterUnrealized = MasterChildMetricsHelper.toDouble(masterPos.get("totalPnl"));
+            double followersUnrealized = children.stream()
+                    .mapToDouble(c -> MasterChildMetricsHelper.toDouble(c.get("pnlToday")))
+                    .sum();
+            double totalMarginAvailable = children.stream()
+                    .mapToDouble(c -> MasterChildMetricsHelper.toDouble(c.get("marginAvailable")))
+                    .sum();
+
+            long success = logs.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
+            long failed = logs.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
+            long todaySuccess = logs.stream()
+                    .filter(l -> l.getCreatedAt() != null && !l.getCreatedAt().isBefore(startOfDay))
+                    .filter(l -> "SUCCESS".equals(l.getChildStatus()))
+                    .count();
+
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("masterUnrealizedPnl", MasterChildMetricsHelper.round2(masterUnrealized));
+            summary.put("followersUnrealizedPnl", MasterChildMetricsHelper.round2(followersUnrealized));
+            summary.put("combinedUnrealizedPnl", MasterChildMetricsHelper.round2(masterUnrealized + followersUnrealized));
+            summary.put("totalFollowerMarginAvailable", MasterChildMetricsHelper.round2(totalMarginAvailable));
+            summary.put("activeFollowers", children.stream().filter(c -> "ACTIVE".equals(c.get("copyingStatus"))).count());
+            summary.put("totalCopiesSuccess", success);
+            summary.put("totalCopiesFailed", failed);
+            summary.put("todayCopiesSuccess", todaySuccess);
+            summary.put("replicationSuccessRate", success + failed > 0
+                    ? Math.round(success * 100.0 / (success + failed)) : 0);
+
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("summary", summary);
+            r.put("masterActiveAccount", active);
+            r.put("masterPositions", masterPos.getOrDefault("positions", List.of()));
+            r.put("childPerformance", children.stream().map(c -> {
+                Map<String, Object> p = new LinkedHashMap<>();
+                p.put("childId", c.get("childId"));
+                p.put("name", c.get("name"));
+                p.put("marginAvailable", c.get("marginAvailable"));
+                p.put("pnlToday", c.get("pnlToday"));
+                p.put("openPositionsCount", c.get("openPositionsCount"));
+                p.put("scalingFactor", c.get("scalingFactor"));
+                p.put("copyingStatus", c.get("copyingStatus"));
+                p.put("tradesCopied", c.getOrDefault("tradesCopied", 0));
+                return p;
+            }).toList());
+            r.put("dailyChart", buildDailyCopyChart(logs, 7));
+            r.put("earningsBreakdown", List.of(
+                    Map.of("name", "Replication volume", "value", success, "unit", "trades"),
+                    Map.of("name", "Follower margin (total)", "value", totalMarginAvailable, "unit", "INR")
+            ));
+            return r;
+        });
+    }
+
+    private Mono<Map<String, Object>> buildFollowerRow(Subscription s) {
+        return users.findById(s.getChildId()).flatMap(u -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("childId", s.getChildId().toString());
+            m.put("name", u.getName());
+            m.put("email", u.getEmail());
+            m.put("scalingFactor", s.getScalingFactor());
+            m.put("multiplier", s.getScalingFactor());
+            m.put("copyingStatus", s.getCopyingStatus());
+            m.put("status", s.getCopyingStatus());
+            m.put("subscribedAt", s.getCreatedAt() != null ? s.getCreatedAt().toString() : null);
+            m.put("brokerAccountId", s.getBrokerAccountId() != null ? s.getBrokerAccountId().toString() : null);
+            m.put("copySides", s.getCopySides() != null ? s.getCopySides() : "BUY_ONLY");
+
+            if (s.getBrokerAccountId() == null) {
+                MasterChildMetricsHelper.applyZeroMargin(m, "Child has no broker account linked");
+                return Mono.just(m);
+            }
+            UUID childId = s.getChildId();
+            UUID accountId = s.getBrokerAccountId();
+            return brokerRepo.findById(accountId)
+                    .flatMap(acc -> Mono.zip(
+                            brokerService.getMargin(accountId, childId)
+                                    .onErrorReturn(Map.of("availableMargin", 0, "usedMargin", 0, "totalFunds", 0)),
+                            positionsService.getPositionsForAccount(accountId)
+                                    .onErrorReturn(List.of()),
+                            copyLogs.findByMasterIdAndChildId(s.getMasterId(), childId).collectList()
+                    ).map(tuple -> {
+                        m.put("broker", acc.getBrokerId());
+                        m.put("brokerAccountNickname", acc.getNickname());
+                        MasterChildMetricsHelper.applyMarginAndPnl(m, tuple.getT1(), tuple.getT2(), acc.isSessionActive());
+                        List<CopyLog> childLogs = tuple.getT3();
+                        long copied = childLogs.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
+                        m.put("tradesCopied", copied);
+                        return m;
+                    }))
+                    .switchIfEmpty(Mono.defer(() -> {
+                        MasterChildMetricsHelper.applyZeroMargin(m, "Broker account not found");
+                        return Mono.just(m);
+                    }));
+        });
+    }
+
+    private static List<Map<String, Object>> buildLowMarginAlerts(List<Map<String, Object>> children) {
+        List<Map<String, Object>> alerts = new ArrayList<>();
+        for (Map<String, Object> c : children) {
+            if (Boolean.TRUE.equals(c.get("lowMargin"))) {
+                alerts.add(Map.of(
+                        "level", "WARNING",
+                        "code", "LOW_CHILD_MARGIN",
+                        "childId", c.get("childId"),
+                        "message", "Child '" + c.get("name") + "' has low margin (₹"
+                                + c.getOrDefault("marginAvailable", 0) + "). Orders may be rejected."));
+            }
+            if (Boolean.FALSE.equals(c.get("sessionActive"))) {
+                alerts.add(Map.of(
+                        "level", "WARNING",
+                        "code", "CHILD_SESSION_EXPIRED",
+                        "childId", c.get("childId"),
+                        "message", "Child '" + c.get("name") + "' broker session expired — ask them to re-login."));
+            }
+        }
+        return alerts;
+    }
+
+    private static long countTodaySuccess(List<CopyLog> logs) {
+        Instant start = LocalDate.now(IST).atStartOfDay(IST).toInstant();
+        return logs.stream()
+                .filter(l -> l.getCreatedAt() != null && !l.getCreatedAt().isBefore(start))
+                .filter(l -> "SUCCESS".equals(l.getChildStatus()))
+                .count();
+    }
+
+    private static List<Map<String, Object>> buildDailyCopyChart(List<CopyLog> logs, int days) {
+        LocalDate today = LocalDate.now(IST);
+        List<Map<String, Object>> chart = new ArrayList<>();
+        for (int i = days - 1; i >= 0; i--) {
+            LocalDate d = today.minusDays(i);
+            Instant start = d.atStartOfDay(IST).toInstant();
+            Instant end = d.plusDays(1).atStartOfDay(IST).toInstant();
+            long success = logs.stream()
+                    .filter(l -> l.getCreatedAt() != null
+                            && !l.getCreatedAt().isBefore(start)
+                            && l.getCreatedAt().isBefore(end))
+                    .filter(l -> "SUCCESS".equals(l.getChildStatus()))
+                    .count();
+            long failed = logs.stream()
+                    .filter(l -> l.getCreatedAt() != null
+                            && !l.getCreatedAt().isBefore(start)
+                            && l.getCreatedAt().isBefore(end))
+                    .filter(l -> "FAILED".equals(l.getChildStatus()))
+                    .count();
+            chart.add(Map.of(
+                    "date", d.toString(),
+                    "copiesSuccess", success,
+                    "copiesFailed", failed,
+                    "value", success));
+        }
+        return chart;
     }
 
     // 4.2 Link child (master-initiated, bypasses approval)
@@ -476,14 +739,23 @@ public class MasterService {
                 long childTradesCopied = allCopyLogs.stream()
                         .filter(l -> s.getChildId().equals(l.getChildId()) && "SUCCESS".equals(l.getChildStatus()))
                         .count();
+                double childPnl = allCopyLogs.stream()
+                        .filter(l -> s.getChildId().equals(l.getChildId()))
+                        .count(); // placeholder until realised P&L ledger
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("childId", s.getChildId());
                 m.put("scalingFactor", s.getScalingFactor());
                 m.put("copyingStatus", s.getCopyingStatus());
-                m.put("pnl", 0);
+                m.put("pnl", childPnl);
                 m.put("tradesCopied", childTradesCopied);
                 return m;
             }).toList());
+            double totalPnl = children.stream()
+                    .mapToDouble(s -> allCopyLogs.stream()
+                            .filter(l -> s.getChildId().equals(l.getChildId()) && "SUCCESS".equals(l.getChildStatus()))
+                            .count())
+                    .sum();
+            r.put("totalPnl", totalPnl);
             return r;
         });
     }
@@ -494,23 +766,24 @@ public class MasterService {
                 .map(list -> Map.<String, Object>of("trades", list));
     }
 
-    // 4.8 Master dashboard (aggregated view)
+    // 4.8 Master dashboard (aggregated view + enriched followers)
     public Mono<Map<String, Object>> getDashboard(UUID masterId) {
-        return Mono.zip(
-                subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE").collectList(),
-                copyLogs.findByMasterId(masterId).collectList(),
-                subs.findByMasterId(masterId).collectList()
-        ).map(t -> {
+        Mono<List<CopyLog>> logsMono = copyLogs.findByMasterId(masterId).collectList();
+        Mono<List<Subscription>> activeMono = subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE").collectList();
+        Mono<List<Subscription>> allMono = subs.findByMasterId(masterId).collectList();
+        Mono<List<Map<String, Object>>> enrichedMono = subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE")
+                .flatMap(this::buildFollowerRow, 2)
+                .collectList();
+
+        return Mono.zip(activeMono, logsMono, allMono, enrichedMono).map(t -> {
             var activeChildren = t.getT1();
             var allCopyLogs = t.getT2();
             var allSubs = t.getT3();
+            var enrichedChildren = t.getT4();
 
             long totalTradesCopied = allCopyLogs.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
             long totalFailed = allCopyLogs.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
-            long todayTrades = allCopyLogs.stream()
-                    .filter(l -> l.getCreatedAt() != null && l.getCreatedAt().isAfter(java.time.Instant.now().minus(java.time.Duration.ofHours(12))))
-                    .filter(l -> "SUCCESS".equals(l.getChildStatus()))
-                    .count();
+            long todayTrades = countTodaySuccess(allCopyLogs);
 
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("activeChildren", activeChildren.size());
@@ -520,41 +793,38 @@ public class MasterService {
             r.put("todayTradesCopied", todayTrades);
             r.put("successRate", totalTradesCopied + totalFailed > 0
                     ? Math.round((totalTradesCopied * 100.0) / (totalTradesCopied + totalFailed)) : 0);
-            r.put("children", activeChildren.stream().map(s -> {
-                long childSuccess = allCopyLogs.stream()
-                        .filter(l -> s.getChildId().equals(l.getChildId()) && "SUCCESS".equals(l.getChildStatus()))
-                        .count();
-                long childFailed = allCopyLogs.stream()
-                        .filter(l -> s.getChildId().equals(l.getChildId()) && "FAILED".equals(l.getChildStatus()))
-                        .count();
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("childId", s.getChildId());
-                m.put("scalingFactor", s.getScalingFactor());
-                m.put("copyingStatus", s.getCopyingStatus());
-                m.put("tradesCopied", childSuccess);
-                m.put("tradesFailed", childFailed);
-                return m;
-            }).toList());
+            r.put("children", enrichedChildren);
             return r;
         });
     }
 
-    /** Spec §2.4 — master trade P&L summary (from trade logs). */
+    /** Spec §2.4 — master trade P&L summary (live positions + copy logs). */
     public Mono<Map<String, Object>> getTradePnlSummary(UUID masterId) {
-        return logs.findByMasterId(masterId).collectList()
-                .map(list -> {
-                    Map<String, Object> summary = new LinkedHashMap<>();
-                    summary.put("totalRealisedPnl", 0);
-                    summary.put("totalUnrealisedPnl", 0);
-                    summary.put("todayPnl", 0);
-                    summary.put("totalTrades", list.size());
-                    summary.put("winRate", 0);
-                    summary.put("avgWin", 0);
-                    summary.put("avgLoss", 0);
-                    Map<String, Object> r = new LinkedHashMap<>();
-                    r.put("summary", summary);
-                    r.put("trades", list);
-                    return r;
-                });
+        return Mono.zip(
+                logs.findByMasterId(masterId).collectList(),
+                positionsService.getMasterPositions(masterId).onErrorReturn(Map.of("totalPnl", 0, "positions", List.of())),
+                copyLogs.findByMasterId(masterId).collectList()
+        ).map(t -> {
+            var tradeLogs = t.getT1();
+            Map<String, Object> pos = t.getT2();
+            var copyLogList = t.getT3();
+            double unrealized = MasterChildMetricsHelper.toDouble(pos.get("totalPnl"));
+            long success = copyLogList.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
+
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("totalRealisedPnl", 0);
+            summary.put("totalUnrealisedPnl", MasterChildMetricsHelper.round2(unrealized));
+            summary.put("todayPnl", MasterChildMetricsHelper.round2(unrealized));
+            summary.put("totalTrades", tradeLogs.size());
+            summary.put("copiesSuccess", success);
+            summary.put("winRate", 0);
+            summary.put("avgWin", 0);
+            summary.put("avgLoss", 0);
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("summary", summary);
+            r.put("trades", tradeLogs);
+            r.put("positions", pos.getOrDefault("positions", List.of()));
+            return r;
+        });
     }
 }
