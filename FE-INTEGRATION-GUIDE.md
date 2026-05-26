@@ -1,5 +1,7 @@
 # Frontend Integration Guide — Backend Updates (May 2026)
 
+> **Start here for FE:** [FE-CURRENT-INTEGRATION.md](./FE-CURRENT-INTEGRATION.md) — single entry point for current production integration.
+
 Companion to [PLATFORM-GUIDE.md](./PLATFORM-GUIDE.md) and [ASCENTRA-SPEC-GAP.md](./ASCENTRA-SPEC-GAP.md).
 
 | | |
@@ -108,6 +110,7 @@ Legacy: `GET /auth/me`, `PUT /auth/me` still work.
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET | `/notifications/telegram/bot` | **(public)** Bot name/link — do not hardcode in FE |
 | POST | `/notifications/telegram/generate-link-token` | 6-digit link code |
 | GET | `/notifications/telegram/status` | Linked? preferences |
 | PUT | `/notifications/telegram/preferences` | Alert toggles |
@@ -527,6 +530,8 @@ Real P&L fields will improve when backend price-fetch jobs land.
 
 ## 7. Telegram linking
 
+**Do not hardcode bot name in React** — load from `GET /api/v1/notifications/telegram/bot` (public, no JWT).
+
 **Production bot:** [@Copy_tradingsBot](https://t.me/Copy_tradingsBot)
 
 **Backend env (server only — never commit token):**
@@ -753,6 +758,7 @@ export interface TelegramLinkTokenResponse {
 
 | Document | Audience |
 |----------|----------|
+| [FE-CURRENT-INTEGRATION.md](./FE-CURRENT-INTEGRATION.md) | **Primary FE handoff (read first)** |
 | [TELEGRAM-SETUP.md](./TELEGRAM-SETUP.md) | **How users join @Copy_tradingsBot + EC2 webhook** |
 | [GAP-DOCS-CORRECTIONS.md](./GAP-DOCS-CORRECTIONS.md) | Fixes to external gap-analysis MD files |
 | [PLATFORM-GUIDE.md](./PLATFORM-GUIDE.md) | Full backend API reference |
