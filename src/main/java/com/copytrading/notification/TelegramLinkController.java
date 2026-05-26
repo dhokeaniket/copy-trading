@@ -19,6 +19,12 @@ public class TelegramLinkController {
         this.linkService = linkService;
     }
 
+    /** Public — FE reads bot name/link here instead of hardcoding. */
+    @GetMapping("/bot")
+    public Map<String, Object> botConfig() {
+        return linkService.getPublicBotConfig();
+    }
+
     @PostMapping("/generate-link-token")
     public Mono<Map<String, Object>> generateLinkToken(@AuthenticationPrincipal String userId) {
         return linkService.generateLinkToken(UUID.fromString(userId));

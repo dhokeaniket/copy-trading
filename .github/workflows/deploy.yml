@@ -22,14 +22,20 @@ jobs:
             git stash || true
             git checkout -- . || true
             git pull origin main
-            chmod +x gradlew
+            chmod +x gradlew scripts/start-backend.sh 2>/dev/null || true
             export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
             export PATH=$JAVA_HOME/bin:$PATH
+            # Stop duplicate starters (systemd/manual) before build
+            sudo fuser -k 8081/tcp 2>/dev/null || true
             killall java 2>/dev/null || true
-            sleep 3
+            sleep 5
             ./gradlew clean build -x test --no-daemon
-            nohup java -Xmx512m -jar build/libs/copy-trading-backend-0.1.0.jar > /home/ec2-user/ascentra.log 2>&1 &
-            disown
-            sleep 20
-            curl -s http://localhost:8081/api/v1/brokers | head -50 || echo "App starting..."
+            if [[ -x scripts/start-backend.sh ]]; then
+              bash scripts/start-backend.sh
+            else
+              source /home/ec2-user/.bashrc 2>/dev/null || true
+              nohup java -Xmx512m -jar build/libs/copy-trading-backend-0.1.0.jar >> /home/ec2-user/ascentra.log 2>&1 &
+            fi
+            sleep 45
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:8081/api/v1/brokers || echo "App starting..."
             echo "Deployment successful!"
