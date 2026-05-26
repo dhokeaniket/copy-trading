@@ -22,6 +22,7 @@
 | [FE-INTEGRATION-GUIDE.md](./FE-INTEGRATION-GUIDE.md) | Same content, more detail on engine/risk/Telegram sections |
 | [SYSTEM-ARCHITECTURE.md](./SYSTEM-ARCHITECTURE.md) | How the system is built — architecture, tech stack, latency |
 | [PLATFORM-GUIDE.md](./PLATFORM-GUIDE.md) | Full backend behaviour, brokers, engine, ops |
+| [TELEGRAM-LINK-UNLINK.md](./TELEGRAM-LINK-UNLINK.md) | Short link / unlink steps for users |
 | [TELEGRAM-SETUP.md](./TELEGRAM-SETUP.md) | Ops / webhook / EC2 only (not FE) |
 | [GAP-DOCS-CORRECTIONS.md](./GAP-DOCS-CORRECTIONS.md) | Old gap-analysis mistakes — do not trust external MDs without checking here |
 
