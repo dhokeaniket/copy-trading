@@ -7,6 +7,7 @@ import reactor.core.publisher.Mono;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import com.copytrading.config.EnginePollingProperties;
 import com.copytrading.subscription.CopySides;
 
 import java.util.LinkedHashMap;
@@ -22,12 +23,15 @@ public class CopyEngineController {
     private final CopyEngineService copyEngine;
     private final OrderPollingService pollingService;
     private final EngineHistoryService historyService;
+    private final EnginePollingProperties pollingProperties;
 
     public CopyEngineController(CopyEngineService copyEngine, OrderPollingService pollingService,
-                                EngineHistoryService historyService) {
+                                EngineHistoryService historyService,
+                                EnginePollingProperties pollingProperties) {
         this.copyEngine = copyEngine;
         this.pollingService = pollingService;
         this.historyService = historyService;
+        this.pollingProperties = pollingProperties;
     }
 
     /**
@@ -59,6 +63,8 @@ public class CopyEngineController {
             boolean enabled = pollingService.isPollingEnabled();
             status.put("pollingEnabled", enabled);
             status.put("isPolling", enabled); // FE compat
+            status.put("pollingIntervalMs", pollingProperties.getIntervalMs());
+            status.put("pollingIntervalSeconds", pollingProperties.getIntervalSeconds());
             return status;
         });
     }
@@ -73,9 +79,14 @@ public class CopyEngineController {
     public Mono<Map<String, Object>> togglePolling(@RequestBody com.copytrading.engine.dto.PollingRequest body) {
         boolean enabled = body.isEnabled();
         pollingService.setPollingEnabled(enabled);
+        long ms = pollingProperties.getIntervalMs();
+        String msg = enabled
+                ? "Polling started. Checking master orders every " + ms + " ms."
+                : "Polling stopped.";
         return Mono.just(Map.of(
                 "pollingEnabled", enabled,
-                "message", enabled ? "Polling started. Checking master orders every 10 seconds." : "Polling stopped."
+                "pollingIntervalMs", ms,
+                "message", msg
         ));
     }
 
@@ -95,6 +106,7 @@ public class CopyEngineController {
         r.put("lastResetAt", pollingService.getLastResetAt().toString());
         r.put("autoResetEnabled", true);
         r.put("pollingEnabled", pollingService.isPollingEnabled());
+        r.put("pollingIntervalMs", pollingProperties.getIntervalMs());
         return Mono.just(r);
     }
 
@@ -125,19 +137,21 @@ public class CopyEngineController {
     @GetMapping("/config")
     public Mono<Map<String, Object>> engineConfig() {
         Map<String, Object> m = new LinkedHashMap<>();
+        long pollMs = pollingProperties.getIntervalMs();
+        String pollLabel = "polling_" + pollMs + "ms";
         m.put("detectionMethods", Map.of(
                 "ZERODHA", "postback",
-                "FYERS", "polling_1s",
-                "UPSTOX", "polling_1s",
-                "DHAN", "polling_1s",
-                "GROWW", "polling_1s",
-                "ANGELONE", "polling_1s"
+                "FYERS", pollLabel,
+                "UPSTOX", pollLabel,
+                "DHAN", pollLabel,
+                "GROWW", pollLabel,
+                "ANGELONE", pollLabel
         ));
         m.put("serverRegion", System.getenv().getOrDefault("AWS_REGION", "eu-north-1"));
         m.put("connectionPooling", true);
         m.put("inMemoryCacheEnabled", true);
         m.put("sessionCacheTTL", 300);
-        m.put("pollingIntervalMs", 1000);
+        m.put("pollingIntervalMs", pollMs);
         return Mono.just(m);
     }
 

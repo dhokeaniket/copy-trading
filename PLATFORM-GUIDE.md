@@ -44,7 +44,7 @@ Copy-trading platform where:
 
 ```mermaid
 flowchart LR
-  M[Master trades on Upstox] --> P[OrderPollingService 1s]
+  M[Master trades on Upstox] --> P[OrderPollingService 500ms]
   P --> E[CopyEngineService]
   E --> R[Risk checks]
   R --> C[Dhan / Groww / etc.]
@@ -57,12 +57,12 @@ flowchart LR
 
 | Broker | Login method | Copy detection |
 |--------|--------------|----------------|
-| **Groww** | API key + secret (or token) | Polling 1s |
+| **Groww** | API key + secret (or token) | Polling 500ms |
 | **Zerodha** | OAuth `request_token` | Postback webhook + polling |
-| **Upstox** | OAuth `authCode` | Polling 1s |
-| **Dhan** | OAuth `tokenId` (consent flow) | Polling 1s |
-| **Fyers** | OAuth `authCode` | Polling 1s |
-| **Angel One** | Client code + password + TOTP | Polling 1s |
+| **Upstox** | OAuth `authCode` | Polling 500ms |
+| **Dhan** | OAuth `tokenId` (consent flow) | Polling 500ms |
+| **Fyers** | OAuth `authCode` | Polling 500ms |
+| **Angel One** | Client code + password + TOTP | Polling 500ms |
 
 Platform API keys live in `application.yml` (Groww, Zerodha, Upstox, Dhan, Fyers, Angel One).
 
@@ -207,7 +207,7 @@ Master manages children, active broker, and analytics.
 
 ### How auto-copy works
 
-1. **`OrderPollingService`** runs every **1 second** (if `pollingEnabled`).
+1. **`OrderPollingService`** runs every **500 ms** (if `pollingEnabled`; configurable via `engine.polling.interval-ms`).
 2. For each master with **active account**, fetches broker order book (Upstox: `GET /v2/order/retrieve-all`).
 3. For orders with status **`complete` / `executed` / `traded`** (not while open/pending):
    - Dedup by `order_id` (memory + Redis + DB on reset).
@@ -371,7 +371,7 @@ Failures → copy status **SKIPPED** with reason in logs.
 
 | Job | When | What |
 |-----|------|------|
-| **Order polling** | Every 1s | Scan master orders → copy |
+| **Order polling** | Every 500ms (default) | Scan master orders → copy |
 | **Polling reset** | 9:15 AM IST weekdays | Clear known orders; reload from DB |
 | **Session reminder** | 9:00 AM IST weekdays | Notify children with expired broker sessions |
 
@@ -398,7 +398,7 @@ Failures → copy status **SKIPPED** with reason in logs.
 3. `GET /api/v1/brokers/accounts/{id}/oauth-url` → open URL → `POST .../login` with `authCode`
 4. `POST /api/v1/master/active-account` → set Upstox account id
 5. `GET /api/v1/engine/status` → `pollingEnabled: true`
-6. Trade on Upstox → within ~1–2s child gets order on Dhan
+6. Trade on Upstox → within ~0.5–1.5s child gets order on Dhan
 
 ### Child
 
@@ -443,7 +443,9 @@ nohup java -Xmx512m -jar build/libs/copy-trading-backend-0.1.0.jar > /home/ec2-u
 
 | File | Content |
 |------|---------|
-| **`FE-INTEGRATION-GUIDE.md`** | **FE guide — new APIs, copySides, risk, Telegram (May 2026)** |
+| **`SYSTEM-ARCHITECTURE.md`** | **Full system build, architecture, tech stack, 500ms polling (May 2026)** |
+| **`FE-CURRENT-INTEGRATION.md`** | **Primary FE integration guide** |
+| **`FE-INTEGRATION-GUIDE.md`** | Extended FE guide — copySides, risk, Telegram |
 | `FRONTEND-INTEGRATION-COMPLETE.md` | FE integration (legacy) |
 | `BROKER-CONNECTION-FLOW.md` | Broker OAuth flows |
 | `API-TESTING-GUIDE.md` | curl examples |

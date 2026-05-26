@@ -4,6 +4,7 @@ import com.copytrading.broker.BrokerAccount;
 import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.broker.BrokerAccountService;
 import com.copytrading.cache.PollingStateCache;
+import com.copytrading.config.EnginePollingProperties;
 import com.copytrading.master.MasterActiveAccount;
 import com.copytrading.master.MasterActiveAccountRepository;
 import com.copytrading.notification.NotificationService;
@@ -23,8 +24,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Polls master's broker accounts for new orders every 10 seconds.
- * When a new order is detected, triggers CopyEngineService.copyTrade().
+ * Polls each master's active broker account on a configurable interval (default 500ms).
+ * When a new filled order is detected, triggers {@link CopyEngineService#copyTrade}.
  *
  * Tracks last known order IDs per master to detect new ones.
  */
@@ -43,6 +44,7 @@ public class OrderPollingService {
     private final PollingStateCache pollingCache;
     private final NotificationService notifications;
     private final CanonicalOrderMapper canonicalMapper;
+    private final EnginePollingProperties pollingProperties;
 
     // In-memory fallback for known orders (used alongside Redis)
     private final ConcurrentHashMap<UUID, Set<String>> knownOrders = new ConcurrentHashMap<>();
@@ -68,7 +70,8 @@ public class OrderPollingService {
                                TradeUpdatesHub hub,
                                PollingStateCache pollingCache,
                                NotificationService notifications,
-                               CanonicalOrderMapper canonicalMapper) {
+                               CanonicalOrderMapper canonicalMapper,
+                               EnginePollingProperties pollingProperties) {
         this.activeAccountRepo = activeAccountRepo;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -79,6 +82,11 @@ public class OrderPollingService {
         this.pollingCache = pollingCache;
         this.notifications = notifications;
         this.canonicalMapper = canonicalMapper;
+        this.pollingProperties = pollingProperties;
+    }
+
+    public long getPollingIntervalMs() {
+        return pollingProperties.getIntervalMs();
     }
 
     public boolean isPollingEnabled() { return pollingEnabled; }
@@ -126,9 +134,10 @@ public class OrderPollingService {
     }
 
     /**
-     * Runs every 10 seconds. Checks each master's active broker account for new orders.
+     * Polls all masters with active broker sessions. Interval from {@code engine.polling.interval-ms} (default 500ms).
      */
-    @Scheduled(fixedDelay = 1000, initialDelay = 15000)
+    @Scheduled(fixedDelayString = "${engine.polling.interval-ms:500}",
+            initialDelayString = "${engine.polling.initial-delay-ms:15000}")
     public void pollMasterOrders() {
         if (!pollingEnabled || resetInProgress) return;
 

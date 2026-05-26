@@ -6,6 +6,12 @@ app:
   kafka:
     enabled: ${APP_KAFKA_ENABLED:false}
 
+# Master order polling — copy detection latency (fixedDelay between cycles)
+engine:
+  polling:
+    interval-ms: ${ENGINE_POLLING_INTERVAL_MS:500}
+    initial-delay-ms: ${ENGINE_POLLING_INITIAL_DELAY_MS:15000}
+
 spring:
   autoconfigure:
     exclude: org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration

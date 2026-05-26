@@ -1,6 +1,7 @@
 package com.copytrading.engine;
 
 import com.copytrading.alert.BalanceAlertService;
+import com.copytrading.config.EnginePollingProperties;
 import com.copytrading.broker.BrokerAccount;
 import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.broker.BrokerAccountService;
@@ -76,6 +77,7 @@ public class CopyEngineService {
     private final SellGuardService sellGuard;
     private final LotSizeScaler lotScaler;
     private final BrokerCredentials credentials;
+    private final EnginePollingProperties pollingProperties;
 
     public CopyEngineService(SubscriptionRepository subs,
                              BrokerAccountRepository brokerRepo,
@@ -99,7 +101,8 @@ public class CopyEngineService {
                              MasterActiveAccountRepository activeAccountRepo,
                              SellGuardService sellGuard,
                              LotSizeScaler lotScaler,
-                             BrokerCredentials credentials) {
+                             BrokerCredentials credentials,
+                             EnginePollingProperties pollingProperties) {
         this.subs = subs;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -123,6 +126,7 @@ public class CopyEngineService {
         this.sellGuard = sellGuard;
         this.lotScaler = lotScaler;
         this.credentials = credentials;
+        this.pollingProperties = pollingProperties;
     }
 
     /**
@@ -688,16 +692,19 @@ public class CopyEngineService {
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("engineStatus", "ACTIVE");
         r.put("pollingEnabled", false);
-        r.put("pollingIntervalSeconds", 1);
+        long pollMs = pollingProperties.getIntervalMs();
+        r.put("pollingIntervalMs", pollMs);
+        r.put("pollingIntervalSeconds", pollMs / 1000.0);
         r.put("supportedBrokers", List.of("GROWW", "ZERODHA", "FYERS", "UPSTOX", "DHAN", "ANGELONE"));
         r.put("modes", List.of("manual", "polling", "postback", "websocket"));
+        String pollLabel = "polling (~" + pollMs + "ms)";
         r.put("detectionMethod", Map.of(
                 "ZERODHA", "postback (~100ms)",
-                "FYERS", "websocket (~50ms)",
-                "UPSTOX", "websocket (~50ms)",
-                "DHAN", "polling (1s)",
-                "GROWW", "polling (1s)",
-                "ANGELONE", "polling (1s)"
+                "FYERS", pollLabel,
+                "UPSTOX", pollLabel,
+                "DHAN", pollLabel,
+                "GROWW", pollLabel,
+                "ANGELONE", pollLabel
         ));
         return Mono.just(r);
     }
