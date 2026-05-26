@@ -1,10 +1,10 @@
 # Corrections to External Gap Analysis Documents
 
-Reviewed:
+Reviewed (also **updated in place**, May 2026):
 
-- `api-gap-analysis.md`
-- `BACKEND_Required_Changes.md`
-- `Full_CrossCheck_Analysis.md`
+- `~/Downloads/api-gap-analysis.md`
+- `~/Downloads/BACKEND_Required_Changes.md`
+- `~/Downloads/Full_CrossCheck_Analysis.md`
 
 This file records what was **wrong in those docs**, what the **backend already has**, and what we **fixed in code** (May 2026).
 
