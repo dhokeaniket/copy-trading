@@ -4,9 +4,10 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Spec §6.5 — {@code POST /api/v1/telegram/webhook}. */
+/** Spec §6.5 — {@code POST /api/v1/telegram/webhook} (public). */
 @RestController
 @RequestMapping("/api/v1/telegram")
 public class TelegramWebhookController {
@@ -18,10 +19,10 @@ public class TelegramWebhookController {
     }
 
     @PostMapping(value = "/webhook", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public Mono<Map<String, String>> webhook(@RequestBody Map<String, Object> payload) {
+    public Mono<Map<String, Object>> webhook(@RequestBody Map<String, Object> payload) {
         Object messageObj = payload.get("message");
         if (!(messageObj instanceof Map<?, ?> message)) {
-            return Mono.just(Map.of("ok", "true"));
+            return ok();
         }
         String text = message.get("text") != null ? message.get("text").toString() : "";
         String chatId = null;
@@ -29,7 +30,13 @@ public class TelegramWebhookController {
         if (chat instanceof Map<?, ?> chatMap && chatMap.get("id") != null) {
             chatId = chatMap.get("id").toString();
         }
-        if (chatId == null) return Mono.just(Map.of("ok", "true"));
-        return linkService.handleWebhookMessage(text, chatId).thenReturn(Map.of("ok", "true"));
+        if (chatId == null) return ok();
+        return linkService.handleWebhookMessage(text, chatId).then(ok());
+    }
+
+    private static Mono<Map<String, Object>> ok() {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        return Mono.just(r);
     }
 }

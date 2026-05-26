@@ -94,7 +94,7 @@ public class AuthController {
 
     @Operation(summary = "Logout", description = "Revoke refresh token")
     @PostMapping(value = "/logout", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public Mono<Map<String, String>> logout(@RequestBody LogoutRequest req) {
+    public Mono<Map<String, Object>> logout(@RequestBody LogoutRequest req) {
         if (req.getRefreshToken() == null || req.getRefreshToken().isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "refreshToken is required"));
         }

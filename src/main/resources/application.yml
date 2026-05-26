@@ -65,8 +65,12 @@ aws:
     senderId: ${AWS_SNS_SENDER_ID:}
 
 telegram:
+  # Set on EC2 via env — never commit real tokens. Revoke token if exposed in chat/logs.
   bot-token: ${TELEGRAM_BOT_TOKEN:}
+  bot-username: ${TELEGRAM_BOT_USERNAME:Copy_tradingsBot}
   enabled: ${TELEGRAM_ENABLED:false}
+  # Public HTTPS URL for setWebhook (e.g. https://api.ascentracapital.com/api/v1/telegram/webhook)
+  webhook-base-url: ${TELEGRAM_WEBHOOK_BASE_URL:}
 
 brokers:
   groww:

@@ -2,6 +2,8 @@ package com.copytrading.notification;
 
 import com.copytrading.auth.UserAccount;
 import com.copytrading.auth.UserAccountRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -13,9 +15,11 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Spec §6 — Telegram link codes and preferences. */
+/** Telegram account linking via /link CODE and trade alerts. */
 @Service
 public class TelegramLinkService {
+
+    private static final Logger log = LoggerFactory.getLogger(TelegramLinkService.class);
 
     private final UserAccountRepository userRepo;
     private final TelegramService telegram;
@@ -24,10 +28,10 @@ public class TelegramLinkService {
     private final ConcurrentHashMap<UUID, Map<String, Object>> preferences = new ConcurrentHashMap<>();
 
     public TelegramLinkService(UserAccountRepository userRepo, TelegramService telegram,
-                               @Value("${telegram.bot-username:AscentraAlertBot}") String botUsername) {
+                               @Value("${telegram.bot-username:Copy_tradingsBot}") String botUsername) {
         this.userRepo = userRepo;
         this.telegram = telegram;
-        this.botUsername = botUsername;
+        this.botUsername = normalizeUsername(botUsername);
     }
 
     public Mono<Map<String, Object>> generateLinkToken(UUID userId) {
@@ -37,14 +41,21 @@ public class TelegramLinkService {
         r.put("code", code);
         r.put("expiresAt", codes.get(code).expiresAt.toString());
         r.put("botUsername", botUsername);
-        r.put("instruction", "Send /link " + code + " to @" + botUsername + " on Telegram");
+        r.put("botLink", "https://t.me/" + botUsername);
+        r.put("instruction", "Open @" + botUsername + " in Telegram and send: /link " + code);
+        r.put("deepLink", "https://t.me/" + botUsername + "?start=link_" + code);
         return Mono.just(r);
     }
 
     public Mono<Map<String, Object>> linkByCode(String code, String chatId) {
-        LinkCode lc = codes.remove(code);
+        if (code == null || code.isBlank()) {
+            return telegram.sendMessage(chatId, "❌ Send: <code>/link 123456</code> (6-digit code from the app).")
+                    .thenReturn(Map.of("linked", false));
+        }
+        String normalized = code.replaceAll("\\s+", "").trim();
+        LinkCode lc = codes.remove(normalized);
         if (lc == null || lc.expiresAt.isBefore(Instant.now())) {
-            return telegram.sendMessage(chatId, "❌ Invalid or expired link code.")
+            return telegram.sendMessage(chatId, "❌ Invalid or expired link code. Generate a new code in the Ascentra app (Profile → Telegram).")
                     .thenReturn(Map.of("linked", false));
         }
         return userRepo.findById(lc.userId)
@@ -52,7 +63,8 @@ public class TelegramLinkService {
                     u.setTelegramChatId(chatId);
                     return userRepo.save(u);
                 })
-                .flatMap(u -> telegram.sendMessage(chatId, "✅ Your Ascentra account is now linked!")
+                .flatMap(u -> telegram.sendMessage(chatId,
+                        "✅ <b>Linked to Ascentra</b>\nAccount: " + u.getName() + "\nYou will receive copy-trade alerts here.")
                         .thenReturn(Map.<String, Object>of("linked", true, "userId", u.getId().toString())));
     }
 
@@ -62,6 +74,8 @@ public class TelegramLinkService {
             boolean linked = u.getTelegramChatId() != null && !u.getTelegramChatId().isBlank();
             r.put("linked", linked);
             r.put("chatId", linked ? u.getTelegramChatId() : null);
+            r.put("botUsername", botUsername);
+            r.put("botLink", "https://t.me/" + botUsername);
             r.put("preferences", preferences.getOrDefault(userId, defaultPreferences()));
             return r;
         });
@@ -82,7 +96,7 @@ public class TelegramLinkService {
     }
 
     public Mono<Map<String, Object>> sendTest(UUID userId) {
-        return telegram.sendToUser(userId, "🟢 <b>Ascentra Test</b>\nTelegram alerts are working.")
+        return telegram.sendToUser(userId, "🟢 <b>Ascentra Test</b>\nTelegram alerts are working for @" + botUsername + ".")
                 .thenReturn(Map.<String, Object>of("sent", true))
                 .onErrorResume(e -> {
                     Map<String, Object> err = new LinkedHashMap<>();
@@ -95,36 +109,64 @@ public class TelegramLinkService {
     public Mono<String> handleWebhookMessage(String text, String chatId) {
         if (text == null) return Mono.just("OK");
         String trimmed = text.trim();
-        if (trimmed.startsWith("/link")) {
-            String code = trimmed.replace("/link", "").trim();
-            return linkByCode(code, chatId).thenReturn("OK");
-        }
-        if ("/help".equalsIgnoreCase(trimmed)) {
+
+        if (trimmed.startsWith("/start")) {
+            String payload = trimmed.length() > 6 ? trimmed.substring(6).trim() : "";
+            if (payload.startsWith("link_")) {
+                return linkByCode(payload.substring(5), chatId).thenReturn("OK");
+            }
             return telegram.sendMessage(chatId,
-                    "<b>Commands</b>\n/link CODE — link account\n/status — trading status\n/help — this message")
+                    "👋 <b>Ascentra Copy Trading</b>\n\n"
+                            + "1. Log in to the app → Profile → Connect Telegram\n"
+                            + "2. Tap <b>Generate code</b>\n"
+                            + "3. Send here: <code>/link YOUR_CODE</code>\n\n"
+                            + "Bot: @" + botUsername)
                     .thenReturn("OK");
         }
+
+        if (trimmed.startsWith("/link")) {
+            String code = trimmed.replaceFirst("(?i)/link", "").trim();
+            return linkByCode(code, chatId).thenReturn("OK");
+        }
+
+        if ("/help".equalsIgnoreCase(trimmed)) {
+            return telegram.sendMessage(chatId,
+                    "<b>Commands</b>\n"
+                            + "<code>/link 123456</code> — link app account (code from Profile)\n"
+                            + "<code>/status</code> — account info\n"
+                            + "<code>/help</code> — this message")
+                    .thenReturn("OK");
+        }
+
         if ("/status".equalsIgnoreCase(trimmed)) {
             return userRepo.findAll()
                     .filter(u -> chatId.equals(u.getTelegramChatId()))
                     .next()
-                    .flatMap(u -> telegram.sendMessage(chatId, "Account: " + u.getName() + " (" + u.getRole() + ")"))
-                    .switchIfEmpty(telegram.sendMessage(chatId, "No linked account. Use /link CODE from the app."))
+                    .flatMap(u -> telegram.sendMessage(chatId,
+                            "Account: <b>" + u.getName() + "</b>\nRole: " + u.getRole() + "\nAlerts: enabled"))
+                    .switchIfEmpty(telegram.sendMessage(chatId,
+                            "Not linked yet. Open the app → Profile → Telegram → generate code → <code>/link CODE</code>"))
                     .thenReturn("OK");
         }
+
         return Mono.just("OK");
     }
 
+    private static String normalizeUsername(String username) {
+        if (username == null) return "Copy_tradingsBot";
+        return username.startsWith("@") ? username.substring(1) : username;
+    }
+
     private static Map<String, Object> defaultPreferences() {
-        return Map.of(
-                "tradeAlerts", true,
-                "riskAlerts", true,
-                "dailySummary", true,
-                "systemAlerts", false,
-                "alertOnSuccess", true,
-                "alertOnFailure", true,
-                "alertOnSkipped", true
-        );
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("tradeAlerts", true);
+        p.put("riskAlerts", true);
+        p.put("dailySummary", true);
+        p.put("systemAlerts", false);
+        p.put("alertOnSuccess", true);
+        p.put("alertOnFailure", true);
+        p.put("alertOnSkipped", true);
+        return p;
     }
 
     private record LinkCode(UUID userId, Instant expiresAt) {}

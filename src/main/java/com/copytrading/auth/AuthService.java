@@ -133,10 +133,12 @@ public class AuthService {
     }
 
     // ── 1.3 Logout ──
-    public Mono<Map<String, String>> logout(String refreshToken) {
+    public Mono<Map<String, Object>> logout(String refreshToken) {
         String hash = sha256Hex(refreshToken);
         return refreshTokens.revokeByTokenHash(hash)
-                .thenReturn(Map.of("message", "Logged out successfully"));
+                .thenReturn(Map.of(
+                        "success", true,
+                        "message", "Logged out successfully"));
     }
 
     // ── 1.4 Refresh Token ──
