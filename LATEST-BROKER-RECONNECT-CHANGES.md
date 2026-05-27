@@ -112,6 +112,48 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 ---
 
+## Server logs (EC2) — reasons & login options
+
+After deploy, grep `/home/ec2-user/ascentra.log`:
+
+```bash
+# Session status with reason + login options
+grep -a "BROKER_SESSION_STATUS\|BROKER_SESSION_DEGRADED\|BROKER_SESSION_REQUIRED" \
+  /home/ec2-user/ascentra.log | tail -20
+
+# Login options returned to FE
+grep -a "BROKER_LOGIN_OPTIONS\|BROKER_DISCONNECTED" \
+  /home/ec2-user/ascentra.log | tail -20
+
+# Disconnect + notifications
+grep -a "BROKER_DISCONNECTED\|NOTIFICATION_PUSH\|BROKER_NOTIFICATION" \
+  /home/ec2-user/ascentra.log | tail -20
+
+# Copy skip reasons
+grep -a "COPY_SKIP" /home/ec2-user/ascentra.log | tail -20
+
+# OTP (if SMS not configured)
+grep -a "OTP_GENERATED\|OTP_SMS_SKIPPED" /home/ec2-user/ascentra.log | tail -10
+```
+
+**API responses** now include explicit fields:
+
+| Field | Example | Meaning |
+|-------|---------|---------|
+| `reason` | `SESSION_INACTIVE`, `TOKEN_EXPIRED`, `USER_DISCONNECT` | Why reconnect is needed |
+| `loginOptionMethods` | `["accessToken","apiKeyWithTotp"]` | Flat list for UI tabs |
+| `loginOptions` | full objects | Same as `GET /brokers` |
+| `errorCode` | `SESSION_EXPIRED` | FE action trigger |
+
+Live tail:
+
+```bash
+tail -f /home/ec2-user/ascentra.log | grep --line-buffered -E \
+  "BROKER_SESSION|BROKER_LOGIN|BROKER_DISCONNECTED|COPY_SKIP|NOTIFICATION_PUSH"
+```
+
+---
+
 ## Related docs
 
 - [BROKER-DISCONNECT-NOTIFICATIONS.md](./BROKER-DISCONNECT-NOTIFICATIONS.md) — notification display (REST + WebSocket)

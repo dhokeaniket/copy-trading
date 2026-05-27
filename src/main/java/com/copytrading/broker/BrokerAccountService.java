@@ -161,7 +161,11 @@ public class BrokerAccountService {
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
-                .map(a -> loginConfigForAccount(a, null));
+                .map(a -> {
+                    Map<String, Object> config = loginConfigForAccount(a, null);
+                    logLoginOptions(accountId, userId, a, config, "GET_LOGIN_OPTIONS");
+                    return config;
+                });
     }
 
     /** End session but keep account; returns full login options for reconnect; pushes notification. */
@@ -178,7 +182,10 @@ public class BrokerAccountService {
                                     "Broker disconnected",
                                     "Your " + BrokerAccountDto.from(saved).getBrokerName()
                                             + " account was disconnected. Tap Reconnect to sign in again.")
-                                    .thenReturn(buildDisconnectResponse(saved)));
+                                    .thenReturn(buildDisconnectResponse(saved)))
+                            .doOnNext(r -> log.info(
+                                    "BROKER_DISCONNECTED accountId={} userId={} broker={} reason=USER_DISCONNECT options={}",
+                                    accountId, userId, a.getBrokerId(), r.get("loginOptionMethods")));
                 });
     }
 
@@ -202,6 +209,9 @@ public class BrokerAccountService {
                         r.put("message", "Access token saved. Session active until " + saved.getSessionExpires());
                         r.put("broker", saved.getBrokerId());
                         r.put("accountId", saved.getId().toString());
+                        r.put("loginMethod", "accessToken");
+                        log.info("BROKER_LOGIN_SUCCESS accountId={} userId={} broker={} method=accessToken",
+                                accountId, userId, saved.getBrokerId());
                         return r;
                     });
                 });
@@ -234,6 +244,9 @@ public class BrokerAccountService {
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
                 .flatMap(a -> {
+                    String loginMethod = detectLoginMethod(a, req);
+                    log.info("BROKER_LOGIN_START accountId={} userId={} broker={} method={}",
+                            accountId, userId, a.getBrokerId(), loginMethod);
                     switch (a.getBrokerId()) {
                         case "GROWW":    return loginGroww(a, req);
                         case "ZERODHA":  return loginZerodha(a, req);
@@ -463,6 +476,8 @@ public class BrokerAccountService {
             r.put("status", "SESSION_ACTIVE");
             r.put("broker", brokerName);
             r.put("expiresAt", s.getSessionExpires().toString());
+            log.info("BROKER_LOGIN_SUCCESS accountId={} userId={} broker={} method=oauth_or_totp",
+                    s.getId(), s.getUserId(), s.getBrokerId());
             return r;
         });
     }
@@ -486,6 +501,8 @@ public class BrokerAccountService {
                     boolean active = Boolean.TRUE.equals(r.get("sessionActive"));
                     if (!active || sessionToken(a) == null) {
                         r.putAll(loginConfigForAccount(a, null));
+                        r.put("reason", describeInactiveReason(a));
+                        logSessionStatus(accountId, userId, r);
                         return Mono.just(r);
                     }
                     return getMargin(accountId, userId)
@@ -493,15 +510,24 @@ public class BrokerAccountService {
                                 applyLiveHealth(r, margin);
                                 if (marginResponseHasError(margin) || !Boolean.TRUE.equals(r.get("sessionActive"))) {
                                     r.putAll(loginConfigForAccount(a, null));
+                                    if (r.get("reason") == null) {
+                                        r.put("reason", margin.getOrDefault("error", "Live broker check failed"));
+                                    }
                                 }
                                 r.put("lastSyncedAt", Instant.now().toString());
+                                logSessionStatus(accountId, userId, r);
                                 return r;
                             })
                             .onErrorResume(e -> {
                                 r.put("connectionHealth", "degraded");
                                 r.put("liveCheckError", e.getMessage());
                                 r.put("action", "RE_LOGIN");
+                                r.put("errorCode", "SESSION_EXPIRED");
+                                r.put("reason", e.getMessage());
                                 r.putAll(loginConfigForAccount(a, null));
+                                log.warn("BROKER_SESSION_LIVE_CHECK_FAILED accountId={} userId={} broker={} reason={}",
+                                        accountId, userId, a.getBrokerId(), e.getMessage());
+                                logSessionStatus(accountId, userId, r);
                                 return Mono.just(r);
                             });
                 });
@@ -521,6 +547,10 @@ public class BrokerAccountService {
         r.put("connectionHealth", health);
         r.put("lastSyncedAt", a.getLinkedAt() != null ? a.getLinkedAt().toString() : null);
         r.put("expiresAt", a.getSessionExpires() != null ? a.getSessionExpires().toString() : null);
+        if (!active) {
+            r.put("reason", describeInactiveReason(a));
+            r.put("action", "RE_LOGIN");
+        }
         return r;
     }
 
@@ -529,8 +559,12 @@ public class BrokerAccountService {
             status.put("connectionHealth", "degraded");
             status.put("sessionActive", false);
             status.put("error", margin.get("error"));
+            status.put("reason", margin.get("error"));
             status.put("errorCode", margin.getOrDefault("errorCode", "SESSION_EXPIRED"));
             status.put("action", margin.getOrDefault("action", "RE_LOGIN"));
+            log.warn("BROKER_SESSION_DEGRADED accountId={} broker={} errorCode={} reason={}",
+                    status.get("accountId"), status.get("broker"),
+                    status.get("errorCode"), status.get("reason"));
         } else {
             status.put("connectionHealth", "good");
             status.put("availableMargin", margin.getOrDefault("availableMargin", 0));
@@ -610,11 +644,13 @@ public class BrokerAccountService {
                     result = Mono.just(mockMargin()); break;
             }
             return result.onErrorResume(e -> {
-                log.error("{}_MARGIN_ERROR: {}", a.getBrokerId(), e.getMessage());
+                log.error("{}_MARGIN_ERROR accountId={} reason={}", a.getBrokerId(), accountId, e.getMessage());
                 Map<String, Object> fallback = new LinkedHashMap<>();
                 fallback.put("availableMargin", 0); fallback.put("usedMargin", 0);
                 fallback.put("totalFunds", 0); fallback.put("collateral", 0);
-                fallback.put("error", friendlyBrokerError(a.getBrokerId(), e.getMessage()));
+                String friendly = friendlyBrokerError(a.getBrokerId(), e.getMessage());
+                fallback.put("error", friendly);
+                fallback.put("reason", friendly);
                 fallback.put("errorCode", "SESSION_EXPIRED");
                 fallback.put("action", "RE_LOGIN");
                 if (isAuthError(e)) {
@@ -1276,7 +1312,9 @@ public class BrokerAccountService {
 
     private Map<String, Object> sessionRequiredResponse(BrokerAccount a) {
         Map<String, Object> r = new LinkedHashMap<>();
+        String reason = describeInactiveReason(a);
         r.put("error", "Session expired. Please re-login to " + BrokerAccountDto.from(a).getBrokerName() + " to continue.");
+        r.put("reason", reason);
         r.put("errorCode", "SESSION_EXPIRED");
         r.put("action", "RE_LOGIN");
         r.put("accountId", a.getId().toString());
@@ -1284,6 +1322,7 @@ public class BrokerAccountService {
         r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
         r.put("status", a.getStatus());
         r.put("sessionActive", false);
+        log.info("BROKER_SESSION_REQUIRED accountId={} broker={} reason={}", a.getId(), a.getBrokerId(), reason);
         return r;
     }
 
@@ -1391,6 +1430,8 @@ public class BrokerAccountService {
         config.put("sessionActive", a.isSessionActive());
         config.put("requiresReconnect", !a.isSessionActive() || sessionToken(a) == null);
         config.put("loginOptionsUrl", "/api/v1/brokers/accounts/" + a.getId() + "/login-options");
+        List<String> methods = extractLoginOptionMethods(config.get("loginOptions"));
+        config.put("loginOptionMethods", methods);
         enrichOAuthUrls(a, config, redirectUri);
         return config;
     }
@@ -1399,6 +1440,7 @@ public class BrokerAccountService {
         Map<String, Object> r = loginConfigForAccount(a, null);
         r.put("message", "Broker disconnected. Choose a login method to reconnect.");
         r.put("notificationType", "BROKER_DISCONNECTED");
+        r.put("reason", "USER_DISCONNECT");
         return r;
     }
 
@@ -1427,7 +1469,64 @@ public class BrokerAccountService {
         data.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
         data.put("action", "RECONNECT");
         data.put("loginOptionsUrl", "/api/v1/brokers/accounts/" + a.getId() + "/login-options");
-        return notifications.push(userId, title, message, type, data).then();
+        return notifications.push(userId, title, message, type, data)
+                .doOnSuccess(n -> log.info("BROKER_NOTIFICATION type={} accountId={} userId={} broker={}",
+                        type, a.getId(), userId, a.getBrokerId()))
+                .then();
+    }
+
+    private void logLoginOptions(UUID accountId, UUID userId, BrokerAccount a, Map<String, Object> config, String source) {
+        log.info("BROKER_LOGIN_OPTIONS source={} accountId={} userId={} broker={} sessionActive={} requiresReconnect={} options={}",
+                source, accountId, userId, a.getBrokerId(), a.isSessionActive(),
+                config.get("requiresReconnect"), config.get("loginOptionMethods"));
+    }
+
+    private void logSessionStatus(UUID accountId, UUID userId, Map<String, Object> status) {
+        log.info("BROKER_SESSION_STATUS accountId={} userId={} broker={} sessionActive={} health={} errorCode={} reason={} action={} options={}",
+                accountId, userId, status.get("broker"), status.get("sessionActive"),
+                status.get("connectionHealth"), status.getOrDefault("errorCode", "-"),
+                status.getOrDefault("reason", "-"), status.getOrDefault("action", "-"),
+                status.get("loginOptionMethods"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> extractLoginOptionMethods(Object loginOptions) {
+        if (!(loginOptions instanceof List<?> list)) {
+            return List.of();
+        }
+        List<String> methods = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> m && m.get("method") != null) {
+                methods.add(String.valueOf(m.get("method")));
+            }
+        }
+        return methods;
+    }
+
+    private static String describeInactiveReason(BrokerAccount a) {
+        if (!a.isSessionActive()) {
+            return "SESSION_INACTIVE";
+        }
+        if (a.getSessionExpires() != null && a.getSessionExpires().isBefore(Instant.now())) {
+            return "TOKEN_EXPIRED";
+        }
+        return "NO_ACCESS_TOKEN";
+    }
+
+    private static String detectLoginMethod(BrokerAccount a, BrokerLoginRequest req) {
+        if (req == null) {
+            return "DHAN".equals(a.getBrokerId()) ? "oauth_consent" : "default";
+        }
+        if (req.getTotpCode() != null && !req.getTotpCode().isBlank()) {
+            return "apiKeyWithTotp";
+        }
+        if (req.getRequestToken() != null && !req.getRequestToken().isBlank()) {
+            return "oauth";
+        }
+        if (req.getAuthCode() != null && !req.getAuthCode().isBlank()) {
+            return "DHAN".equals(a.getBrokerId()) ? "oauth" : "oauth";
+        }
+        return "default";
     }
 
     private void enrichOAuthUrls(BrokerAccount a, Map<String, Object> config, String redirectUri) {

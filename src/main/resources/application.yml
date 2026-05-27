@@ -60,6 +60,13 @@ springdoc:
     path: /v3/api-docs
   use-management-port: false
 
+logging:
+  level:
+    com.copytrading.broker: INFO
+    com.copytrading.notification: INFO
+    com.copytrading.auth: INFO
+    com.copytrading.engine: INFO
+
 aws:
   accessKeyId: ${AWS_ACCESS_KEY_ID:}
   secretAccessKey: ${AWS_SECRET_ACCESS_KEY:}

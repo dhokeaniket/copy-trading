@@ -1,6 +1,8 @@
 package com.copytrading.notification;
 
 import com.copytrading.ws.TradeUpdatesHub;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -11,6 +13,8 @@ import java.util.*;
 
 @Service
 public class NotificationService {
+
+    private static final Logger log = LoggerFactory.getLogger(NotificationService.class);
 
     private final NotificationRepository repo;
     private final TradeUpdatesHub hub;
@@ -63,7 +67,10 @@ public class NotificationService {
         n.setType(type);
         n.setRead(false);
         n.setCreatedAt(Instant.now());
-        return repo.save(n).doOnSuccess(saved -> publishWebSocket(saved, data));
+        return repo.save(n).doOnSuccess(saved -> {
+            log.info("NOTIFICATION_PUSH userId={} type={} title={}", userId, type, title);
+            publishWebSocket(saved, data);
+        });
     }
 
     private void publishWebSocket(Notification n, Map<String, Object> data) {
