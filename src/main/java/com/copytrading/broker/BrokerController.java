@@ -70,6 +70,20 @@ public class BrokerController {
         return service.deleteAccount(accountId, UUID.fromString(userId));
     }
 
+    @Operation(summary = "Disconnect broker session", description = "Clears session; returns full loginOptions (Groww: access token + API key/TOTP) for reconnect")
+    @PostMapping("/api/v1/brokers/accounts/{accountId}/disconnect")
+    public Mono<Map<String, Object>> disconnectBroker(@PathVariable UUID accountId,
+                                                       @AuthenticationPrincipal String userId) {
+        return service.disconnectBroker(accountId, UUID.fromString(userId));
+    }
+
+    @Operation(summary = "Login options for reconnect", description = "Same loginOptions as GET /brokers — use after disconnect or when session expired")
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/login-options")
+    public Mono<Map<String, Object>> getLoginOptions(@PathVariable UUID accountId,
+                                                      @AuthenticationPrincipal String userId) {
+        return service.getLoginOptions(accountId, UUID.fromString(userId));
+    }
+
     @Operation(summary = "Login to broker", description = "Create broker session. Body varies by broker: Groww={}, Zerodha={requestToken}, Fyers/Upstox={authCode}, Dhan={authCode:tokenId}, AngelOne={totpCode}")
     @PostMapping(value = "/api/v1/brokers/accounts/{accountId}/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> loginToBroker(@PathVariable UUID accountId,

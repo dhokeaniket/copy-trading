@@ -189,6 +189,34 @@ Step D: POST /api/v1/brokers/accounts/{accountId}/login  →  {"authCode": "capt
 
 ---
 
+# RECONNECT AFTER DISCONNECT (all brokers)
+
+Use **disconnect** (keeps account) instead of DELETE when the user may reconnect:
+
+```
+POST /api/v1/brokers/accounts/{accountId}/disconnect
+```
+
+Response includes full `loginOptions` for that broker (see table below). A **notification** is saved and pushed on WebSocket (`BROKER_DISCONNECTED`). Details: **[BROKER-DISCONNECT-NOTIFICATIONS.md](./BROKER-DISCONNECT-NOTIFICATIONS.md)**.
+
+```
+GET /api/v1/brokers/accounts/{accountId}/login-options
+GET /api/v1/brokers/accounts/{accountId}/oauth-url
+```
+
+Also returned on `GET .../status` when `sessionActive` is false.
+
+| Broker | loginOptions |
+|--------|----------------|
+| Groww | accessToken, apiKeyWithTotp |
+| Dhan | accessToken, oauth |
+| Zerodha / Fyers / Upstox | oauth |
+| Angel One | totp |
+
+**Frontend:** On "Connect" after disconnect, call `login-options` and show **every** option in `loginOptions` — same UI as first-time link.
+
+---
+
 # STEP 4: After Connection (Same for ALL Brokers)
 
 ### Check status

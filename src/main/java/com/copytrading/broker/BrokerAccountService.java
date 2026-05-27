@@ -7,6 +7,7 @@ import com.copytrading.broker.groww.GrowwApiClient;
 import com.copytrading.broker.upstox.UpstoxApiClient;
 import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import com.copytrading.broker.angelone.AngelOneApiClient;
+import com.copytrading.notification.NotificationService;
 import com.copytrading.security.BrokerCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,13 +34,15 @@ public class BrokerAccountService {
     private final AngelOneApiClient angelOneClient;
     private final PlatformBrokerConfig platformConfig;
     private final BrokerCredentials credentials;
+    private final NotificationService notifications;
 
     public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
                                 ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
                                 UpstoxApiClient upstoxClient, DhanApiClient dhanClient,
                                 AngelOneApiClient angelOneClient,
                                 PlatformBrokerConfig platformConfig,
-                                BrokerCredentials credentials) {
+                                BrokerCredentials credentials,
+                                NotificationService notifications) {
         this.repo = repo;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
@@ -49,6 +52,7 @@ public class BrokerAccountService {
         this.angelOneClient = angelOneClient;
         this.platformConfig = platformConfig;
         this.credentials = credentials;
+        this.notifications = notifications;
     }
 
     private String sessionToken(BrokerAccount a) {
@@ -69,17 +73,7 @@ public class BrokerAccountService {
     }
 
     private Map<String, Object> dhanBrokerInfo() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("brokerId", "DHAN");
-        m.put("name", "Dhan");
-        m.put("isActive", true);
-        m.put("loginMethod", "oauth");
-        m.put("loginField", "tokenId");
-        m.put("loginOptions", List.of(
-            Map.of("method", "accessToken", "description", "Paste access token from Dhan Web (Profile → DhanHQ Trading APIs)", "requiredFields", List.of("accessToken")),
-            Map.of("method", "oauth", "description", "Login via Dhan (platform handles everything, user just clicks Connect)", "requiredFields", List.of())
-        ));
-        return m;
+        return loginConfigForBroker("DHAN");
     }
 
     // 3.2 Link account
@@ -157,7 +151,34 @@ public class BrokerAccountService {
                     if (req.getApiSecret() != null) a.setApiSecret(req.getApiSecret());
                     if (req.getAccountNickname() != null) a.setNickname(req.getAccountNickname());
                     if (req.getClientId() != null) a.setClientId(req.getClientId());
+                    credentials.encryptSensitiveFields(a);
                     return repo.save(a).thenReturn(Map.of("message", "Account updated"));
+                });
+    }
+
+    /** Login UI config for reconnect — same options as GET /api/v1/brokers (e.g. Groww accessToken + apiKeyWithTotp). */
+    public Mono<Map<String, Object>> getLoginOptions(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
+                .map(a -> loginConfigForAccount(a, null));
+    }
+
+    /** End session but keep account; returns full login options for reconnect; pushes notification. */
+    public Mono<Map<String, Object>> disconnectBroker(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
+                .flatMap(a -> {
+                    clearBrokerSession(a);
+                    clearStoredCredentials(a);
+                    credentials.encryptSensitiveFields(a);
+                    return repo.save(a)
+                            .flatMap(saved -> notifyBrokerReconnect(userId, saved, "BROKER_DISCONNECTED",
+                                    "Broker disconnected",
+                                    "Your " + BrokerAccountDto.from(saved).getBrokerName()
+                                            + " account was disconnected. Tap Reconnect to sign in again.")
+                                    .thenReturn(buildDisconnectResponse(saved)));
                 });
     }
 
@@ -174,6 +195,7 @@ public class BrokerAccountService {
                     a.setSessionActive(true);
                     a.setStatus("ACTIVE");
                     a.setSessionExpires(java.time.Instant.now().plusSeconds(86400));
+                    credentials.encryptSensitiveFields(a);
                     return repo.save(a).map(saved -> {
                         Map<String, Object> r = new java.util.LinkedHashMap<>();
                         r.put("status", "SESSION_ACTIVE");
@@ -193,12 +215,16 @@ public class BrokerAccountService {
                 .flatMap(a -> repo.delete(a)
                         .thenReturn(Map.of("message", "Account unlinked"))
                         .onErrorResume(e -> {
-                            // FK constraint from subscriptions — deactivate instead of delete
-                            a.setSessionActive(false);
-                            a.setStatus("INACTIVE");
-                            a.setAccessToken(null);
-                            return repo.save(a).thenReturn(Map.of(
-                                    "message", "Account deactivated. Unsubscribe from masters first to fully remove."));
+                            clearBrokerSession(a);
+                            clearStoredCredentials(a);
+                            credentials.encryptSensitiveFields(a);
+                            return repo.save(a)
+                                    .flatMap(saved -> notifyBrokerReconnect(userId, saved, "BROKER_DISCONNECTED",
+                                            "Broker disconnected",
+                                            "Your " + BrokerAccountDto.from(saved).getBrokerName()
+                                                    + " account was disconnected. Unsubscribe from masters first to fully remove.")
+                                            .thenReturn(Map.of(
+                                                    "message", "Account disconnected. Unsubscribe from masters first to fully remove. Use login-options to reconnect.")));
                         }));
     }
 
@@ -441,54 +467,13 @@ public class BrokerAccountService {
         });
     }
 
-    // 3.7b Get OAuth URL for browser-based login
+    // 3.7b Get OAuth URL + full loginOptions for browser-based login (all brokers)
     public Mono<Map<String, Object>> getOAuthUrl(UUID accountId, UUID userId, String redirectUri) {
         String redirect = (redirectUri != null && !redirectUri.isBlank()) ? redirectUri : platformConfig.getCallbackUrl();
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
-                .map(a -> {
-                    Map<String, Object> r = new LinkedHashMap<>();
-                    r.put("broker", a.getBrokerId());
-                    switch (a.getBrokerId()) {
-                        case "GROWW":
-                            r.put("loginMethod", "secret");
-                            r.put("message", "No OAuth needed. Call login with empty body {}");
-                            break;
-                        case "ZERODHA":
-                            r.put("loginMethod", "oauth");
-                            r.put("loginField", "requestToken");
-                            r.put("oauthUrl", "https://kite.zerodha.com/connect/login?v=3&api_key=" + platformConfig.getZerodha().getApiKey());
-                            r.put("message", "Open oauthUrl in browser. After login, the callback will receive the requestToken automatically.");
-                            break;
-                        case "FYERS":
-                            r.put("loginMethod", "oauth");
-                            r.put("loginField", "authCode");
-                            r.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id=" + platformConfig.getFyers().getApiKey() + "&redirect_uri=" + redirect + "&response_type=code&state=ok");
-                            r.put("message", "Open oauthUrl in browser. After login, the callback will receive the authCode automatically.");
-                            break;
-                        case "UPSTOX":
-                            r.put("loginMethod", "oauth");
-                            r.put("loginField", "authCode");
-                            r.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + platformConfig.getUpstox().getApiKey() + "&redirect_uri=" + redirect);
-                            r.put("message", "Open oauthUrl in browser. After login, the callback will receive the authCode automatically.");
-                            break;
-                        case "DHAN":
-                            r.put("loginMethod", "oauth");
-                            r.put("loginField", "tokenId");
-                            r.put("message", "Call POST /login with empty body first to get loginUrl. Open it in browser. After login, Dhan redirects with tokenId. Call login again with {\"authCode\": \"tokenId\"}");
-                            break;
-                        case "ANGELONE":
-                            r.put("loginMethod", "totp");
-                            r.put("loginField", "totpCode");
-                            r.put("message", "Set clientId (Angel One client code) and apiSecret (password) on the account. Then call login with {\"totpCode\": \"123456\"}");
-                            break;
-                        default:
-                            r.put("loginMethod", "mock");
-                            r.put("message", "Mock broker. Call login with empty body {}");
-                    }
-                    return r;
-                });
+                .map(a -> loginConfigForAccount(a, redirect));
     }
 
     // 3.8 Check session status (DB + live broker ping when session looks active)
@@ -500,11 +485,15 @@ public class BrokerAccountService {
                     Map<String, Object> r = buildSessionStatusMap(a);
                     boolean active = Boolean.TRUE.equals(r.get("sessionActive"));
                     if (!active || sessionToken(a) == null) {
+                        r.putAll(loginConfigForAccount(a, null));
                         return Mono.just(r);
                     }
                     return getMargin(accountId, userId)
                             .map(margin -> {
                                 applyLiveHealth(r, margin);
+                                if (marginResponseHasError(margin) || !Boolean.TRUE.equals(r.get("sessionActive"))) {
+                                    r.putAll(loginConfigForAccount(a, null));
+                                }
                                 r.put("lastSyncedAt", Instant.now().toString());
                                 return r;
                             })
@@ -512,6 +501,7 @@ public class BrokerAccountService {
                                 r.put("connectionHealth", "degraded");
                                 r.put("liveCheckError", e.getMessage());
                                 r.put("action", "RE_LOGIN");
+                                r.putAll(loginConfigForAccount(a, null));
                                 return Mono.just(r);
                             });
                 });
@@ -1314,27 +1304,196 @@ public class BrokerAccountService {
     }
 
     private Map<String, Object> growwBrokerInfo() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("brokerId", "GROWW");
-        m.put("name", "Groww");
-        m.put("isActive", true);
-        m.put("loginMethod", "token");
-        m.put("loginOptions", List.of(
-            Map.of("method", "accessToken", "description", "Paste access token from Groww settings (no API key needed)", "requiredFields", List.of("accessToken")),
-            Map.of("method", "apiKeyWithTotp", "description", "API key + TOTP code from authenticator app", "requiredFields", List.of("apiKey", "totpCode"))
-        ));
-        m.put("note", "Groww requires per-user credentials. Each user generates their own from Groww settings.");
-        return m;
+        return loginConfigForBroker("GROWW");
     }
 
-    private Map<String, Object> brokerInfo(String id, String name, boolean active, List<String> fields, String loginMethod, String loginField) {
+    /** Shared login UI config — used by GET /brokers and reconnect after disconnect (all brokers). */
+    private Map<String, Object> loginConfigForBroker(String brokerId) {
+        String b = brokerId != null ? brokerId.toUpperCase() : "";
+        return switch (b) {
+            case "GROWW" -> {
+                Map<String, Object> m = brokerShell("GROWW", "Groww", "token", null);
+                m.put("loginOptions", List.of(
+                        loginOption("accessToken",
+                                "Paste access token from Groww settings (no API key needed)",
+                                List.of("accessToken"),
+                                "PUT /api/v1/brokers/accounts/{accountId}/token"),
+                        loginOption("apiKeyWithTotp",
+                                "API key + TOTP code from authenticator app",
+                                List.of("apiKey", "totpCode"),
+                                "PUT /api/v1/brokers/accounts/{accountId} then POST .../login")));
+                m.put("note", "Groww requires per-user credentials. Each user generates their own from Groww settings.");
+                yield m;
+            }
+            case "DHAN" -> {
+                Map<String, Object> m = brokerShell("DHAN", "Dhan", "oauth", "tokenId");
+                m.put("loginOptions", List.of(
+                        loginOption("accessToken",
+                                "Paste access token from Dhan Web (Profile → DhanHQ Trading APIs)",
+                                List.of("accessToken"),
+                                "PUT /api/v1/brokers/accounts/{accountId}/token"),
+                        loginOption("oauth",
+                                "Login via Dhan in browser (Connect button)",
+                                List.of(),
+                                "POST /api/v1/brokers/accounts/{accountId}/login {} then again with authCode")));
+                yield m;
+            }
+            case "ZERODHA" -> {
+                Map<String, Object> m = brokerShell("ZERODHA", "Zerodha", "oauth", "requestToken");
+                m.put("loginOptions", List.of(
+                        loginOption("oauth",
+                                "Login with Zerodha Kite in browser",
+                                List.of(),
+                                "GET .../oauth-url → open popup → POST .../login { requestToken }")));
+                yield m;
+            }
+            case "FYERS" -> {
+                Map<String, Object> m = brokerShell("FYERS", "Fyers", "oauth", "authCode");
+                m.put("loginOptions", List.of(
+                        loginOption("oauth",
+                                "Login with Fyers in browser",
+                                List.of(),
+                                "GET .../oauth-url → open popup → POST .../login { authCode }")));
+                yield m;
+            }
+            case "UPSTOX" -> {
+                Map<String, Object> m = brokerShell("UPSTOX", "Upstox", "oauth", "authCode");
+                m.put("loginOptions", List.of(
+                        loginOption("oauth",
+                                "Login with Upstox in browser",
+                                List.of(),
+                                "GET .../oauth-url → open popup → POST .../login { authCode }")));
+                yield m;
+            }
+            case "ANGELONE" -> {
+                Map<String, Object> m = brokerShell("ANGELONE", "Angel One", "totp", "totpCode");
+                m.put("loginOptions", List.of(
+                        loginOption("totp",
+                                "Angel One client code + password + TOTP from authenticator",
+                                List.of("clientId", "apiSecret", "totpCode"),
+                                "PUT /api/v1/brokers/accounts/{accountId} then POST .../login { totpCode }")));
+                yield m;
+            }
+            default -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("brokerId", b);
+                m.put("loginMethod", "mock");
+                m.put("loginOptions", List.of());
+                yield m;
+            }
+        };
+    }
+
+    private Map<String, Object> loginConfigForAccount(BrokerAccount a, String redirectUri) {
+        Map<String, Object> config = new LinkedHashMap<>(loginConfigForBroker(a.getBrokerId()));
+        config.put("accountId", a.getId().toString());
+        config.put("status", a.getStatus());
+        config.put("sessionActive", a.isSessionActive());
+        config.put("requiresReconnect", !a.isSessionActive() || sessionToken(a) == null);
+        config.put("loginOptionsUrl", "/api/v1/brokers/accounts/" + a.getId() + "/login-options");
+        enrichOAuthUrls(a, config, redirectUri);
+        return config;
+    }
+
+    private Map<String, Object> buildDisconnectResponse(BrokerAccount a) {
+        Map<String, Object> r = loginConfigForAccount(a, null);
+        r.put("message", "Broker disconnected. Choose a login method to reconnect.");
+        r.put("notificationType", "BROKER_DISCONNECTED");
+        return r;
+    }
+
+    private void clearBrokerSession(BrokerAccount a) {
+        a.setSessionActive(false);
+        a.setAccessToken(null);
+        a.setSessionExpires(null);
+        a.setStatus("AUTH_REQUIRED");
+    }
+
+    private void clearStoredCredentials(BrokerAccount a) {
+        String b = a.getBrokerId();
+        if ("GROWW".equals(b) || "ANGELONE".equals(b) || "DHAN".equals(b)) {
+            a.setApiKey("");
+            a.setApiSecret("");
+        }
+        if ("ANGELONE".equals(b) || "DHAN".equals(b)) {
+            a.setClientId("");
+        }
+    }
+
+    private Mono<Void> notifyBrokerReconnect(UUID userId, BrokerAccount a, String type, String title, String message) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("accountId", a.getId().toString());
+        data.put("brokerId", a.getBrokerId());
+        data.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
+        data.put("action", "RECONNECT");
+        data.put("loginOptionsUrl", "/api/v1/brokers/accounts/" + a.getId() + "/login-options");
+        return notifications.push(userId, title, message, type, data).then();
+    }
+
+    private void enrichOAuthUrls(BrokerAccount a, Map<String, Object> config, String redirectUri) {
+        String redirect = (redirectUri != null && !redirectUri.isBlank())
+                ? redirectUri
+                : platformConfig.getCallbackUrl();
+        switch (a.getBrokerId()) {
+            case "ZERODHA" -> {
+                var creds = platformConfig.getZerodha();
+                if (creds != null && creds.getApiKey() != null) {
+                    config.put("oauthUrl", "https://kite.zerodha.com/connect/login?v=3&api_key=" + creds.getApiKey());
+                }
+                config.put("message", "Open oauthUrl in browser, then POST login with requestToken from callback.");
+            }
+            case "FYERS" -> {
+                var creds = platformConfig.getFyers();
+                if (creds != null && creds.getApiKey() != null) {
+                    config.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id="
+                            + creds.getApiKey() + "&redirect_uri=" + redirect + "&response_type=code&state=ok");
+                }
+                config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
+            }
+            case "UPSTOX" -> {
+                var creds = platformConfig.getUpstox();
+                if (creds != null && creds.getApiKey() != null) {
+                    config.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id="
+                            + creds.getApiKey() + "&redirect_uri=" + redirect);
+                }
+                config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
+            }
+            case "DHAN" ->
+                    config.put("message", "Option 1: PUT token. Option 2: POST login {} for loginUrl, then login with authCode (tokenId).");
+            case "GROWW" ->
+                    config.put("message", "Choose access token or API key + TOTP from loginOptions.");
+            case "ANGELONE" ->
+                    config.put("message", "Set clientId and apiSecret (password) on account, then POST login with totpCode.");
+            default -> { }
+        }
+    }
+
+    private static Map<String, Object> brokerShell(String id, String name, String loginMethod, String loginField) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("brokerId", id);
         m.put("name", name);
+        m.put("isActive", true);
+        m.put("loginMethod", loginMethod);
+        m.put("requiredFields", List.of());
+        if (loginField != null) {
+            m.put("loginField", loginField);
+        }
+        return m;
+    }
+
+    private static Map<String, Object> loginOption(String method, String description, List<String> requiredFields, String api) {
+        Map<String, Object> o = new LinkedHashMap<>();
+        o.put("method", method);
+        o.put("description", description);
+        o.put("requiredFields", requiredFields);
+        o.put("api", api);
+        return o;
+    }
+
+    private Map<String, Object> brokerInfo(String id, String name, boolean active, List<String> fields, String loginMethod, String loginField) {
+        Map<String, Object> m = brokerShell(id, name, loginMethod, loginField);
         m.put("requiredFields", fields);
         m.put("isActive", active);
-        m.put("loginMethod", loginMethod);  // "secret" = just api key+secret, "oauth" = needs browser redirect
-        if (loginField != null) m.put("loginField", loginField);  // field name to send in login request
         return m;
     }
 
