@@ -4,6 +4,7 @@ import com.copytrading.master.dto.BulkLinkRequest;
 import com.copytrading.master.dto.LinkChildRequest;
 import com.copytrading.master.dto.UpdateScalingRequest;
 import com.copytrading.positions.PositionsService;
+import com.copytrading.trading.TradingDataService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
@@ -22,10 +23,13 @@ public class MasterController {
 
     private final MasterService service;
     private final PositionsService positionsService;
+    private final TradingDataService tradingDataService;
 
-    public MasterController(MasterService service, PositionsService positionsService) {
+    public MasterController(MasterService service, PositionsService positionsService,
+                            TradingDataService tradingDataService) {
         this.service = service;
         this.positionsService = positionsService;
+        this.tradingDataService = tradingDataService;
     }
 
     @Operation(summary = "List children", description = "List all children linked to this master")
@@ -64,6 +68,12 @@ public class MasterController {
 
     @DeleteMapping("/children/{childId}/unlink")
     public Mono<Map<String, String>> unlinkChild(@AuthenticationPrincipal String userId, @PathVariable UUID childId) {
+        return service.unlinkChild(UUID.fromString(userId), childId);
+    }
+
+    @Operation(summary = "Remove child (alias)", description = "Same as unlink — sets subscription INACTIVE")
+    @DeleteMapping("/children/{childId}")
+    public Mono<Map<String, String>> removeChild(@AuthenticationPrincipal String userId, @PathVariable UUID childId) {
         return service.unlinkChild(UUID.fromString(userId), childId);
     }
 
@@ -142,6 +152,12 @@ public class MasterController {
         return service.getTradeHistory(UUID.fromString(userId));
     }
 
+    @Operation(summary = "Trade logs (alias)", description = "Same data as trade-history — copy_logs backed")
+    @GetMapping("/trade-logs")
+    public Mono<Map<String, Object>> getTradeLogs(@AuthenticationPrincipal String userId) {
+        return service.getTradeHistory(UUID.fromString(userId));
+    }
+
     @Operation(summary = "Master trade P&L", description = "Spec §2.4 — master P&L summary with trades")
     @GetMapping("/trade-pnl")
     public Mono<Map<String, Object>> getTradePnl(@AuthenticationPrincipal String userId) {
@@ -187,5 +203,30 @@ public class MasterController {
     @GetMapping("/positions")
     public Mono<Map<String, Object>> getPositions(@AuthenticationPrincipal String userId) {
         return positionsService.getMasterPositions(UUID.fromString(userId));
+    }
+
+    @Operation(summary = "Open order book", description = "Pending/open orders from master's active broker")
+    @GetMapping("/open-book")
+    public Mono<Map<String, Object>> openBook(@AuthenticationPrincipal String userId) {
+        return tradingDataService.getOpenBook(UUID.fromString(userId), true);
+    }
+
+    @Operation(summary = "Open F&O positions", description = "Option/futures positions from master's active broker")
+    @GetMapping("/open-options")
+    public Mono<Map<String, Object>> openOptions(@AuthenticationPrincipal String userId) {
+        return tradingDataService.getOpenOptions(UUID.fromString(userId), true);
+    }
+
+    @Operation(summary = "Option copy status", description = "F&O copy attempts with success/fail/skip details")
+    @GetMapping("/option-status")
+    public Mono<Map<String, Object>> optionStatus(@AuthenticationPrincipal String userId) {
+        return tradingDataService.getOptionStatus(UUID.fromString(userId), true);
+    }
+
+    @Operation(summary = "Square off position", description = "Close a position on master's active broker")
+    @PostMapping(value = "/positions/square-off", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> squareOff(@AuthenticationPrincipal String userId,
+                                              @RequestBody Map<String, Object> body) {
+        return service.squareOffPosition(UUID.fromString(userId), body);
     }
 }

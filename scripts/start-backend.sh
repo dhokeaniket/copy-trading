@@ -7,10 +7,12 @@ JAR="${APP_DIR}/build/libs/copy-trading-backend-0.1.0.jar"
 LOG="${LOG:-/home/ec2-user/ascentra.log}"
 PORT=8081
 
-# Load TELEGRAM_* and other exports
+# Load TELEGRAM_* and other exports (.bashrc may reference unset vars — disable nounset briefly)
 if [[ -f /home/ec2-user/.bashrc ]]; then
+  set +u
   # shellcheck source=/dev/null
   source /home/ec2-user/.bashrc
+  set -u
 fi
 
 cd "$APP_DIR"

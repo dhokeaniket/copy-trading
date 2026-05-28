@@ -94,9 +94,10 @@ public class SellGuardService {
     private int netLongQty(java.util.List<PositionDto> positions, String masterSymbol, String masterBrokerId,
                            String childBrokerId) {
         if (positions == null || masterSymbol == null) return 0;
-        String src = masterBrokerId != null ? masterBrokerId : "GROWW";
-        String tgt = childBrokerId != null ? childBrokerId : src;
-        String translated = symbolMapper.translate(masterSymbol, src, tgt);
+        String tgt = childBrokerId != null ? childBrokerId : "";
+        String translated = !tgt.isBlank()
+                ? symbolMapper.translate(masterSymbol, masterBrokerId, tgt)
+                : masterSymbol;
         String cleanMaster = cleanSymbol(masterSymbol);
         String cleanTranslated = cleanSymbol(translated);
         int net = 0;

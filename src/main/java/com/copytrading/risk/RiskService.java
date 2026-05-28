@@ -64,8 +64,7 @@ public class RiskService {
                                     return Mono.just("MAX_TRADES_PER_DAY: Limit " + rule.getMaxTradesPerDay()
                                             + " reached (" + todayTrades + " today)");
                                 }
-                                return trades.findByUserIdAndStatus(childId, "EXECUTED")
-                                        .count()
+                                return countOpenBrokerPositions(childId, brokerAccountId)
                                         .flatMap(openPositions -> {
                                             if (openPositions >= rule.getMaxOpenPositions()) {
                                                 log.info("RISK_BLOCKED child={} reason=MAX_OPEN_POSITIONS limit={} current={}",
@@ -90,6 +89,29 @@ public class RiskService {
                     log.warn("RISK_MARGIN_CHECK_SKIP child={} err={}", childId, e.getMessage());
                     return Mono.just("");
                 });
+    }
+
+    private Mono<Long> countOpenBrokerPositions(UUID childId, UUID brokerAccountId) {
+        if (brokerAccountId == null) {
+            return trades.findByUserIdAndStatus(childId, "EXECUTED").count();
+        }
+        return brokerService.getPositions(brokerAccountId, childId)
+                .map(pos -> {
+                    Object raw = pos.get("positions");
+                    if (!(raw instanceof List<?> list)) return 0L;
+                    return list.stream().filter(this::hasOpenQty).count();
+                })
+                .onErrorResume(e -> trades.findByUserIdAndStatus(childId, "EXECUTED").count());
+    }
+
+    private boolean hasOpenQty(Object p) {
+        if (p instanceof Map<?, ?> m) {
+            double qty = toDouble(m.get("qty"));
+            if (qty == 0) qty = toDouble(m.get("quantity"));
+            if (qty == 0) qty = toDouble(m.get("netQty"));
+            return Math.abs(qty) > 0;
+        }
+        return true;
     }
 
     static String marginUtilizationMessage(Map<String, Object> margin, double maxExposurePct) {
@@ -124,7 +146,7 @@ public class RiskService {
                     .filter(cl -> cl.getCreatedAt() != null && cl.getCreatedAt().isAfter(todayStart))
                     .filter(cl -> "SUCCESS".equals(cl.getChildStatus()))
                     .count();
-            Mono<Long> openPositionsMono = trades.findByUserIdAndStatus(childId, "EXECUTED").count();
+            Mono<Long> openPositionsMono = countOpenBrokerPositions(childId, brokerAccountId);
             Mono<Map<String, Object>> marginMono = brokerAccountId != null
                     ? brokerService.getMargin(brokerAccountId, childId)
                             .onErrorReturn(Map.of("availableMargin", 0, "totalFunds", 0, "usedMargin", 0))

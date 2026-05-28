@@ -118,7 +118,12 @@ public class EngineHistoryService {
                             t.put("totalChildLatencyMs", l.getLatencyMs());
                             t.put("status", l.getChildStatus());
                             t.put("skipReason", l.getSkipReason());
+                            t.put("errorMessage", l.getErrorMessage());
+                            t.put("failureReason", l.getErrorMessage());
+                            t.put("masterStatus", l.getMasterStatus());
                             t.put("qty", l.getQty());
+                            t.put("masterQty", l.getQty());
+                            t.put("orderId", l.getMasterTradeId());
                             return t;
                         }))
                 .collectList()
@@ -151,6 +156,7 @@ public class EngineHistoryService {
         CopyLog first = logs.get(0);
         long succeeded = logs.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
         long failed = logs.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
+        long skipped = logs.stream().filter(l -> "SKIPPED".equals(l.getChildStatus())).count();
         List<Long> childLat = logs.stream()
                 .map(CopyLog::getLatencyMs)
                 .filter(Objects::nonNull)
@@ -172,18 +178,38 @@ public class EngineHistoryService {
         m.put("childrenTotal", logs.size());
         m.put("childrenSucceeded", succeeded);
         m.put("childrenFailed", failed);
+        m.put("childrenSkipped", skipped);
+        m.put("failures", logs.stream()
+                .filter(l -> "FAILED".equals(l.getChildStatus()) || "SKIPPED".equals(l.getChildStatus()))
+                .map(l -> {
+                    Map<String, Object> f = new LinkedHashMap<>();
+                    f.put("childId", l.getChildId() != null ? l.getChildId().toString() : null);
+                    f.put("status", l.getChildStatus());
+                    f.put("errorMessage", l.getErrorMessage());
+                    f.put("skipReason", l.getSkipReason());
+                    f.put("latencyMs", l.getLatencyMs());
+                    return f;
+                }).toList());
         return m;
     }
 
     private static Map<String, Object> toChildRow(CopyLog l, String childName) {
         Map<String, Object> c = new LinkedHashMap<>();
         c.put("childName", childName);
+        c.put("childId", l.getChildId() != null ? l.getChildId().toString() : null);
         c.put("broker", "—");
         c.put("status", l.getChildStatus());
+        c.put("symbol", l.getSymbol());
+        c.put("side", l.getTradeType());
+        c.put("qty", l.getQty());
+        c.put("masterQty", l.getQty());
         c.put("orderId", l.getMasterTradeId());
-        c.put("failureReason", l.getErrorMessage());
+        c.put("errorMessage", l.getErrorMessage());
+        c.put("skipReason", l.getSkipReason());
+        c.put("failureReason", l.getErrorMessage() != null ? l.getErrorMessage() : l.getSkipReason());
         c.put("totalChildLatencyMs", l.getLatencyMs());
         c.put("brokerLatencyMs", l.getLatencyMs());
+        c.put("childPlacedAt", l.getChildPlacedAt() != null ? l.getChildPlacedAt().toString() : null);
         return c;
     }
 

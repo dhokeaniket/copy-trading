@@ -102,6 +102,17 @@ public class OtpService {
     }
 
     public boolean canResend(String phone) {
+        if (redisAvailable) {
+            try {
+                String sentAt = redis.opsForValue().get("otp:sent:" + phone).block(Duration.ofSeconds(2));
+                if (sentAt != null) {
+                    long epoch = Long.parseLong(sentAt);
+                    return Instant.now().isAfter(Instant.ofEpochSecond(epoch).plusSeconds(RETRY_AFTER_SECONDS));
+                }
+            } catch (Exception e) {
+                log.warn("Redis OTP canResend check failed: {}", e.getMessage());
+            }
+        }
         OtpEntry entry = otpStore.get(phone);
         if (entry == null) return true;
         return Instant.now().isAfter(entry.sentAt().plusSeconds(RETRY_AFTER_SECONDS));

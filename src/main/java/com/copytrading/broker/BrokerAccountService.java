@@ -175,7 +175,7 @@ public class BrokerAccountService {
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
                 .flatMap(a -> {
                     clearBrokerSession(a);
-                    clearStoredCredentials(a);
+                    clearStoredCredentialsOnDisconnect(a);
                     credentials.encryptSensitiveFields(a);
                     return repo.save(a)
                             .flatMap(saved -> notifyBrokerReconnect(userId, saved, "BROKER_DISCONNECTED",
@@ -331,7 +331,14 @@ public class BrokerAccountService {
         }
         return fyersClient.generateToken(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Fyers",
-                        r -> (String) r.get("access_token")))
+                        r -> {
+                            if (r.get("data") instanceof Map<?, ?> d) {
+                                Object t = d.get("access_token");
+                                if (t != null) return t.toString();
+                            }
+                            Object t = r.get("access_token");
+                            return t != null ? t.toString() : null;
+                        }))
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("FYERS_LOGIN_FAILED error={}", e.getMessage(), e);
@@ -1449,6 +1456,13 @@ public class BrokerAccountService {
         a.setAccessToken(null);
         a.setSessionExpires(null);
         a.setStatus("AUTH_REQUIRED");
+    }
+
+    /** Disconnect: keep Groww API key so reconnect can use TOTP-only login. */
+    private void clearStoredCredentialsOnDisconnect(BrokerAccount a) {
+        if (!"GROWW".equals(a.getBrokerId())) {
+            clearStoredCredentials(a);
+        }
     }
 
     private void clearStoredCredentials(BrokerAccount a) {

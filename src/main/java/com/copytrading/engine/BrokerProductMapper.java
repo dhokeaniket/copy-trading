@@ -38,6 +38,29 @@ public final class BrokerProductMapper {
         return "INTRADAY";
     }
 
+    /** Upstox product: I=intraday, D=delivery/carry (incl. F&O NRML). */
+    public static String toUpstoxProduct(String normalizedProduct) {
+        String p = normalizedProduct != null ? normalizedProduct.trim().toUpperCase() : "MIS";
+        return ("MIS".equals(p) || "I".equals(p) || "INTRADAY".equals(p)) ? "I" : "D";
+    }
+
+    /** Dhan API: STOP_LOSS / STOP_LOSS_MARKET (not SL / SL-M). */
+    public static String toDhanOrderType(String orderType, boolean isMarket) {
+        if (isMarket) return "MARKET";
+        if (orderType == null) return "LIMIT";
+        return switch (orderType.trim().toUpperCase()) {
+            case "SL-M" -> "STOP_LOSS_MARKET";
+            case "SL" -> "STOP_LOSS";
+            default -> "LIMIT";
+        };
+    }
+
+    /** Zerodha / NSE exchange code for derivatives. */
+    public static String toZerodhaExchange(String exchange, boolean isFnO) {
+        if (!isFnO) return "BSE".equalsIgnoreCase(exchange) ? "BSE" : "NSE";
+        return "BSE".equalsIgnoreCase(exchange) ? "BFO" : "NFO";
+    }
+
     public static boolean isIntradayProduct(String normalizedProduct) {
         if (normalizedProduct == null || normalizedProduct.isBlank()) return false;
         String p = normalizedProduct.trim().toUpperCase();

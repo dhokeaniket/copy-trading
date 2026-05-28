@@ -83,7 +83,14 @@ public class InstrumentCache {
                                     dhanEq.put(tradingSym.toUpperCase(), secId);
                                     count++;
                                 } else if ("D".equalsIgnoreCase(seg)) {
-                                    dhanFno.put(tradingSym.toUpperCase(), secId);
+                                    String upper = tradingSym.toUpperCase();
+                                    dhanFno.put(upper, secId);
+                                    if (c.length > 8) {
+                                        try {
+                                            int lot = (int) Double.parseDouble(c[8].trim());
+                                            if (lot > 0) lotSizeBySymbol.put(upper, lot);
+                                        } catch (Exception ignored) { /* optional column */ }
+                                    }
                                     count++;
                                 }
                             } catch (Exception e) { /* skip */ }
@@ -130,7 +137,15 @@ public class InstrumentCache {
                                     upstoxEq.put(sym.toUpperCase(), key);
                                     count++;
                                 } else if (key.contains("_FO")) {
-                                    upstoxFno.put(sym.toUpperCase(), key);
+                                    String upper = sym.toUpperCase();
+                                    upstoxFno.put(upper, key);
+                                    upstoxFno.put(upper.replace(" ", ""), key);
+                                    String noWeekly = upper.replaceAll(" \\[\\d+\\]$", "");
+                                    if (!noWeekly.equals(upper)) {
+                                        upstoxFno.put(noWeekly, key);
+                                        upstoxFno.put(noWeekly.replace(" ", ""), key);
+                                    }
+                                    indexLotSize(sym, item);
                                     count++;
                                 }
                             } catch (Exception e) { /* skip */ }
@@ -183,17 +198,33 @@ public class InstrumentCache {
     /** Dhan: get numeric securityId for a symbol */
     public String getDhanSecurityId(String symbol, boolean isFnO) {
         if (symbol == null) return null;
-        String clean = symbol.toUpperCase().replace("-EQ", "").trim();
-        return isFnO ? dhanFno.get(symbol.toUpperCase()) : dhanEq.get(clean);
+        String upper = symbol.toUpperCase().replace("-EQ", "").trim();
+        if (!isFnO) return dhanEq.get(upper);
+        String id = dhanFno.get(upper);
+        if (id != null) return id;
+        return dhanFno.get(upper.replace(" ", ""));
     }
 
-    /** Upstox: get instrument_key like "NSE_EQ|INE002A01018" */
+    /** Upstox: get instrument_key like "NSE_FO|46303" from trading_symbol or prefixed symbol. */
     public String getUpstoxInstrumentKey(String symbol, boolean isFnO) {
         if (symbol == null) return null;
-        // If already in correct format, return as-is
-        if (symbol.contains("|")) return symbol;
-        String clean = symbol.toUpperCase().replace("-EQ", "").trim();
-        return isFnO ? upstoxFno.get(symbol.toUpperCase()) : upstoxEq.get(clean);
+        String lookup = symbol;
+        if (symbol.contains("|")) {
+            lookup = symbol.substring(symbol.indexOf('|') + 1);
+        }
+        String upper = lookup.toUpperCase().replace("-EQ", "").trim();
+        if (isFnO) {
+            String key = upstoxFno.get(upper);
+            if (key != null) return key;
+            key = upstoxFno.get(upper.replace(" ", ""));
+            if (key != null) return key;
+            key = upstoxFno.get(upper + " [1]");
+            if (key != null) return key;
+            // Already a valid instrument_key (NSE_FO|numeric)
+            if (symbol.contains("|") && symbol.matches("(?i).+\\|\\d+$")) return symbol;
+            return null;
+        }
+        return upstoxEq.get(upper);
     }
 
     /** Angel One: get numeric symboltoken */
@@ -212,12 +243,27 @@ public class InstrumentCache {
         String clean = upper.replaceFirst("^NSE_FO\\|", "").replaceFirst("^NSE:", "");
         cached = lotSizeBySymbol.get(clean);
         if (cached != null && cached > 0) return cached;
-        if (clean.startsWith("BANKNIFTY")) return 15;
-        if (clean.startsWith("FINNIFTY")) return 25;
-        if (clean.startsWith("MIDCPNIFTY")) return 50;
-        if (clean.startsWith("NIFTY")) return 25;
-        if (clean.startsWith("SENSEX")) return 10;
+        // NSE revised lots (Nov 2024+); instrument cache overrides when loaded
+        if (clean.startsWith("BANKNIFTY")) return 30;
+        if (clean.startsWith("FINNIFTY")) return 65;
+        if (clean.startsWith("MIDCPNIFTY")) return 120;
+        if (clean.startsWith("NIFTY")) return 75;
+        if (clean.startsWith("SENSEX")) return 20;
         return 1;
+    }
+
+    private void indexLotSize(String tradingSymbol, String jsonFragment) {
+        if (tradingSymbol == null) return;
+        String lotStr = extractJsonField(jsonFragment, "lot_size");
+        if (lotStr == null || lotStr.isBlank()) return;
+        try {
+            int lot = (int) Double.parseDouble(lotStr.trim());
+            if (lot > 0) {
+                String upper = tradingSymbol.toUpperCase();
+                lotSizeBySymbol.put(upper, lot);
+                lotSizeBySymbol.put(upper.replace(" ", ""), lot);
+            }
+        } catch (Exception ignored) { /* skip */ }
     }
 
     public int totalSize() {

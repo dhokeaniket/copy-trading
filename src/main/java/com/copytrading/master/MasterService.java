@@ -166,9 +166,12 @@ public class MasterService {
                             m.put("createdAt", l.getCreatedAt() != null ? l.getCreatedAt().toString() : null);
                             return m;
                         }).toList();
-                        return Map.<String, Object>of("logs", logs);
+                        Map<String, Object> out = new LinkedHashMap<>();
+                        out.put("logs", logs);
+                        out.put("total", logs.size());
+                        return out;
                     });
-        }).onErrorResume(e -> Mono.just(Map.of("logs", List.of())));
+        }).onErrorResume(e -> Mono.just(Map.of("logs", List.of(), "total", 0)));
     }
 
     // Earnings (with monthly breakdown + payouts)
@@ -760,10 +763,23 @@ public class MasterService {
         });
     }
 
-    // 4.7 Trade history
+    // 4.7 Trade history (copy_logs — trade_logs is legacy and often empty)
     public Mono<Map<String, Object>> getTradeHistory(UUID masterId) {
-        return logs.findByMasterId(masterId).collectList()
-                .map(list -> Map.<String, Object>of("trades", list));
+        return getCopyLogs(masterId).map(m -> {
+            Map<String, Object> r = new LinkedHashMap<>();
+            Object logs = m.get("logs");
+            r.put("logs", logs);
+            r.put("trades", logs);
+            return r;
+        });
+    }
+
+    /** Square off a position on the master's active broker account. */
+    public Mono<Map<String, Object>> squareOffPosition(UUID masterId, Map<String, Object> body) {
+        return activeAccountRepo.findById(masterId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "No active master broker account. Set active account first.")))
+                .flatMap(aa -> brokerService.closePosition(aa.getBrokerAccountId(), masterId, body));
     }
 
     // 4.8 Master dashboard (aggregated view + enriched followers)

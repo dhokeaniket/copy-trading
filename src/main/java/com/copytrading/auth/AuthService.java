@@ -245,6 +245,7 @@ public class AuthService {
                                 saved.getEmail(), secret);
                         Map<String, String> resp = new LinkedHashMap<>();
                         resp.put("qrCodeUri", qrUri);
+                        resp.put("qrCode", qrUri);
                         resp.put("secret", secret);
                         return resp;
                     });

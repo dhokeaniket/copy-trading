@@ -59,7 +59,11 @@ public class BrokerProfileService {
         Map<String, Object> p = new LinkedHashMap<>();
         p.put("accountId", a.getId().toString());
         p.put("broker", a.getBrokerId());
+        p.put("brokerName", a.getBrokerId());
+        p.put("nickname", a.getNickname() != null ? a.getNickname() : a.getBrokerId());
+        p.put("status", a.getStatus());
         p.put("clientId", a.getClientId() != null ? a.getClientId() : rawProfile.getOrDefault("clientId", ""));
+        p.put("positions", positions);
         p.put("fullName", rawProfile.getOrDefault("name", ""));
         p.put("email", rawProfile.getOrDefault("email", ""));
         p.put("mobile", rawProfile.getOrDefault("mobile", ""));

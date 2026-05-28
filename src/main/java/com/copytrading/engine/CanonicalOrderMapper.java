@@ -21,7 +21,8 @@ public class CanonicalOrderMapper {
 
     public CanonicalOrder fromBrokerOrder(Map<String, Object> raw, String sourceBrokerId) {
         CanonicalOrder o = new CanonicalOrder();
-        o.setSourceBrokerId(sourceBrokerId != null ? sourceBrokerId.toUpperCase() : "GROWW");
+        o.setSourceBrokerId(sourceBrokerId != null && !sourceBrokerId.isBlank()
+                ? sourceBrokerId.toUpperCase() : null);
         o.setOrderId(OrderNormalizer.extractOrderId(raw));
         o.setStatus(OrderNormalizer.extractStatus(raw));
         o.setSymbol(OrderNormalizer.extractSymbol(raw));
