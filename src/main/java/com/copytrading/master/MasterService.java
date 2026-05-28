@@ -12,6 +12,7 @@ import com.copytrading.logs.TradeLogRepository;
 import com.copytrading.positions.PositionsService;
 import com.copytrading.subscription.Subscription;
 import com.copytrading.subscription.SubscriptionRepository;
+import com.copytrading.trade.TradeRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
@@ -38,6 +39,7 @@ public class MasterService {
     private final OrderPollingService orderPollingService;
     private final EnginePollingProperties pollingProperties;
     private final DatabaseClient db;
+    private final TradeRepository tradeRepository;
 
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
@@ -50,7 +52,8 @@ public class MasterService {
                          PositionsService positionsService,
                          OrderPollingService orderPollingService,
                          EnginePollingProperties pollingProperties,
-                         DatabaseClient db) {
+                         DatabaseClient db,
+                         TradeRepository tradeRepository) {
         this.subs = subs;
         this.users = users;
         this.logs = logs;
@@ -63,6 +66,25 @@ public class MasterService {
         this.orderPollingService = orderPollingService;
         this.pollingProperties = pollingProperties;
         this.db = db;
+        this.tradeRepository = tradeRepository;
+    }
+
+    private Mono<MasterPnlCalculator.PnlSnapshot> buildPnlSnapshot(UUID masterId) {
+        Mono<List<com.copytrading.trade.Trade>> tradesMono =
+                tradeRepository.findByUserIdOrderByPlacedAtDesc(masterId).collectList();
+        Mono<List<CopyLog>> logsMono = copyLogs.findByMasterId(masterId).collectList();
+        Mono<Map<String, Object>> posMono = positionsService.getMasterPositions(masterId)
+                .onErrorReturn(Map.of("totalPnl", 0));
+        Mono<Map<String, Object>> marginMono = activeAccountRepo.findById(masterId)
+                .flatMap(aa -> brokerService.getMargin(aa.getBrokerAccountId(), masterId))
+                .onErrorReturn(Map.of())
+                .defaultIfEmpty(Map.of());
+        return Mono.zip(tradesMono, logsMono, posMono, marginMono)
+                .map(t -> MasterPnlCalculator.build(
+                        t.getT1(),
+                        t.getT2(),
+                        MasterChildMetricsHelper.toDouble(t.getT3().get("totalPnl")),
+                        t.getT4()));
     }
 
     // Active account management (DB-backed, uses upsert)
@@ -261,13 +283,15 @@ public class MasterService {
                 getActiveAccount(masterId),
                 listChildren(masterId),
                 positionsService.getMasterPositions(masterId).onErrorReturn(Map.of("totalPnl", 0, "positions", List.of())),
-                copyLogs.findByMasterId(masterId).collectList()
+                copyLogs.findByMasterId(masterId).collectList(),
+                buildPnlSnapshot(masterId)
         ).map(t -> {
             Map<String, Object> active = t.getT1();
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> children = (List<Map<String, Object>>) t.getT2().get("children");
             Map<String, Object> masterPos = t.getT3();
             List<CopyLog> logs = t.getT4();
+            MasterPnlCalculator.PnlSnapshot snap = t.getT5();
 
             double masterUnrealized = MasterChildMetricsHelper.toDouble(masterPos.get("totalPnl"));
             double followersUnrealized = children.stream()
@@ -289,12 +313,10 @@ public class MasterService {
             summary.put("masterUnrealizedPnl", MasterChildMetricsHelper.round2(masterUnrealized));
             summary.put("followersUnrealizedPnl", MasterChildMetricsHelper.round2(followersUnrealized));
             summary.put("combinedUnrealizedPnl", MasterChildMetricsHelper.round2(combinedUnrealized));
-            // FE aliases (PnLAnalytics.jsx)
-            summary.put("totalRealisedPnl", 0);
-            summary.put("totalRealizedPnl", 0);
+            MasterPnlCalculator.applySummaryAliases(summary, snap);
             summary.put("totalUnrealisedPnl", MasterChildMetricsHelper.round2(combinedUnrealized));
             summary.put("totalUnrealizedPnl", MasterChildMetricsHelper.round2(combinedUnrealized));
-            summary.put("todayPnl", MasterChildMetricsHelper.round2(masterUnrealized));
+            summary.put("todayPnl", MasterChildMetricsHelper.round2(snap.todayRealised() + masterUnrealized));
             summary.put("totalFollowerMarginAvailable", MasterChildMetricsHelper.round2(totalMarginAvailable));
             summary.put("activeFollowers", children.stream().filter(c -> "ACTIVE".equals(c.get("copyingStatus"))).count());
             summary.put("totalCopiesSuccess", success);
@@ -302,6 +324,11 @@ public class MasterService {
             summary.put("todayCopiesSuccess", todaySuccess);
             summary.put("replicationSuccessRate", success + failed > 0
                     ? Math.round(success * 100.0 / (success + failed)) : 0);
+
+            List<Map<String, Object>> dailyChart = snap.dailyPnl();
+            if (dailyChart.size() > 7) {
+                dailyChart = dailyChart.subList(dailyChart.size() - 7, dailyChart.size());
+            }
 
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("summary", summary);
@@ -313,13 +340,16 @@ public class MasterService {
                 p.put("name", c.get("name"));
                 p.put("marginAvailable", c.get("marginAvailable"));
                 p.put("pnlToday", c.get("pnlToday"));
+                p.put("pnl", c.getOrDefault("pnlToday", 0));
+                p.put("totalPnL", c.getOrDefault("pnlToday", 0));
                 p.put("openPositionsCount", c.get("openPositionsCount"));
                 p.put("scalingFactor", c.get("scalingFactor"));
                 p.put("copyingStatus", c.get("copyingStatus"));
                 p.put("tradesCopied", c.getOrDefault("tradesCopied", 0));
                 return p;
             }).toList());
-            r.put("dailyChart", buildDailyCopyChart(logs, 7));
+            r.put("dailyChart", dailyChart);
+            r.put("monthlyPnl", snap.monthlyPnl());
             r.put("earningsBreakdown", List.of(
                     Map.of("name", "Replication volume", "value", success, "unit", "trades"),
                     Map.of("name", "Follower margin (total)", "value", totalMarginAvailable, "unit", "INR")
@@ -714,58 +744,53 @@ public class MasterService {
         return Mono.zip(
                 logs.findByMasterId(masterId).collectList(),
                 subs.findByMasterId(masterId).collectList(),
-                copyLogs.findByMasterId(masterId).collectList()
+                copyLogs.findByMasterId(masterId).collectList(),
+                buildPnlSnapshot(masterId)
         ).map(t -> {
             var tradeLogs = t.getT1();
             var children = t.getT2();
             var allCopyLogs = t.getT3();
+            MasterPnlCalculator.PnlSnapshot snap = t.getT4();
             long totalTrades = allCopyLogs.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
+            long totalFailed = allCopyLogs.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
             long totalReplications = tradeLogs.stream().filter(l -> "REPLICATED".equals(l.getType())).count();
             long activeChildren = children.stream().filter(s -> "ACTIVE".equals(s.getCopyingStatus())).count();
+            long winRate = totalTrades + totalFailed > 0
+                    ? Math.round(totalTrades * 100.0 / (totalTrades + totalFailed)) : 0;
+            double totalPnl = snap.totalRealised() + snap.totalUnrealised();
             Map<String, Object> r = new LinkedHashMap<>();
-            r.put("totalPnl", 0);
-            r.put("winRate", 0);
+            r.put("totalPnl", MasterChildMetricsHelper.round2(totalPnl));
+            r.put("totalPnL", MasterChildMetricsHelper.round2(totalPnl));
+            r.put("winRate", winRate);
             r.put("totalTrades", totalTrades);
             r.put("totalReplications", totalReplications);
-            r.put("totalChildren", activeChildren);
-            r.put("totalFollowers", activeChildren);
+            r.put("todayTradesCopied", countTodaySuccess(allCopyLogs));
+            r.put("totalChildren", children.size());
+            r.put("totalFollowers", children.size());
             r.put("revenue", 0);
             r.put("totalEarnings", 0);
             r.put("subscriptionRevenue", 0);
             r.put("performanceBonus", 0);
-            r.put("portfolioValue", 0);
+            r.put("portfolioValue", snap.portfolioValue());
             r.put("earningsBreakdown", List.of(
                     Map.of("name", "Subscription Fees", "value", 0),
                     Map.of("name", "Performance Bonus", "value", 0)
             ));
-            r.put("performanceChart", List.of(
-                    Map.of("date", java.time.LocalDate.now().minusDays(21).toString(), "value", 100),
-                    Map.of("date", java.time.LocalDate.now().minusDays(14).toString(), "value", 100),
-                    Map.of("date", java.time.LocalDate.now().minusDays(7).toString(), "value", 100),
-                    Map.of("date", java.time.LocalDate.now().toString(), "value", 100)
-            ));
-            r.put("pnl", List.of());
+            r.put("performanceChart", snap.dailyPnl());
+            r.put("pnl", snap.monthlyPnl());
+            r.put("pnlSummary", snap.monthlyPnl());
             r.put("childPerformance", children.stream().map(s -> {
                 long childTradesCopied = allCopyLogs.stream()
                         .filter(l -> s.getChildId().equals(l.getChildId()) && "SUCCESS".equals(l.getChildStatus()))
                         .count();
-                double childPnl = allCopyLogs.stream()
-                        .filter(l -> s.getChildId().equals(l.getChildId()))
-                        .count(); // placeholder until realised P&L ledger
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("childId", s.getChildId());
                 m.put("scalingFactor", s.getScalingFactor());
                 m.put("copyingStatus", s.getCopyingStatus());
-                m.put("pnl", childPnl);
+                m.put("pnl", 0);
                 m.put("tradesCopied", childTradesCopied);
                 return m;
             }).toList());
-            double totalPnl = children.stream()
-                    .mapToDouble(s -> allCopyLogs.stream()
-                            .filter(l -> s.getChildId().equals(l.getChildId()) && "SUCCESS".equals(l.getChildStatus()))
-                            .count())
-                    .sum();
-            r.put("totalPnl", totalPnl);
             return r;
         });
     }
@@ -798,11 +823,12 @@ public class MasterService {
                 .flatMap(this::buildFollowerRow, 2)
                 .collectList();
 
-        return Mono.zip(activeMono, logsMono, allMono, enrichedMono).map(t -> {
+        return Mono.zip(activeMono, logsMono, allMono, enrichedMono, buildPnlSnapshot(masterId)).map(t -> {
             var activeChildren = t.getT1();
             var allCopyLogs = t.getT2();
             var allSubs = t.getT3();
             var enrichedChildren = t.getT4();
+            MasterPnlCalculator.PnlSnapshot snap = t.getT5();
 
             long totalTradesCopied = allCopyLogs.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
             long totalFailed = allCopyLogs.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
@@ -811,18 +837,21 @@ public class MasterService {
             Map<String, Object> r = new LinkedHashMap<>();
             long winRate = totalTradesCopied + totalFailed > 0
                     ? Math.round((totalTradesCopied * 100.0) / (totalTradesCopied + totalFailed)) : 0;
+            double totalPnl = snap.totalRealised() + snap.totalUnrealised();
             r.put("activeChildren", activeChildren.size());
             r.put("totalChildren", allSubs.size());
             r.put("totalFollowers", allSubs.size());
             r.put("totalTradesCopied", totalTradesCopied);
             r.put("totalTrades", totalTradesCopied);
+            r.put("totalReplications", todayTrades);
             r.put("totalFailed", totalFailed);
             r.put("todayTradesCopied", todayTrades);
             r.put("successRate", winRate);
             r.put("winRate", winRate);
-            r.put("totalPnl", 0);
-            r.put("totalPnL", 0);
-            r.put("pnl", List.of());
+            r.put("totalPnl", MasterChildMetricsHelper.round2(totalPnl));
+            r.put("totalPnL", MasterChildMetricsHelper.round2(totalPnl));
+            r.put("portfolioValue", snap.portfolioValue());
+            r.put("pnl", snap.monthlyPnl());
             r.put("childPerformance", enrichedChildren.stream().map(c -> {
                 Map<String, Object> p = new LinkedHashMap<>();
                 p.put("childId", c.get("childId"));
@@ -844,29 +873,29 @@ public class MasterService {
         return Mono.zip(
                 logs.findByMasterId(masterId).collectList(),
                 positionsService.getMasterPositions(masterId).onErrorReturn(Map.of("totalPnl", 0, "positions", List.of())),
-                copyLogs.findByMasterId(masterId).collectList()
+                copyLogs.findByMasterId(masterId).collectList(),
+                buildPnlSnapshot(masterId)
         ).map(t -> {
             var tradeLogs = t.getT1();
             Map<String, Object> pos = t.getT2();
             var copyLogList = t.getT3();
-            double unrealized = MasterChildMetricsHelper.toDouble(pos.get("totalPnl"));
+            MasterPnlCalculator.PnlSnapshot snap = t.getT4();
             long success = copyLogList.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
+            long failed = copyLogList.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
+            long winRate = success + failed > 0 ? Math.round(success * 100.0 / (success + failed)) : 0;
 
             Map<String, Object> summary = new LinkedHashMap<>();
-            summary.put("totalRealisedPnl", 0);
-            summary.put("totalRealizedPnl", 0);
-            summary.put("totalUnrealisedPnl", MasterChildMetricsHelper.round2(unrealized));
-            summary.put("totalUnrealizedPnl", MasterChildMetricsHelper.round2(unrealized));
-            summary.put("todayPnl", MasterChildMetricsHelper.round2(unrealized));
+            MasterPnlCalculator.applySummaryAliases(summary, snap);
             summary.put("totalTrades", tradeLogs.size());
             summary.put("copiesSuccess", success);
-            summary.put("winRate", 0);
+            summary.put("winRate", winRate);
             summary.put("avgWin", 0);
             summary.put("avgLoss", 0);
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("summary", summary);
             r.put("trades", tradeLogs);
             r.put("positions", pos.getOrDefault("positions", List.of()));
+            r.put("monthlyPnl", snap.monthlyPnl());
             return r;
         });
     }
