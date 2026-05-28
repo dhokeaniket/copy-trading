@@ -102,6 +102,23 @@ Password: min 8 chars, at least one digit and one special character.
 
 ---
 
+### POST `/api/v1/auth/forgot-password`
+
+Sends **6-digit OTP to email** (Gmail SMTP). Same message whether email exists or not.
+
+**Request:** `{ "email": "user@example.com" }`
+
+**Response 200:** `{ "message": "...", "expiresIn": 600, "retryAfter": 60 }`
+
+### POST `/api/v1/auth/reset-password`
+
+**Preferred (email OTP):** `{ "email", "otp", "newPassword" }`  
+**Legacy link:** `{ "token", "newPassword" }`
+
+Password rules: min 8 chars, one digit, one special character.
+
+---
+
 ### POST `/api/v1/auth/refresh-token`
 
 **Request**
