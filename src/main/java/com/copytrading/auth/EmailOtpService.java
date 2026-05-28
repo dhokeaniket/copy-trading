@@ -7,8 +7,6 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -171,9 +169,7 @@ public class EmailOtpService {
 
                     — %s
                     """.formatted(otp, OTP_EXPIRY_SECONDS / 60, appName));
-            Mono.fromRunnable(() -> mailSender.send(msg))
-                    .subscribeOn(Schedulers.boundedElastic())
-                    .block(Duration.ofSeconds(15));
+            mailSender.send(msg);
             log.info("EMAIL_OTP_SENT to={}", maskEmail(to));
             return true;
         } catch (Exception e) {
