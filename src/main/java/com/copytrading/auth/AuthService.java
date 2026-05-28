@@ -206,27 +206,61 @@ public class AuthService {
                 });
     }
 
-    public Mono<Map<String, String>> forgotPassword(String email) {
-        return users.findByEmail(email.toLowerCase().trim())
+    /** Sends 6-digit OTP to email (Gmail SMTP). Same response whether or not email exists. */
+    public Mono<Map<String, Object>> forgotPassword(String email) {
+        String normalized = emailOtpService.normalizeEmail(email);
+        return users.findByEmail(normalized)
                 .flatMap(u -> {
-                    String rawToken = UUID.randomUUID().toString();
-                    PasswordResetToken prt = new PasswordResetToken();
-                    prt.setUserId(u.getId());
-                    prt.setTokenHash(sha256Hex(rawToken));
-                    prt.setExpiresAt(Instant.now().plusSeconds(1800));
-                    prt.setUsed(false);
-                    prt.setCreatedAt(Instant.now());
-                    return resetTokens.save(prt).doOnSuccess(saved ->
-                            log.info("PASSWORD_RESET_TOKEN_CREATED userId={} token={}", u.getId(), rawToken));
+                    if (!emailOtpService.canResendPasswordReset(normalized)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                                "Please wait before requesting another OTP"));
+                    }
+                    if (emailOtpService.tooManyPasswordResetAttempts(normalized)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                                "Too many attempts. Request a new OTP."));
+                    }
+                    if (!emailOtpService.sendPasswordResetOtp(normalized)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                                "Failed to send OTP. Check email configuration."));
+                    }
+                    log.info("PASSWORD_RESET_OTP_SENT userId={} email={}", u.getId(), normalized);
+                    return Mono.just(passwordResetOtpResponse());
                 })
-                .thenReturn(Map.of("message", "If the email exists, a reset link has been sent"))
-                .defaultIfEmpty(Map.of("message", "If the email exists, a reset link has been sent"));
+                .switchIfEmpty(Mono.just(passwordResetOtpResponse()));
     }
 
-    public Mono<Map<String, String>> resetPassword(String token, String newPassword) {
-        if (newPassword == null || newPassword.length() < 8 || !newPassword.matches(".*\\d.*")) {
-            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be min 8 chars with at least one number"));
+    public Mono<Map<String, String>> resetPassword(ResetPasswordRequest req) {
+        validateNewPassword(req.getNewPassword());
+        if (req.getEmail() != null && !req.getEmail().isBlank() && req.getOtp() != null && !req.getOtp().isBlank()) {
+            return resetPasswordWithEmailOtp(req.getEmail(), req.getOtp(), req.getNewPassword());
         }
+        if (req.getToken() != null && !req.getToken().isBlank()) {
+            return resetPasswordWithToken(req.getToken(), req.getNewPassword());
+        }
+        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Provide email + otp + newPassword, or token + newPassword"));
+    }
+
+    private Mono<Map<String, String>> resetPasswordWithEmailOtp(String email, String otp, String newPassword) {
+        String normalized = emailOtpService.normalizeEmail(email);
+        if (emailOtpService.tooManyPasswordResetAttempts(normalized)) {
+            return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Too many failed attempts. Request a new OTP."));
+        }
+        if (emailOtpService.isPasswordResetExpired(normalized)) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "OTP has expired. Request a new code from forgot password."));
+        }
+        if (!emailOtpService.verifyPasswordReset(normalized, otp)) {
+            return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid OTP code"));
+        }
+        return users.findByEmail(normalized)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid credentials")))
+                .flatMap(u -> updateUserPassword(u, newPassword))
+                .thenReturn(Map.of("message", "Password reset successful"));
+    }
+
+    private Mono<Map<String, String>> resetPasswordWithToken(String token, String newPassword) {
         String hash = sha256Hex(token);
         return resetTokens.findByTokenHashAndUsedFalse(hash)
                 .filter(rt -> rt.getExpiresAt().isAfter(Instant.now()))
@@ -235,14 +269,31 @@ public class AuthService {
                     rt.setUsed(true);
                     return resetTokens.save(rt)
                             .then(users.findById(rt.getUserId()))
-                            .flatMap(u -> {
-                                u.setPasswordHash(encoder.encode(newPassword));
-                                u.setUpdatedAt(Instant.now());
-                                return users.save(u);
-                            })
-                            .then(refreshTokens.revokeAllByUserId(rt.getUserId()))
+                            .flatMap(u -> updateUserPassword(u, newPassword))
                             .thenReturn(Map.of("message", "Password reset successful"));
                 });
+    }
+
+    private Mono<UserAccount> updateUserPassword(UserAccount u, String newPassword) {
+        u.setPasswordHash(encoder.encode(newPassword));
+        u.setUpdatedAt(Instant.now());
+        return users.save(u).then(refreshTokens.revokeAllByUserId(u.getId())).thenReturn(u);
+    }
+
+    private static void validateNewPassword(String newPassword) {
+        if (newPassword == null || newPassword.length() < 8 || !newPassword.matches(".*\\d.*")
+                || !newPassword.matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>/?].*")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Password must be min 8 chars with at least one number and one special character");
+        }
+    }
+
+    private static Map<String, Object> passwordResetOtpResponse() {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("message", "If the email exists, a verification code was sent.");
+        r.put("expiresIn", 600);
+        r.put("retryAfter", 60);
+        return r;
     }
 
     public Mono<UserDto> getProfile(UUID userId) {

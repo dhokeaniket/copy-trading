@@ -285,9 +285,16 @@ public class MasterService {
                     .count();
 
             Map<String, Object> summary = new LinkedHashMap<>();
+            double combinedUnrealized = masterUnrealized + followersUnrealized;
             summary.put("masterUnrealizedPnl", MasterChildMetricsHelper.round2(masterUnrealized));
             summary.put("followersUnrealizedPnl", MasterChildMetricsHelper.round2(followersUnrealized));
-            summary.put("combinedUnrealizedPnl", MasterChildMetricsHelper.round2(masterUnrealized + followersUnrealized));
+            summary.put("combinedUnrealizedPnl", MasterChildMetricsHelper.round2(combinedUnrealized));
+            // FE aliases (PnLAnalytics.jsx)
+            summary.put("totalRealisedPnl", 0);
+            summary.put("totalRealizedPnl", 0);
+            summary.put("totalUnrealisedPnl", MasterChildMetricsHelper.round2(combinedUnrealized));
+            summary.put("totalUnrealizedPnl", MasterChildMetricsHelper.round2(combinedUnrealized));
+            summary.put("todayPnl", MasterChildMetricsHelper.round2(masterUnrealized));
             summary.put("totalFollowerMarginAvailable", MasterChildMetricsHelper.round2(totalMarginAvailable));
             summary.put("activeFollowers", children.stream().filter(c -> "ACTIVE".equals(c.get("copyingStatus"))).count());
             summary.put("totalCopiesSuccess", success);
@@ -802,13 +809,31 @@ public class MasterService {
             long todayTrades = countTodaySuccess(allCopyLogs);
 
             Map<String, Object> r = new LinkedHashMap<>();
+            long winRate = totalTradesCopied + totalFailed > 0
+                    ? Math.round((totalTradesCopied * 100.0) / (totalTradesCopied + totalFailed)) : 0;
             r.put("activeChildren", activeChildren.size());
             r.put("totalChildren", allSubs.size());
+            r.put("totalFollowers", allSubs.size());
             r.put("totalTradesCopied", totalTradesCopied);
+            r.put("totalTrades", totalTradesCopied);
             r.put("totalFailed", totalFailed);
             r.put("todayTradesCopied", todayTrades);
-            r.put("successRate", totalTradesCopied + totalFailed > 0
-                    ? Math.round((totalTradesCopied * 100.0) / (totalTradesCopied + totalFailed)) : 0);
+            r.put("successRate", winRate);
+            r.put("winRate", winRate);
+            r.put("totalPnl", 0);
+            r.put("totalPnL", 0);
+            r.put("pnl", List.of());
+            r.put("childPerformance", enrichedChildren.stream().map(c -> {
+                Map<String, Object> p = new LinkedHashMap<>();
+                p.put("childId", c.get("childId"));
+                p.put("name", c.get("name"));
+                p.put("scalingFactor", c.get("scalingFactor"));
+                p.put("copyingStatus", c.get("copyingStatus"));
+                p.put("pnl", c.getOrDefault("pnlToday", 0));
+                p.put("pnlToday", c.getOrDefault("pnlToday", 0));
+                p.put("tradesCopied", c.getOrDefault("tradesCopied", 0));
+                return p;
+            }).toList());
             r.put("children", enrichedChildren);
             return r;
         });
@@ -829,7 +854,9 @@ public class MasterService {
 
             Map<String, Object> summary = new LinkedHashMap<>();
             summary.put("totalRealisedPnl", 0);
+            summary.put("totalRealizedPnl", 0);
             summary.put("totalUnrealisedPnl", MasterChildMetricsHelper.round2(unrealized));
+            summary.put("totalUnrealizedPnl", MasterChildMetricsHelper.round2(unrealized));
             summary.put("todayPnl", MasterChildMetricsHelper.round2(unrealized));
             summary.put("totalTrades", tradeLogs.size());
             summary.put("copiesSuccess", success);

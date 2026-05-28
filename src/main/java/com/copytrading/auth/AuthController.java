@@ -128,17 +128,22 @@ public class AuthController {
         return authService.refreshToken(req.getRefreshToken());
     }
 
+    @Operation(summary = "Forgot password", description = "Sends 6-digit OTP to registered email (Gmail SMTP)")
     @PostMapping(value = "/forgot-password", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public Mono<Map<String, String>> forgotPassword(@RequestBody ForgotPasswordRequest req) {
+    public Mono<Map<String, Object>> forgotPassword(@RequestBody ForgotPasswordRequest req) {
         if (req.getEmail() == null || req.getEmail().isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "email is required"));
         }
         return authService.forgotPassword(req.getEmail());
     }
 
+    @Operation(summary = "Reset password", description = "Use email + otp + newPassword (preferred) or token + newPassword")
     @PostMapping(value = "/reset-password", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, String>> resetPassword(@RequestBody ResetPasswordRequest req) {
-        return authService.resetPassword(req.getToken(), req.getNewPassword());
+        if (req.getNewPassword() == null || req.getNewPassword().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "newPassword is required"));
+        }
+        return authService.resetPassword(req);
     }
 
     @GetMapping("/me")

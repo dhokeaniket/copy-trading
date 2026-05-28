@@ -27,6 +27,9 @@ public class EmailOtpService {
     private static final String REDIS_PREFIX = "email:otp:";
     private static final String REDIS_SENT_PREFIX = "email:otp:sent:";
     private static final String REDIS_ATTEMPTS_PREFIX = "email:otp:attempts:";
+    private static final String PW_REDIS_PREFIX = "email:pwreset:";
+    private static final String PW_REDIS_SENT_PREFIX = "email:pwreset:sent:";
+    private static final String PW_REDIS_ATTEMPTS_PREFIX = "email:pwreset:attempts:";
 
     private final SecureRandom random = new SecureRandom();
     private final Map<String, OtpEntry> otpStore = new ConcurrentHashMap<>();
@@ -69,69 +72,136 @@ public class EmailOtpService {
     }
 
     public boolean sendOtp(String email) {
-        String normalized = normalizeEmail(email);
-        String otp = generateOtp();
-        if (!sendEmail(normalized, otp)) {
-            return false;
-        }
-        markSent(normalized, otp);
-        return true;
+        return sendOtp(email, OtpPurpose.LOGIN);
+    }
+
+    public boolean sendPasswordResetOtp(String email) {
+        return sendOtp(email, OtpPurpose.PASSWORD_RESET);
     }
 
     public boolean verify(String email, String otp) {
+        return verify(email, otp, OtpPurpose.LOGIN);
+    }
+
+    public boolean verifyPasswordReset(String email, String otp) {
+        return verify(email, otp, OtpPurpose.PASSWORD_RESET);
+    }
+
+    public boolean canResend(String email) {
+        return canResend(email, OtpPurpose.LOGIN);
+    }
+
+    public boolean canResendPasswordReset(String email) {
+        return canResend(email, OtpPurpose.PASSWORD_RESET);
+    }
+
+    public int getRetryAfter(String email) {
+        return getRetryAfter(email, OtpPurpose.LOGIN);
+    }
+
+    public boolean isExpired(String email) {
+        return isExpired(email, OtpPurpose.LOGIN);
+    }
+
+    public boolean tooManyAttempts(String email) {
+        return tooManyAttempts(email, OtpPurpose.LOGIN);
+    }
+
+    public boolean tooManyPasswordResetAttempts(String email) {
+        return tooManyAttempts(email, OtpPurpose.PASSWORD_RESET);
+    }
+
+    public boolean isPasswordResetExpired(String email) {
+        return isExpired(email, OtpPurpose.PASSWORD_RESET);
+    }
+
+    private boolean sendOtp(String email, OtpPurpose purpose) {
         String normalized = normalizeEmail(email);
+        String otp = generateOtp();
+        if (!sendEmail(normalized, otp, purpose)) {
+            return false;
+        }
+        markSent(normalized, otp, purpose);
+        return true;
+    }
+
+    private boolean verify(String email, String otp, OtpPurpose purpose) {
+        String normalized = normalizeEmail(email);
+        String storeKey = storeKey(normalized, purpose);
         if (redisAvailable) {
             try {
-                String stored = redis.opsForValue().get(REDIS_PREFIX + normalized).block(Duration.ofSeconds(2));
+                String stored = redis.opsForValue().get(purpose.redisPrefix + normalized).block(Duration.ofSeconds(2));
                 if (stored != null && stored.equals(otp)) {
-                    clearOtpState(normalized);
+                    clearOtpState(normalized, purpose);
                     return true;
                 }
-                incrementAttempts(normalized);
+                incrementAttempts(normalized, purpose);
             } catch (Exception e) {
                 log.warn("Redis email OTP verify failed: {}", e.getMessage());
             }
         }
-        OtpEntry entry = otpStore.get(normalized);
+        OtpEntry entry = otpStore.get(storeKey);
         if (entry == null) return false;
         if (Instant.now().isAfter(entry.expiresAt())) {
-            otpStore.remove(normalized);
+            otpStore.remove(storeKey);
             return false;
         }
         if (entry.attempts() >= MAX_ATTEMPTS) return false;
-        otpStore.put(normalized, new OtpEntry(entry.otp(), entry.expiresAt(), entry.sentAt(), entry.attempts() + 1));
+        otpStore.put(storeKey, new OtpEntry(entry.otp(), entry.expiresAt(), entry.sentAt(), entry.attempts() + 1));
         if (entry.otp().equals(otp)) {
-            clearOtpState(normalized);
+            clearOtpState(normalized, purpose);
             return true;
         }
         return false;
     }
 
-    public boolean canResend(String email) {
-        Instant sentAt = getSentAt(normalizeEmail(email));
+    private boolean canResend(String email, OtpPurpose purpose) {
+        Instant sentAt = getSentAt(normalizeEmail(email), purpose);
         if (sentAt == null) return true;
         return Instant.now().isAfter(sentAt.plusSeconds(RETRY_AFTER_SECONDS));
     }
 
-    public int getRetryAfter(String email) {
-        Instant sentAt = getSentAt(normalizeEmail(email));
+    private int getRetryAfter(String email, OtpPurpose purpose) {
+        Instant sentAt = getSentAt(normalizeEmail(email), purpose);
         if (sentAt == null) return 0;
         long elapsed = Instant.now().getEpochSecond() - sentAt.getEpochSecond();
         return Math.max(0, RETRY_AFTER_SECONDS - (int) elapsed);
     }
 
-    public boolean isExpired(String email) {
-        OtpEntry entry = otpStore.get(normalizeEmail(email));
+    private boolean isExpired(String email, OtpPurpose purpose) {
+        String storeKey = storeKey(normalizeEmail(email), purpose);
+        OtpEntry entry = otpStore.get(storeKey);
         if (entry != null) return Instant.now().isAfter(entry.expiresAt());
-        return getSentAt(normalizeEmail(email)) == null;
+        return getSentAt(normalizeEmail(email), purpose) == null;
     }
 
-    public boolean tooManyAttempts(String email) {
+    private boolean tooManyAttempts(String email, OtpPurpose purpose) {
         String normalized = normalizeEmail(email);
-        int attempts = getAttempts(normalized);
+        int attempts = getAttempts(normalized, purpose);
         if (attempts >= MAX_ATTEMPTS) return true;
-        OtpEntry entry = otpStore.get(normalized);
+        OtpEntry entry = otpStore.get(storeKey(normalized, purpose));
         return entry != null && entry.attempts() >= MAX_ATTEMPTS;
+    }
+
+    private enum OtpPurpose {
+        LOGIN(REDIS_PREFIX, REDIS_SENT_PREFIX, REDIS_ATTEMPTS_PREFIX, "login code"),
+        PASSWORD_RESET(PW_REDIS_PREFIX, PW_REDIS_SENT_PREFIX, PW_REDIS_ATTEMPTS_PREFIX, "password reset code");
+
+        final String redisPrefix;
+        final String sentPrefix;
+        final String attemptsPrefix;
+        final String label;
+
+        OtpPurpose(String redisPrefix, String sentPrefix, String attemptsPrefix, String label) {
+            this.redisPrefix = redisPrefix;
+            this.sentPrefix = sentPrefix;
+            this.attemptsPrefix = attemptsPrefix;
+            this.label = label;
+        }
+    }
+
+    private static String storeKey(String email, OtpPurpose purpose) {
+        return purpose.name() + ":" + email;
     }
 
     public int getExpirySeconds() {
@@ -151,82 +221,84 @@ public class EmailOtpService {
         return email.trim().toLowerCase();
     }
 
-    private boolean sendEmail(String to, String otp) {
+    private boolean sendEmail(String to, String otp, OtpPurpose purpose) {
         if (!mailConfigured) {
-            log.info("EMAIL_OTP (dev) to={} otp={}", maskEmail(to), otp);
+            log.info("EMAIL_OTP (dev) purpose={} to={} otp={}", purpose.name(), maskEmail(to), otp);
             return true;
         }
         try {
             SimpleMailMessage msg = new SimpleMailMessage();
             msg.setFrom(fromAddress);
             msg.setTo(to);
-            msg.setSubject(appName + " — your login code");
+            msg.setSubject(appName + " — your " + purpose.label);
             msg.setText("""
-                    Your one-time login code is: %s
+                    Your one-time %s is: %s
 
                     This code expires in %d minutes.
                     If you did not request this, ignore this email.
 
                     — %s
-                    """.formatted(otp, OTP_EXPIRY_SECONDS / 60, appName));
+                    """.formatted(purpose.label, otp, OTP_EXPIRY_SECONDS / 60, appName));
             mailSender.send(msg);
-            log.info("EMAIL_OTP_SENT to={}", maskEmail(to));
+            log.info("EMAIL_OTP_SENT purpose={} to={}", purpose.name(), maskEmail(to));
             return true;
         } catch (Exception e) {
-            log.error("EMAIL_OTP_SEND_FAILED to={} error={}", maskEmail(to), e.getMessage(), e);
+            log.error("EMAIL_OTP_SEND_FAILED purpose={} to={} error={}", purpose.name(), maskEmail(to), e.getMessage(), e);
             return false;
         }
     }
 
-    private void markSent(String email, String otp) {
+    private void markSent(String email, String otp, OtpPurpose purpose) {
         Instant now = Instant.now();
+        String storeKey = storeKey(email, purpose);
         if (redisAvailable) {
             Duration ttl = Duration.ofSeconds(OTP_EXPIRY_SECONDS);
-            redis.opsForValue().set(REDIS_PREFIX + email, otp, ttl).subscribe();
-            redis.opsForValue().set(REDIS_SENT_PREFIX + email, String.valueOf(now.getEpochSecond()), ttl).subscribe();
-            redis.opsForValue().set(REDIS_ATTEMPTS_PREFIX + email, "0", ttl).subscribe();
+            redis.opsForValue().set(purpose.redisPrefix + email, otp, ttl).subscribe();
+            redis.opsForValue().set(purpose.sentPrefix + email, String.valueOf(now.getEpochSecond()), ttl).subscribe();
+            redis.opsForValue().set(purpose.attemptsPrefix + email, "0", ttl).subscribe();
         }
-        otpStore.put(email, new OtpEntry(otp, now.plusSeconds(OTP_EXPIRY_SECONDS), now, 0));
+        otpStore.put(storeKey, new OtpEntry(otp, now.plusSeconds(OTP_EXPIRY_SECONDS), now, 0));
     }
 
-    private void clearOtpState(String email) {
-        otpStore.remove(email);
+    private void clearOtpState(String email, OtpPurpose purpose) {
+        otpStore.remove(storeKey(email, purpose));
         if (redisAvailable) {
-            redis.delete(REDIS_PREFIX + email).subscribe();
-            redis.delete(REDIS_SENT_PREFIX + email).subscribe();
-            redis.delete(REDIS_ATTEMPTS_PREFIX + email).subscribe();
+            redis.delete(purpose.redisPrefix + email).subscribe();
+            redis.delete(purpose.sentPrefix + email).subscribe();
+            redis.delete(purpose.attemptsPrefix + email).subscribe();
         }
     }
 
-    private Instant getSentAt(String email) {
+    private Instant getSentAt(String email, OtpPurpose purpose) {
         if (redisAvailable) {
             try {
-                String sentAt = redis.opsForValue().get(REDIS_SENT_PREFIX + email).block(Duration.ofSeconds(2));
+                String sentAt = redis.opsForValue().get(purpose.sentPrefix + email).block(Duration.ofSeconds(2));
                 if (sentAt != null) return Instant.ofEpochSecond(Long.parseLong(sentAt));
             } catch (Exception ignored) { /* fall through */ }
         }
-        OtpEntry entry = otpStore.get(email);
+        OtpEntry entry = otpStore.get(storeKey(email, purpose));
         return entry != null ? entry.sentAt() : null;
     }
 
-    private int getAttempts(String email) {
+    private int getAttempts(String email, OtpPurpose purpose) {
         if (redisAvailable) {
             try {
-                String a = redis.opsForValue().get(REDIS_ATTEMPTS_PREFIX + email).block(Duration.ofSeconds(2));
+                String a = redis.opsForValue().get(purpose.attemptsPrefix + email).block(Duration.ofSeconds(2));
                 if (a != null) return Integer.parseInt(a);
             } catch (Exception ignored) { /* fall through */ }
         }
-        OtpEntry entry = otpStore.get(email);
+        OtpEntry entry = otpStore.get(storeKey(email, purpose));
         return entry != null ? entry.attempts() : 0;
     }
 
-    private void incrementAttempts(String email) {
+    private void incrementAttempts(String email, OtpPurpose purpose) {
         if (redisAvailable) {
-            redis.opsForValue().increment(REDIS_ATTEMPTS_PREFIX + email).subscribe();
+            redis.opsForValue().increment(purpose.attemptsPrefix + email).subscribe();
         }
-        OtpEntry entry = otpStore.get(email);
+        String storeKey = storeKey(email, purpose);
+        OtpEntry entry = otpStore.get(storeKey);
         if (entry != null) {
-            otpStore.put(email, new OtpEntry(entry.otp(), entry.expiresAt(), entry.sentAt(), entry.attempts() + 1));
+            otpStore.put(storeKey, new OtpEntry(entry.otp(), entry.expiresAt(), entry.sentAt(), entry.attempts() + 1));
         }
     }
 

@@ -49,6 +49,15 @@ Add to `~/.bashrc`, then restart Java.
 
 If `MAIL_USERNAME` is empty, OTP is **logged only** (`EMAIL_OTP (dev) to=... otp=123456`).
 
+## Forgot password (email OTP)
+
+| Step | API |
+|------|-----|
+| Send code | `POST /api/v1/auth/forgot-password` — `{ "email" }` |
+| Reset | `POST /api/v1/auth/reset-password` — `{ "email", "otp", "newPassword" }` |
+
+Legacy link reset still works: `{ "token", "newPassword" }`.
+
 ## Twilio SMS
 
 Phone login (`/send-otp`, `/verify-otp`) is unchanged (Twilio). Email OTP is for **email/password login**.
