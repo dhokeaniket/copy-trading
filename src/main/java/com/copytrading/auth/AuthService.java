@@ -106,11 +106,11 @@ public class AuthService {
                 .filter(UserAccount::isTwoFactorEnabled)
                 .flatMap(u -> {
                     String channel = resolveChannel(u.getTwoFactorChannel());
-                    if (!canResendOtp(u, channel)) {
+                    if (!canResendLoginOtp(u, channel)) {
                         return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
                                 "Please wait before requesting another OTP"));
                     }
-                    if (!sendOtp(u, channel)) {
+                    if (!deliverLoginOtp(u, channel)) {
                         return Mono.error(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                                 "Failed to send OTP. Check email or Twilio configuration."));
                     }
@@ -120,21 +120,24 @@ public class AuthService {
     }
 
     public Mono<LoginResponse> verifyLoginOtp(String email, String otp) {
+        return verifyLoginOtp(email, otp, null);
+    }
+
+    public Mono<LoginResponse> verifyLoginOtp(String email, String otp, String authorization) {
         String code = otp == null ? "" : otp.trim();
-        return users.findByEmail(emailOtpService.normalizeEmail(email))
-                .filter(UserAccount::isActive)
+        return resolveUserForLoginOtp(email, authorization)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials")))
                 .flatMap(u -> {
                     String channel = resolveChannel(u.getTwoFactorChannel());
-                    if (tooManyAttempts(u, channel)) {
+                    if (tooManyLoginAttempts(u, channel)) {
                         return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
                                 "Too many failed attempts. Request a new OTP."));
                     }
-                    if (isExpired(u, channel)) {
+                    if (isLoginOtpExpired(u, channel)) {
                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                                 "OTP has expired. Please login again."));
                     }
-                    if (!verifyOtp(u, channel, code)) {
+                    if (!verifyLoginOtpCode(u, channel, code)) {
                         return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid OTP code"));
                     }
                     return issueTokens(u).map(tokens -> {
@@ -441,14 +444,14 @@ public class AuthService {
     }
 
     private Mono<LoginResponse> sendLoginOtp(UserAccount u, String channel) {
-        if (!canResendOtp(u, channel)) {
+        if (!canResendLoginOtp(u, channel)) {
             int retry = TwoFactorChannel.PHONE.equals(channel)
                     ? otpService.getRetryAfter(u.getPhone())
-                    : emailOtpService.getRetryAfter(u.getEmail());
+                    : emailOtpService.getLoginRetryAfter(u.getId());
             return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
                     "Please wait before requesting another OTP. retryAfter=" + retry));
         }
-        if (!sendOtp(u, channel)) {
+        if (!deliverLoginOtp(u, channel)) {
             return Mono.error(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "Failed to send OTP. Check email or Twilio configuration."));
         }
@@ -476,6 +479,56 @@ public class AuthService {
     private static String resolveChannel(String stored) {
         String channel = TwoFactorChannel.normalize(stored);
         return channel != null ? channel : TwoFactorChannel.EMAIL;
+    }
+
+    private Mono<UserAccount> resolveUserForLoginOtp(String email, String authorization) {
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            try {
+                var claims = jwtService.parse(authorization.substring(7).trim());
+                if (Boolean.TRUE.equals(claims.get("pending2fa", Boolean.class))) {
+                    UUID id = UUID.fromString(claims.getSubject());
+                    return users.findById(id).filter(UserAccount::isActive);
+                }
+            } catch (Exception ignored) {
+                // fall through to email lookup
+            }
+        }
+        return users.findByEmail(emailOtpService.normalizeEmail(email)).filter(UserAccount::isActive);
+    }
+
+    private boolean deliverLoginOtp(UserAccount u, String channel) {
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            return otpService.sendOtp(u.getPhone());
+        }
+        return emailOtpService.sendLoginOtp(u.getId(), u.getEmail());
+    }
+
+    private boolean verifyLoginOtpCode(UserAccount u, String channel, String otp) {
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            return otpService.verify(u.getPhone(), otp);
+        }
+        return emailOtpService.verifyLogin(u.getId(), otp);
+    }
+
+    private boolean canResendLoginOtp(UserAccount u, String channel) {
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            return otpService.canResend(u.getPhone());
+        }
+        return emailOtpService.canResendLogin(u.getId());
+    }
+
+    private boolean tooManyLoginAttempts(UserAccount u, String channel) {
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            return otpService.tooManyAttempts(u.getPhone());
+        }
+        return emailOtpService.tooManyLoginAttempts(u.getId());
+    }
+
+    private boolean isLoginOtpExpired(UserAccount u, String channel) {
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            return otpService.isExpired(u.getPhone());
+        }
+        return emailOtpService.isLoginExpired(u.getId());
     }
 
     private boolean sendOtp(UserAccount u, String channel) {

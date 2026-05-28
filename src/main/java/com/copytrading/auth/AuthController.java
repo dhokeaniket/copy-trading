@@ -92,11 +92,13 @@ public class AuthController {
 
     @Operation(summary = "Verify login OTP", description = "Complete login after password + OTP (email or SMS)")
     @PostMapping(value = {"/verify-login-otp", "/verify-email-otp"}, consumes = MediaType.APPLICATION_JSON_VALUE)
-    public Mono<LoginResponse> verifyLoginOtp(@RequestBody VerifyEmailOtpRequest req) {
+    public Mono<LoginResponse> verifyLoginOtp(
+            @RequestBody VerifyEmailOtpRequest req,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
         if (req.getEmail() == null || req.getOtp() == null) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "email and otp are required"));
         }
-        return authService.verifyLoginOtp(req.getEmail(), req.getOtp());
+        return authService.verifyLoginOtp(req.getEmail(), req.getOtp(), authorization);
     }
 
     @Operation(summary = "Register", description = "Create a new user account (MASTER, CHILD, or ADMIN)")
