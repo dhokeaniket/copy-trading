@@ -211,7 +211,7 @@
 
 - **Realized P&L** is still `0` in several analytics endpoints until a full ledger exists; **unrealized** comes from live broker positions.
 - **Broker sessions** must be active (`SESSION_EXPIRED` → user must re-login in Profile).
-- **OTP SMS** needs AWS SNS on server; otherwise OTP appears in server logs only.
+- **OTP SMS** uses Twilio Verify (`TWILIO_*` env vars); without them, OTP appears in server logs only (dev).
 
 ---
 

@@ -39,8 +39,8 @@ dependencies {
     // Swagger / OpenAPI
     implementation 'org.springdoc:springdoc-openapi-starter-webflux-ui:2.5.0'
 
-    // AWS SNS for OTP SMS
-    implementation 'software.amazon.awssdk:sns:2.25.27'
+    // Twilio Verify for OTP SMS
+    implementation 'com.twilio.sdk:twilio:9.3.0'
 
     runtimeOnly 'org.postgresql:postgresql'
 

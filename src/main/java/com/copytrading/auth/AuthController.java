@@ -43,7 +43,12 @@ public class AuthController {
         }
         return authService.findByPhone(req.getPhone())
                 .flatMap(user -> {
-                    otpService.generateAndStore(req.getPhone());
+                    if (!otpService.sendOtp(req.getPhone())) {
+                        return Mono.just(Map.<String, Object>of(
+                                "success", false,
+                                "error", "SMS_FAILED",
+                                "message", "Failed to send OTP. Check Twilio config or verify trial phone list."));
+                    }
                     Map<String, Object> r = new java.util.LinkedHashMap<>();
                     r.put("success", true);
                     r.put("data", Map.of("expiresIn", otpService.getExpirySeconds(), "retryAfter", otpService.getRetrySeconds()));

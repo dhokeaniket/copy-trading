@@ -11,6 +11,9 @@
 
 **Test admin (prod DB):** `admin@gmail.com` / `admin@123`
 
+**Important:** All protected routes return **401** without `Authorization: Bearer <accessToken>`. That is normal.  
+If the browser shows a native username/password popup, nginx has `auth_basic` enabled — see `deploy/NGINX-API-AUTH-FIX.md`.
+
 ---
 
 ## 1. Authentication
@@ -96,13 +99,16 @@ Password: min 8 chars, at least one digit and one special character.
 
 ### POST `/api/v1/auth/send-otp`
 
+SMS via **Twilio Verify** (not AWS SNS). See `TWILIO-OTP-SETUP.md` for EC2 env vars.
+
 **Request**
 ```json
 {
-  "phone": "+919876543210",
+  "phone": "9876543210",
   "purpose": "login"
 }
 ```
+Phone: `9876543210` or `+919876543210` (backend adds `+91` if missing).
 
 **Response 200**
 ```json
@@ -110,9 +116,18 @@ Password: min 8 chars, at least one digit and one special character.
   "success": true,
   "message": "OTP sent successfully",
   "data": {
-    "expiresIn": 300,
+    "expiresIn": 600,
     "retryAfter": 60
   }
+}
+```
+
+**Response 200 (send failed)**
+```json
+{
+  "success": false,
+  "error": "SMS_FAILED",
+  "message": "Failed to send OTP. Check Twilio config or verify trial phone list."
 }
 ```
 

@@ -71,11 +71,14 @@ aws:
   accessKeyId: ${AWS_ACCESS_KEY_ID:}
   secretAccessKey: ${AWS_SECRET_ACCESS_KEY:}
   region: ${AWS_REGION:ap-south-1}
-  sns:
-    topicArn: ${AWS_SNS_TOPIC_ARN:}
-    smsType: ${AWS_SNS_SMS_TYPE:Transactional}
-    # Leave empty unless Sender ID is registered (required for India DLT). Unregistered IDs block SMS.
-    senderId: ${AWS_SNS_SENDER_ID:}
+
+# Twilio Verify — OTP SMS (see TWILIO-OTP-SETUP.md). Do not commit secrets.
+twilio:
+  account-sid: ${TWILIO_ACCOUNT_SID:}
+  api-key: ${TWILIO_API_KEY:}
+  api-secret: ${TWILIO_API_SECRET:}
+  verify-service-sid: ${TWILIO_VERIFY_SERVICE_SID:}
+  default-country-code: ${TWILIO_DEFAULT_COUNTRY_CODE:91}
 
 telegram:
   # Set on EC2 via env — never commit real tokens. Revoke token if exposed in chat/logs.
