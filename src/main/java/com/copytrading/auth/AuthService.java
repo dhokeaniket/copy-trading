@@ -150,6 +150,7 @@ public class AuthService {
     }
 
     /** @deprecated use {@link #verifyLoginOtp} */
+    @Deprecated
     public Mono<LoginResponse> verifyEmailOtpLogin(String email, String otp) {
         return verifyLoginOtp(email, otp);
     }
