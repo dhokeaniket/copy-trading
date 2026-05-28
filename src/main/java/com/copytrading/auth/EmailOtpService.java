@@ -7,12 +7,15 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * Email OTP for login and email-based 2FA (replaces TOTP/QR).
@@ -33,6 +36,7 @@ public class EmailOtpService {
     private static final String PW_REDIS_PREFIX = "email:pwreset:";
     private static final String PW_REDIS_SENT_PREFIX = "email:pwreset:sent:";
     private static final String PW_REDIS_ATTEMPTS_PREFIX = "email:pwreset:attempts:";
+    private static final Duration REDIS_OP_TIMEOUT = Duration.ofSeconds(5);
 
     private final SecureRandom random = new SecureRandom();
     private final Map<String, OtpEntry> otpStore = new ConcurrentHashMap<>();
@@ -60,7 +64,10 @@ public class EmailOtpService {
 
         boolean available = false;
         try {
-            redis.opsForValue().set("email:otp:ping", "pong", Duration.ofSeconds(5)).block(Duration.ofSeconds(3));
+            redisBlocking(() -> {
+                redis.opsForValue().set("email:otp:ping", "pong", Duration.ofSeconds(5)).block(Duration.ofSeconds(3));
+                return true;
+            });
             available = true;
         } catch (Exception e) {
             log.warn("EMAIL_OTP_REDIS_UNAVAILABLE — using in-memory: {}", e.getMessage());
@@ -178,7 +185,8 @@ public class EmailOtpService {
 
         if (redisAvailable) {
             try {
-                String stored = redis.opsForValue().get(otpRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
+                String stored = redisBlocking(() ->
+                        redis.opsForValue().get(otpRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2)));
                 if (stored != null && stored.equals(otp)) {
                     clearOtpState(storageKey, purpose);
                     return true;
@@ -217,7 +225,8 @@ public class EmailOtpService {
         if (entry != null) return Instant.now().isAfter(entry.expiresAt());
         if (redisAvailable) {
             try {
-                String stored = redis.opsForValue().get(otpRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
+                String stored = redisBlocking(() ->
+                        redis.opsForValue().get(otpRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2)));
                 if (stored != null) return false;
             } catch (Exception ignored) { /* fall through */ }
         }
@@ -323,10 +332,12 @@ public class EmailOtpService {
         if (redisAvailable) {
             Duration ttl = Duration.ofSeconds(OTP_EXPIRY_SECONDS);
             try {
-                redis.opsForValue().set(otpRedisKey(storageKey, purpose), otp, ttl).block(Duration.ofSeconds(3));
-                redis.opsForValue().set(sentRedisKey(storageKey, purpose), String.valueOf(now.getEpochSecond()), ttl)
-                        .block(Duration.ofSeconds(3));
-                redis.opsForValue().set(attemptsRedisKey(storageKey, purpose), "0", ttl).block(Duration.ofSeconds(3));
+                redisBlockingVoid(() -> {
+                    redis.opsForValue().set(otpRedisKey(storageKey, purpose), otp, ttl).block(Duration.ofSeconds(3));
+                    redis.opsForValue().set(sentRedisKey(storageKey, purpose), String.valueOf(now.getEpochSecond()), ttl)
+                            .block(Duration.ofSeconds(3));
+                    redis.opsForValue().set(attemptsRedisKey(storageKey, purpose), "0", ttl).block(Duration.ofSeconds(3));
+                });
             } catch (Exception e) {
                 log.warn("Redis email OTP store failed: {}", e.getMessage());
             }
@@ -339,9 +350,11 @@ public class EmailOtpService {
         otpStore.remove(storeKey(storageKey, purpose));
         if (redisAvailable) {
             try {
-                redis.delete(otpRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
-                redis.delete(sentRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
-                redis.delete(attemptsRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
+                redisBlockingVoid(() -> {
+                    redis.delete(otpRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
+                    redis.delete(sentRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
+                    redis.delete(attemptsRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
+                });
             } catch (Exception e) {
                 log.warn("Redis email OTP clear failed: {}", e.getMessage());
             }
@@ -351,7 +364,8 @@ public class EmailOtpService {
     private Instant getSentAt(String storageKey, OtpPurpose purpose) {
         if (redisAvailable) {
             try {
-                String sentAt = redis.opsForValue().get(sentRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
+                String sentAt = redisBlocking(() ->
+                        redis.opsForValue().get(sentRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2)));
                 if (sentAt != null) return Instant.ofEpochSecond(Long.parseLong(sentAt));
             } catch (Exception ignored) { /* fall through */ }
         }
@@ -362,7 +376,8 @@ public class EmailOtpService {
     private int getAttempts(String storageKey, OtpPurpose purpose) {
         if (redisAvailable) {
             try {
-                String a = redis.opsForValue().get(attemptsRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
+                String a = redisBlocking(() ->
+                        redis.opsForValue().get(attemptsRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2)));
                 if (a != null) return Integer.parseInt(a);
             } catch (Exception ignored) { /* fall through */ }
         }
@@ -373,7 +388,8 @@ public class EmailOtpService {
     private void incrementAttempts(String storageKey, OtpPurpose purpose) {
         if (redisAvailable) {
             try {
-                redis.opsForValue().increment(attemptsRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2));
+                redisBlockingVoid(() ->
+                        redis.opsForValue().increment(attemptsRedisKey(storageKey, purpose)).block(Duration.ofSeconds(2)));
             } catch (Exception e) {
                 log.warn("Redis email OTP increment failed: {}", e.getMessage());
             }
@@ -399,5 +415,19 @@ public class EmailOtpService {
         if (storageKey == null) return "****";
         if (storageKey.startsWith("uid:")) return "uid:" + storageKey.substring(4, Math.min(storageKey.length(), 12)) + "***";
         return maskEmail(storageKey);
+    }
+
+    /** Reactive WebFlux threads forbid block(); run Redis I/O on boundedElastic. */
+    private <T> T redisBlocking(Supplier<T> action) {
+        return Mono.fromCallable(action::get)
+                .subscribeOn(Schedulers.boundedElastic())
+                .block(REDIS_OP_TIMEOUT);
+    }
+
+    private void redisBlockingVoid(Runnable action) {
+        redisBlocking(() -> {
+            action.run();
+            return null;
+        });
     }
 }
