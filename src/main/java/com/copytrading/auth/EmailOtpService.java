@@ -127,7 +127,19 @@ public class EmailOtpService {
 
     private boolean verify(String email, String otp, OtpPurpose purpose) {
         String normalized = normalizeEmail(email);
-        String storeKey = storeKey(normalized, purpose);
+        String memKey = storeKey(normalized, purpose);
+
+        // In-memory first (correct for single-node EC2; avoids stale Redis from prior runs)
+        OtpEntry entry = otpStore.get(memKey);
+        if (entry != null) {
+            if (Instant.now().isAfter(entry.expiresAt())) {
+                otpStore.remove(memKey);
+            } else if (entry.attempts() < MAX_ATTEMPTS && entry.otp().equals(otp)) {
+                clearOtpState(normalized, purpose);
+                return true;
+            }
+        }
+
         if (redisAvailable) {
             try {
                 String stored = redis.opsForValue().get(purpose.redisPrefix + normalized).block(Duration.ofSeconds(2));
@@ -135,23 +147,15 @@ public class EmailOtpService {
                     clearOtpState(normalized, purpose);
                     return true;
                 }
-                incrementAttempts(normalized, purpose);
             } catch (Exception e) {
                 log.warn("Redis email OTP verify failed: {}", e.getMessage());
             }
         }
-        OtpEntry entry = otpStore.get(storeKey);
-        if (entry == null) return false;
-        if (Instant.now().isAfter(entry.expiresAt())) {
-            otpStore.remove(storeKey);
-            return false;
+
+        if (entry != null && Instant.now().isBefore(entry.expiresAt()) && entry.attempts() < MAX_ATTEMPTS) {
+            otpStore.put(memKey, new OtpEntry(entry.otp(), entry.expiresAt(), entry.sentAt(), entry.attempts() + 1));
         }
-        if (entry.attempts() >= MAX_ATTEMPTS) return false;
-        otpStore.put(storeKey, new OtpEntry(entry.otp(), entry.expiresAt(), entry.sentAt(), entry.attempts() + 1));
-        if (entry.otp().equals(otp)) {
-            clearOtpState(normalized, purpose);
-            return true;
-        }
+        incrementAttempts(normalized, purpose);
         return false;
     }
 
@@ -253,9 +257,13 @@ public class EmailOtpService {
         String storeKey = storeKey(email, purpose);
         if (redisAvailable) {
             Duration ttl = Duration.ofSeconds(OTP_EXPIRY_SECONDS);
-            redis.opsForValue().set(purpose.redisPrefix + email, otp, ttl).subscribe();
-            redis.opsForValue().set(purpose.sentPrefix + email, String.valueOf(now.getEpochSecond()), ttl).subscribe();
-            redis.opsForValue().set(purpose.attemptsPrefix + email, "0", ttl).subscribe();
+            try {
+                redis.opsForValue().set(purpose.redisPrefix + email, otp, ttl).block(Duration.ofSeconds(3));
+                redis.opsForValue().set(purpose.sentPrefix + email, String.valueOf(now.getEpochSecond()), ttl).block(Duration.ofSeconds(3));
+                redis.opsForValue().set(purpose.attemptsPrefix + email, "0", ttl).block(Duration.ofSeconds(3));
+            } catch (Exception e) {
+                log.warn("Redis email OTP store failed: {}", e.getMessage());
+            }
         }
         otpStore.put(storeKey, new OtpEntry(otp, now.plusSeconds(OTP_EXPIRY_SECONDS), now, 0));
     }
