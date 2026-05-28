@@ -20,6 +20,8 @@ If the browser shows a native username/password popup, nginx has `auth_basic` en
 
 ### POST `/api/v1/auth/login`
 
+**Step 1 — password.** If 2FA is enabled, OTP is sent via **email** or **phone** (`twoFactorChannel`). See `GMAIL-OTP-SETUP.md`.
+
 **Request**
 ```json
 {
@@ -28,28 +30,50 @@ If the browser shows a native username/password popup, nginx has `auth_basic` en
 }
 ```
 
+**Response 200 (2FA on — OTP sent)**
+```json
+{
+  "accessToken": "eyJ...pending-token-optional",
+  "requires2FA": true,
+  "requiresEmailOtp": true,
+  "twoFactorChannel": "EMAIL",
+  "message": "A verification code was sent to your email. Enter the 6-digit code to complete login.",
+  "otpExpiresIn": 600,
+  "otpRetryAfter": 60,
+  "user": {
+    "userId": "uuid",
+    "email": "admin@gmail.com",
+    "role": "ADMIN",
+    "twoFactorEnabled": false
+  }
+}
+```
+
+**Step 2 — verify email OTP**
+
+`POST /api/v1/auth/verify-login-otp` (alias: `/verify-email-otp`)
+
+```json
+{
+  "email": "admin@gmail.com",
+  "otp": "123456"
+}
+```
+
 **Response 200**
 ```json
 {
-  "accessToken": "eyJhbGciOiJIUzI1NiJ9...",
-  "refreshToken": "eyJhbGciOiJIUzI1NiJ9...",
-  "user": {
-    "userId": "0be55f3e-d6a3-4a0f-925e-a3f00e9a6c73",
-    "name": "Platform Admin",
-    "email": "admin@gmail.com",
-    "role": "ADMIN",
-    "status": "ACTIVE",
-    "phone": null,
-    "telegramChatId": null,
-    "twoFactorEnabled": false,
-    "createdAt": "2026-05-28T10:29:03.817295Z",
-    "brokerAccounts": []
-  },
+  "accessToken": "eyJ...full-access",
+  "refreshToken": "eyJ...",
+  "user": { "userId": "uuid", "email": "admin@gmail.com", "role": "ADMIN" },
+  "requiresEmailOtp": false,
   "requires2FA": false
 }
 ```
 
-If `requires2FA: true` → call `POST /api/v1/auth/2fa/verify` with `{ "otp": "123456" }` using the temporary token.
+Resend email OTP: `POST /api/v1/auth/send-email-otp` — `{ "email": "admin@gmail.com" }`
+
+**Remove QR / authenticator UI** — no `qrCodeUri` on login.
 
 ---
 
@@ -167,19 +191,42 @@ Phone: `9876543210` or `+919876543210` (backend adds `+91` if missing).
 
 ---
 
-### POST `/api/v1/auth/2fa/enable`
-
-**Headers:** `Authorization: Bearer <token>`
+### GET `/api/v1/auth/2fa/options`
 
 **Response 200**
 ```json
 {
-  "qrCodeUri": "otpauth://totp/Ascentra:email?secret=XXXX&issuer=Ascentra",
-  "qrCode": "otpauth://totp/Ascentra:email?secret=XXXX&issuer=Ascentra",
-  "secret": "BASE32SECRET"
+  "twoFactorEnabled": false,
+  "twoFactorChannel": null,
+  "channels": [
+    { "id": "EMAIL", "label": "Email", "available": true },
+    { "id": "PHONE", "label": "Phone (SMS)", "available": true, "hint": "+9179****" }
+  ]
 }
 ```
-Render QR from `qrCodeUri` or `qrCode` (same value).
+
+### POST `/api/v1/auth/2fa/enable`
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Request**
+```json
+{
+  "channel": "EMAIL"
+}
+```
+`channel`: `EMAIL` | `PHONE` (PHONE requires phone on profile).
+
+**Response 200**
+```json
+{
+  "message": "A verification code was sent to your email. Enter it below to enable two-factor authentication.",
+  "twoFactorChannel": "EMAIL",
+  "expiresIn": 600,
+  "retryAfter": 60,
+  "twoFactorEnabled": false
+}
+```
 
 ---
 

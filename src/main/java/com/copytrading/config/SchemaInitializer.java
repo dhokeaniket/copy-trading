@@ -109,6 +109,7 @@ public class SchemaInitializer {
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS child_placed_at TIMESTAMPTZ",
                 // Add telegram_chat_id to users
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(100)",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_channel VARCHAR(10)",
                 "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS copy_sides VARCHAR(20) DEFAULT 'BUY_ONLY'",
                 "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS allow_short_selling BOOLEAN NOT NULL DEFAULT FALSE",
                 "ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS copy_paused BOOLEAN NOT NULL DEFAULT FALSE",

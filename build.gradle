@@ -33,8 +33,8 @@ dependencies {
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.5'
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.11.5'
 
-    // TOTP for 2FA
-    implementation 'dev.samstevens.totp:totp:1.7.1'
+    // Gmail / SMTP for email OTP (login + 2FA)
+    implementation 'org.springframework.boot:spring-boot-starter-mail'
 
     // Swagger / OpenAPI
     implementation 'org.springdoc:springdoc-openapi-starter-webflux-ui:2.5.0'

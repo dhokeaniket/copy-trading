@@ -15,6 +15,8 @@ public class UserDto {
     private String phone;
     private String telegramChatId;
     private boolean twoFactorEnabled;
+    /** EMAIL or PHONE when 2FA is enabled. */
+    private String twoFactorChannel;
     private Instant createdAt;
     private List<Object> brokerAccounts = List.of();
 
@@ -28,6 +30,7 @@ public class UserDto {
         d.phone = u.getPhone();
         d.telegramChatId = u.getTelegramChatId();
         d.twoFactorEnabled = u.isTwoFactorEnabled();
+        d.twoFactorChannel = u.getTwoFactorChannel();
         d.createdAt = u.getCreatedAt();
         d.brokerAccounts = List.of(); // populated when broker module is wired
         return d;
@@ -49,6 +52,8 @@ public class UserDto {
     public void setTelegramChatId(String telegramChatId) { this.telegramChatId = telegramChatId; }
     public boolean isTwoFactorEnabled() { return twoFactorEnabled; }
     public void setTwoFactorEnabled(boolean twoFactorEnabled) { this.twoFactorEnabled = twoFactorEnabled; }
+    public String getTwoFactorChannel() { return twoFactorChannel; }
+    public void setTwoFactorChannel(String twoFactorChannel) { this.twoFactorChannel = twoFactorChannel; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public List<Object> getBrokerAccounts() { return brokerAccounts; }

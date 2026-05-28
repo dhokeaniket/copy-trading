@@ -3,8 +3,11 @@ server:
   address: 0.0.0.0
 
 app:
+  name: Ascentra Capital
   kafka:
     enabled: ${APP_KAFKA_ENABLED:false}
+  mail:
+    from: ${MAIL_FROM:${MAIL_USERNAME:}}
 
 # Master order polling — copy detection latency (fixedDelay between cycles)
 engine:
@@ -45,6 +48,17 @@ spring:
   data:
     redis:
       url: ${REDIS_URL:redis://localhost:6379}
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
 
 jwt:
   issuer: copy-trading

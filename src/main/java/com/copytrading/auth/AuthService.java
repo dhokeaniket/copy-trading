@@ -1,9 +1,6 @@
 package com.copytrading.auth;
 
 import com.copytrading.auth.dto.*;
-import dev.samstevens.totp.code.*;
-import dev.samstevens.totp.secret.DefaultSecretGenerator;
-import dev.samstevens.totp.time.SystemTimeProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -11,7 +8,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -28,17 +24,23 @@ public class AuthService {
     private final PasswordResetTokenRepository resetTokens;
     private final JwtService jwtService;
     private final PasswordEncoder encoder;
+    private final EmailOtpService emailOtpService;
+    private final OtpService otpService;
 
     public AuthService(UserAccountRepository users,
                        RefreshTokenRepository refreshTokens,
                        PasswordResetTokenRepository resetTokens,
                        JwtService jwtService,
-                       PasswordEncoder encoder) {
+                       PasswordEncoder encoder,
+                       EmailOtpService emailOtpService,
+                       OtpService otpService) {
         this.users = users;
         this.refreshTokens = refreshTokens;
         this.resetTokens = resetTokens;
         this.jwtService = jwtService;
         this.encoder = encoder;
+        this.emailOtpService = emailOtpService;
+        this.otpService = otpService;
     }
 
     // ── 1.1 Register ──
@@ -65,6 +67,7 @@ public class AuthService {
                     u.setStatus("ACTIVE");
                     u.setPhone(req.getPhone());
                     u.setTwoFactorEnabled(false);
+                    u.setTwoFactorSecret(null);
                     u.setCreatedAt(Instant.now());
                     u.setUpdatedAt(Instant.now());
                     return users.save(u).map(saved -> {
@@ -77,31 +80,77 @@ public class AuthService {
                 }));
     }
 
-    // ── 1.2 Login ──
+    // ── 1.2 Login: password → OTP (email or phone) when 2FA enabled ──
     public Mono<LoginResponse> login(LoginRequest req) {
         return users.findByEmail(req.getEmail().toLowerCase().trim())
                 .filter(UserAccount::isActive)
                 .filter(u -> encoder.matches(req.getPassword(), u.getPasswordHash()))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials")))
                 .flatMap(u -> {
-                    UserDto userDto = UserDto.from(u);
-                    if (u.isTwoFactorEnabled()) {
-                        // Issue a short-lived pending-2FA token so client can call /auth/2fa/verify
-                        String pending = jwtService.generatePending2FAToken(u.getId(), u.getRole());
-                        LoginResponse resp = LoginResponse.twoFactorRequired(userDto);
-                        resp.setAccessToken(pending); // temporary token, only valid for 2FA verify
-                        return Mono.just(resp);
+                    if (!u.isTwoFactorEnabled()) {
+                        return issueTokens(u).map(tokens -> {
+                            LoginResponse resp = LoginResponse.success(
+                                    tokens.get("accessToken"), tokens.get("refreshToken"), UserDto.from(u));
+                            log.info("USER_LOGIN id={} email={}", u.getId(), u.getEmail());
+                            return resp;
+                        });
+                    }
+                    String channel = resolveChannel(u.getTwoFactorChannel());
+                    return sendLoginOtp(u, channel);
+                });
+    }
+
+    public Mono<Map<String, Object>> resendLoginOtp(String email) {
+        return users.findByEmail(emailOtpService.normalizeEmail(email))
+                .filter(UserAccount::isActive)
+                .filter(UserAccount::isTwoFactorEnabled)
+                .flatMap(u -> {
+                    String channel = resolveChannel(u.getTwoFactorChannel());
+                    if (!canResendOtp(u, channel)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                                "Please wait before requesting another OTP"));
+                    }
+                    if (!sendOtp(u, channel)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                                "Failed to send OTP. Check email or Twilio configuration."));
+                    }
+                    return Mono.just(otpSuccessBody(channel));
+                })
+                .switchIfEmpty(Mono.just(otpSuccessBody(TwoFactorChannel.EMAIL)));
+    }
+
+    public Mono<LoginResponse> verifyLoginOtp(String email, String otp) {
+        return users.findByEmail(emailOtpService.normalizeEmail(email))
+                .filter(UserAccount::isActive)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials")))
+                .flatMap(u -> {
+                    String channel = resolveChannel(u.getTwoFactorChannel());
+                    if (tooManyAttempts(u, channel)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                                "Too many failed attempts. Request a new OTP."));
+                    }
+                    if (isExpired(u, channel)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "OTP has expired. Please login again."));
+                    }
+                    if (!verifyOtp(u, channel, otp)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid OTP code"));
                     }
                     return issueTokens(u).map(tokens -> {
                         LoginResponse resp = LoginResponse.success(
-                                tokens.get("accessToken"), tokens.get("refreshToken"), userDto);
-                        log.info("USER_LOGIN id={} email={}", u.getId(), u.getEmail());
+                                tokens.get("accessToken"), tokens.get("refreshToken"), UserDto.from(u));
+                        log.info("USER_LOGIN_2FA id={} email={} channel={}", u.getId(), u.getEmail(), channel);
                         return resp;
                     });
                 });
     }
 
-    // ── 1.2b Login by phone (after OTP verification) ──
+    /** @deprecated use {@link #verifyLoginOtp} */
+    public Mono<LoginResponse> verifyEmailOtpLogin(String email, String otp) {
+        return verifyLoginOtp(email, otp);
+    }
+
+    // ── 1.2b Login by phone (after SMS OTP verification) ──
     public Mono<Map<String, Object>> loginByPhone(String phone) {
         return users.findByPhone(phone)
                 .filter(UserAccount::isActive)
@@ -127,12 +176,10 @@ public class AuthService {
                 }));
     }
 
-    // ── Find user by phone ──
     public Mono<UserAccount> findByPhone(String phone) {
         return users.findByPhone(phone);
     }
 
-    // ── 1.3 Logout ──
     public Mono<Map<String, Object>> logout(String refreshToken) {
         String hash = sha256Hex(refreshToken);
         return refreshTokens.revokeByTokenHash(hash)
@@ -141,14 +188,12 @@ public class AuthService {
                         "message", "Logged out successfully"));
     }
 
-    // ── 1.4 Refresh Token ──
     public Mono<Map<String, String>> refreshToken(String refreshToken) {
         String hash = sha256Hex(refreshToken);
         return refreshTokens.findByTokenHashAndRevokedFalse(hash)
                 .filter(rt -> rt.getExpiresAt().isAfter(Instant.now()))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or expired refresh token")))
                 .flatMap(rt -> {
-                    // Revoke old token (rotation)
                     rt.setRevoked(true);
                     return refreshTokens.save(rt)
                             .then(users.findById(rt.getUserId()))
@@ -161,16 +206,14 @@ public class AuthService {
                 });
     }
 
-    // ── 1.5 Forgot Password ──
     public Mono<Map<String, String>> forgotPassword(String email) {
-        // Always return success to prevent email enumeration
         return users.findByEmail(email.toLowerCase().trim())
                 .flatMap(u -> {
                     String rawToken = UUID.randomUUID().toString();
                     PasswordResetToken prt = new PasswordResetToken();
                     prt.setUserId(u.getId());
                     prt.setTokenHash(sha256Hex(rawToken));
-                    prt.setExpiresAt(Instant.now().plusSeconds(1800)); // 30 min
+                    prt.setExpiresAt(Instant.now().plusSeconds(1800));
                     prt.setUsed(false);
                     prt.setCreatedAt(Instant.now());
                     return resetTokens.save(prt).doOnSuccess(saved ->
@@ -180,7 +223,6 @@ public class AuthService {
                 .defaultIfEmpty(Map.of("message", "If the email exists, a reset link has been sent"));
     }
 
-    // ── 1.6 Reset Password ──
     public Mono<Map<String, String>> resetPassword(String token, String newPassword) {
         if (newPassword == null || newPassword.length() < 8 || !newPassword.matches(".*\\d.*")) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be min 8 chars with at least one number"));
@@ -203,14 +245,12 @@ public class AuthService {
                 });
     }
 
-    // ── 1.7 Get Profile ──
     public Mono<UserDto> getProfile(UUID userId) {
         return users.findById(userId)
                 .map(UserDto::from)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")));
     }
 
-    // ── 1.8 Update Profile ──
     public Mono<UserDto> updateProfile(UUID userId, UpdateProfileRequest req) {
         return users.findById(userId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
@@ -232,61 +272,80 @@ public class AuthService {
                 });
     }
 
-    // ── 1.9 Enable 2FA ──
-    public Mono<Map<String, String>> enable2FA(UUID userId) {
+    /** Enable 2FA — user chooses EMAIL or PHONE; OTP sent to that channel (no QR). */
+    public Mono<Map<String, Object>> enable2FA(UUID userId, String channelRaw) {
+        String channel = requireChannel(channelRaw);
         return users.findById(userId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
                 .flatMap(u -> {
-                    String secret = new DefaultSecretGenerator().generate();
-                    u.setTwoFactorSecret(secret);
+                    if (TwoFactorChannel.PHONE.equals(channel) && (u.getPhone() == null || u.getPhone().isBlank())) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Add a phone number to your profile before enabling SMS verification."));
+                    }
+                    if (!canResendOtp(u, channel)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                                "Please wait before requesting another OTP"));
+                    }
+                    if (!sendOtp(u, channel)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                                "Failed to send OTP. Check email or Twilio configuration."));
+                    }
+                    u.setTwoFactorSecret(TwoFactorChannel.pendingMarker(channel));
                     u.setUpdatedAt(Instant.now());
-                    return users.save(u).map(saved -> {
-                        String qrUri = String.format("otpauth://totp/Ascentra:%s?secret=%s&issuer=Ascentra",
-                                saved.getEmail(), secret);
-                        Map<String, String> resp = new LinkedHashMap<>();
-                        resp.put("qrCodeUri", qrUri);
-                        resp.put("qrCode", qrUri);
-                        resp.put("secret", secret);
-                        return resp;
-                    });
+                    return users.save(u).map(saved -> buildEnable2FAResponse(channel, saved.isTwoFactorEnabled()));
                 });
     }
 
-    // ── 1.10 Verify 2FA OTP ──
+    public Mono<Map<String, Object>> get2FAOptions(UUID userId) {
+        return users.findById(userId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
+                .map(u -> {
+                    Map<String, Object> resp = new LinkedHashMap<>();
+                    resp.put("twoFactorEnabled", u.isTwoFactorEnabled());
+                    resp.put("twoFactorChannel", u.getTwoFactorChannel());
+                    resp.put("channels", List.of(
+                            Map.of("id", TwoFactorChannel.EMAIL, "label", "Email", "available", true),
+                            Map.of("id", TwoFactorChannel.PHONE, "label", "Phone (SMS)",
+                                    "available", u.getPhone() != null && !u.getPhone().isBlank(),
+                                    "hint", u.getPhone() == null || u.getPhone().isBlank()
+                                            ? "Add a phone number in profile to use SMS"
+                                            : maskPhone(u.getPhone()))
+                    ));
+                    return resp;
+                });
+    }
+
+    /** Verify OTP to confirm 2FA enable (EMAIL or PHONE per pending channel). */
     public Mono<Map<String, Object>> verify2FA(UUID userId, String otp) {
         return users.findById(userId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
                 .flatMap(u -> {
-                    if (u.getTwoFactorSecret() == null) {
-                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "2FA not set up"));
+                    String pending = TwoFactorChannel.channelFromPending(u.getTwoFactorSecret());
+                    final String channel = pending != null ? pending : resolveChannel(u.getTwoFactorChannel());
+                    if (!verifyOtp(u, channel, otp)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid OTP code"));
                     }
-                    if (!verifyTotp(u.getTwoFactorSecret(), otp)) {
-                        return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid OTP"));
-                    }
-                    // If 2FA was not yet enabled, activate it now (setup flow)
                     if (!u.isTwoFactorEnabled()) {
                         u.setTwoFactorEnabled(true);
+                        u.setTwoFactorChannel(channel);
+                        u.setTwoFactorSecret(null);
                         u.setUpdatedAt(Instant.now());
-                        return users.save(u).flatMap(saved -> issueTokens(saved).map(tokens -> {
+                        return users.save(u).map(saved -> {
                             Map<String, Object> resp = new LinkedHashMap<>();
-                            resp.put("accessToken", tokens.get("accessToken"));
-                            resp.put("refreshToken", tokens.get("refreshToken"));
-                            resp.put("message", "2FA enabled and verified");
+                            resp.put("message", "Two-factor authentication enabled");
+                            resp.put("twoFactorEnabled", true);
+                            resp.put("twoFactorChannel", channel);
                             return resp;
-                        }));
+                        });
                     }
-                    // Login verification — issue full tokens
-                    return issueTokens(u).map(tokens -> {
-                        Map<String, Object> resp = new LinkedHashMap<>();
-                        resp.put("accessToken", tokens.get("accessToken"));
-                        resp.put("refreshToken", tokens.get("refreshToken"));
-                        resp.put("message", "OTP verified");
-                        return resp;
-                    });
+                    Map<String, Object> resp = new LinkedHashMap<>();
+                    resp.put("message", "OTP verified");
+                    resp.put("twoFactorEnabled", true);
+                    resp.put("twoFactorChannel", channel);
+                    return Mono.just(resp);
                 });
     }
 
-    // ── 1.11 Disable 2FA ──
     public Mono<Map<String, String>> disable2FA(UUID userId, String password, String otp) {
         return users.findById(userId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
@@ -294,20 +353,21 @@ public class AuthService {
                     if (!encoder.matches(password, u.getPasswordHash())) {
                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid password"));
                     }
-                    if (!u.isTwoFactorEnabled() || u.getTwoFactorSecret() == null) {
+                    if (!u.isTwoFactorEnabled()) {
                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "2FA is not enabled"));
                     }
-                    if (!verifyTotp(u.getTwoFactorSecret(), otp)) {
-                        return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid OTP"));
+                    String channel = resolveChannel(u.getTwoFactorChannel());
+                    if (!verifyOtp(u, channel, otp)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid OTP code"));
                     }
                     u.setTwoFactorEnabled(false);
+                    u.setTwoFactorChannel(null);
                     u.setTwoFactorSecret(null);
                     u.setUpdatedAt(Instant.now());
-                    return users.save(u).thenReturn(Map.of("message", "2FA disabled successfully"));
+                    return users.save(u).thenReturn(Map.of("message", "Two-factor authentication disabled"));
                 });
     }
 
-    // ── Internal: create user (for admin) ──
     public Mono<UserAccount> createUser(String name, String email, String password, String role, String phone) {
         return users.findByEmail(email.toLowerCase().trim())
                 .flatMap(existing -> Mono.<UserAccount>error(
@@ -321,13 +381,118 @@ public class AuthService {
                     u.setStatus("ACTIVE");
                     u.setPhone(phone);
                     u.setTwoFactorEnabled(false);
+                    u.setTwoFactorSecret(null);
                     u.setCreatedAt(Instant.now());
                     u.setUpdatedAt(Instant.now());
                     return users.save(u);
                 }));
     }
 
-    // ── Helpers ──
+    private Mono<LoginResponse> sendLoginOtp(UserAccount u, String channel) {
+        if (!canResendOtp(u, channel)) {
+            int retry = TwoFactorChannel.PHONE.equals(channel)
+                    ? otpService.getRetryAfter(u.getPhone())
+                    : emailOtpService.getRetryAfter(u.getEmail());
+            return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Please wait before requesting another OTP. retryAfter=" + retry));
+        }
+        if (!sendOtp(u, channel)) {
+            return Mono.error(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Failed to send OTP. Check email or Twilio configuration."));
+        }
+        int expires = TwoFactorChannel.PHONE.equals(channel)
+                ? otpService.getExpirySeconds()
+                : emailOtpService.getExpirySeconds();
+        int retry = TwoFactorChannel.PHONE.equals(channel)
+                ? otpService.getRetrySeconds()
+                : emailOtpService.getRetrySeconds();
+        String pending = jwtService.generatePending2FAToken(u.getId(), u.getRole());
+        LoginResponse resp = LoginResponse.otpRequired(UserDto.from(u), channel, expires, retry);
+        resp.setAccessToken(pending);
+        log.info("USER_LOGIN_2FA_OTP_SENT id={} channel={}", u.getId(), channel);
+        return Mono.just(resp);
+    }
+
+    private static String requireChannel(String channelRaw) {
+        String channel = TwoFactorChannel.normalize(channelRaw);
+        if (channel == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "channel is required: EMAIL or PHONE");
+        }
+        return channel;
+    }
+
+    private static String resolveChannel(String stored) {
+        String channel = TwoFactorChannel.normalize(stored);
+        return channel != null ? channel : TwoFactorChannel.EMAIL;
+    }
+
+    private boolean sendOtp(UserAccount u, String channel) {
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            return otpService.sendOtp(u.getPhone());
+        }
+        return emailOtpService.sendOtp(u.getEmail());
+    }
+
+    private boolean verifyOtp(UserAccount u, String channel, String otp) {
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            return otpService.verify(u.getPhone(), otp);
+        }
+        return emailOtpService.verify(u.getEmail(), otp);
+    }
+
+    private boolean canResendOtp(UserAccount u, String channel) {
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            return otpService.canResend(u.getPhone());
+        }
+        return emailOtpService.canResend(u.getEmail());
+    }
+
+    private boolean tooManyAttempts(UserAccount u, String channel) {
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            return otpService.tooManyAttempts(u.getPhone());
+        }
+        return emailOtpService.tooManyAttempts(u.getEmail());
+    }
+
+    private boolean isExpired(UserAccount u, String channel) {
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            return otpService.isExpired(u.getPhone());
+        }
+        return emailOtpService.isExpired(u.getEmail());
+    }
+
+    private static Map<String, Object> otpSuccessBody(String channel) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("success", true);
+        r.put("twoFactorChannel", channel);
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            r.put("message", "If this account is registered, a code was sent to your phone.");
+        } else {
+            r.put("message", "If this account is registered, a code was sent to your email.");
+        }
+        r.put("data", Map.of("expiresIn", 600, "retryAfter", 60));
+        return r;
+    }
+
+    private static Map<String, Object> buildEnable2FAResponse(String channel, boolean alreadyEnabled) {
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("twoFactorChannel", channel);
+        resp.put("twoFactorEnabled", alreadyEnabled);
+        resp.put("expiresIn", 600);
+        resp.put("retryAfter", 60);
+        if (TwoFactorChannel.PHONE.equals(channel)) {
+            resp.put("message", "A verification code was sent to your phone. Enter it below to enable two-factor authentication.");
+        } else {
+            resp.put("message", "A verification code was sent to your email. Enter it below to enable two-factor authentication.");
+        }
+        return resp;
+    }
+
+    private static String maskPhone(String phone) {
+        if (phone == null || phone.length() < 4) return "****";
+        return phone.substring(0, Math.min(4, phone.length())) + "****";
+    }
+
     private Mono<Map<String, String>> issueTokens(UserAccount u) {
         String accessToken = jwtService.generateAccessToken(u.getId(), u.getEmail(), u.getRole());
         String rawRefresh = jwtService.generateRefreshToken(u.getId());
@@ -343,13 +508,6 @@ public class AuthService {
             tokens.put("refreshToken", rawRefresh);
             return tokens;
         });
-    }
-
-    private boolean verifyTotp(String secret, String code) {
-        DefaultCodeVerifier verifier = new DefaultCodeVerifier(
-                new DefaultCodeGenerator(), new SystemTimeProvider());
-        verifier.setAllowedTimePeriodDiscrepancy(2); // allow ±60 seconds window
-        return verifier.isValidCode(secret, code);
     }
 
     static String sha256Hex(String input) {
