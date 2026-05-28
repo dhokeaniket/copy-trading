@@ -120,6 +120,7 @@ public class AuthService {
     }
 
     public Mono<LoginResponse> verifyLoginOtp(String email, String otp) {
+        String code = otp == null ? "" : otp.trim();
         return users.findByEmail(emailOtpService.normalizeEmail(email))
                 .filter(UserAccount::isActive)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials")))
@@ -133,7 +134,7 @@ public class AuthService {
                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                                 "OTP has expired. Please login again."));
                     }
-                    if (!verifyOtp(u, channel, otp)) {
+                    if (!verifyOtp(u, channel, code)) {
                         return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid OTP code"));
                     }
                     return issueTokens(u).map(tokens -> {

@@ -80,7 +80,8 @@ public class EmailOtpService {
     }
 
     public boolean verify(String email, String otp) {
-        return verify(email, otp, OtpPurpose.LOGIN);
+        String code = otp == null ? "" : otp.trim();
+        return verify(email, code, OtpPurpose.LOGIN);
     }
 
     public boolean verifyPasswordReset(String email, String otp) {
@@ -156,6 +157,9 @@ public class EmailOtpService {
             otpStore.put(memKey, new OtpEntry(entry.otp(), entry.expiresAt(), entry.sentAt(), entry.attempts() + 1));
         }
         incrementAttempts(normalized, purpose);
+        log.warn("EMAIL_OTP_VERIFY_FAILED purpose={} to={} hasMem={} attempts={}",
+                purpose.name(), maskEmail(normalized), entry != null,
+                entry != null ? entry.attempts() : getAttempts(normalized, purpose));
         return false;
     }
 
@@ -254,7 +258,8 @@ public class EmailOtpService {
 
     private void markSent(String email, String otp, OtpPurpose purpose) {
         Instant now = Instant.now();
-        String storeKey = storeKey(email, purpose);
+        String memKey = storeKey(email, purpose);
+        clearOtpState(email, purpose);
         if (redisAvailable) {
             Duration ttl = Duration.ofSeconds(OTP_EXPIRY_SECONDS);
             try {
@@ -265,7 +270,8 @@ public class EmailOtpService {
                 log.warn("Redis email OTP store failed: {}", e.getMessage());
             }
         }
-        otpStore.put(storeKey, new OtpEntry(otp, now.plusSeconds(OTP_EXPIRY_SECONDS), now, 0));
+        otpStore.put(memKey, new OtpEntry(otp, now.plusSeconds(OTP_EXPIRY_SECONDS), now, 0));
+        log.info("EMAIL_OTP_STORED purpose={} to={}", purpose.name(), maskEmail(email));
     }
 
     private void clearOtpState(String email, OtpPurpose purpose) {
