@@ -14,6 +14,13 @@ engine:
   polling:
     interval-ms: ${ENGINE_POLLING_INTERVAL_MS:500}
     initial-delay-ms: ${ENGINE_POLLING_INITIAL_DELAY_MS:15000}
+  # Safety-net reconciliation of engine trade records vs broker orderbooks
+  reconciliation:
+    interval-ms: ${ENGINE_RECONCILIATION_INTERVAL_MS:120000}
+    initial-delay-ms: ${ENGINE_RECONCILIATION_INITIAL_DELAY_MS:60000}
+  # Per-broker child order placement rate limits (orders per second / per minute)
+  rate-limit:
+    enabled: ${ENGINE_RATE_LIMIT_ENABLED:true}
 
 spring:
   autoconfigure:

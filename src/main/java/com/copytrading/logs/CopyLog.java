@@ -25,6 +25,12 @@ public class CopyLog {
     private String symbol;
     private Integer qty;
 
+    @Column("child_qty")
+    private Integer childQty;
+
+    @Column("child_broker_order_id")
+    private String childBrokerOrderId;
+
     @Column("trade_type")
     private String tradeType;
 
@@ -70,6 +76,10 @@ public class CopyLog {
     public void setSymbol(String symbol) { this.symbol = symbol; }
     public Integer getQty() { return qty; }
     public void setQty(Integer qty) { this.qty = qty; }
+    public Integer getChildQty() { return childQty; }
+    public void setChildQty(Integer childQty) { this.childQty = childQty; }
+    public String getChildBrokerOrderId() { return childBrokerOrderId; }
+    public void setChildBrokerOrderId(String childBrokerOrderId) { this.childBrokerOrderId = childBrokerOrderId; }
     public String getTradeType() { return tradeType; }
     public void setTradeType(String tradeType) { this.tradeType = tradeType; }
     public String getMasterStatus() { return masterStatus; }

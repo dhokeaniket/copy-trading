@@ -54,6 +54,10 @@ public class CopyEngineService {
     // Duplicate signal detection: orderKey → timestamp (prevents same signal processed twice within 60s)
     private final ConcurrentHashMap<String, Long> recentOrderKeys = new ConcurrentHashMap<>();
 
+    // Cancel propagation dedup: masterId:masterOrderId → timestamp (a CANCELLED master order is seen on
+    // every poll cycle, so we must only propagate the cancellation to children once).
+    private final ConcurrentHashMap<String, Long> cancelledMasterOrders = new ConcurrentHashMap<>();
+
     private final SubscriptionRepository subs;
     private final BrokerAccountRepository brokerRepo;
     private final BrokerAccountService brokerService;
@@ -78,6 +82,7 @@ public class CopyEngineService {
     private final LotSizeScaler lotScaler;
     private final BrokerCredentials credentials;
     private final EnginePollingProperties pollingProperties;
+    private final BrokerRateLimiter rateLimiter;
 
     public CopyEngineService(SubscriptionRepository subs,
                              BrokerAccountRepository brokerRepo,
@@ -102,7 +107,8 @@ public class CopyEngineService {
                              SellGuardService sellGuard,
                              LotSizeScaler lotScaler,
                              BrokerCredentials credentials,
-                             EnginePollingProperties pollingProperties) {
+                             EnginePollingProperties pollingProperties,
+                             BrokerRateLimiter rateLimiter) {
         this.subs = subs;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -127,6 +133,7 @@ public class CopyEngineService {
         this.lotScaler = lotScaler;
         this.credentials = credentials;
         this.pollingProperties = pollingProperties;
+        this.rateLimiter = rateLimiter;
     }
 
     /**
@@ -140,13 +147,18 @@ public class CopyEngineService {
         String masterTriggeredAt = engineReceivedAt.toString();
         String orderKey = generateOrderKey(req.getSymbol(), req.getQty());
 
-        // CT-039/CT-040/CT-041: Duplicate signal detection
-        // Same master + same orderKey within 60 seconds = duplicate, reject it
-        String dedupKey = masterId + ":" + req.getSide() + ":" + orderKey;
+        // Duplicate signal detection.
+        // Prefer the master broker's native order id (order_id / exchange_order_id) as the dedup basis:
+        // the legacy HHmm-precision key collapsed two distinct master orders on the same symbol+qty
+        // within the same minute into one, silently dropping the second. Fall back to the time-based
+        // key only for manual copies that carry no master order id.
+        boolean hasMasterOrderId = req.getMasterOrderId() != null && !req.getMasterOrderId().isBlank();
+        String dedupBasis = hasMasterOrderId ? req.getMasterOrderId() : orderKey;
+        String dedupKey = masterId + ":" + req.getSide() + ":" + dedupBasis;
         Long lastSeen = recentOrderKeys.get(dedupKey);
         if (lastSeen != null && (System.currentTimeMillis() - lastSeen) < 60_000) {
-            log.warn("COPY_DUPLICATE_SIGNAL master={} symbol={} side={} orderKey={} — ignoring duplicate within 60s",
-                    masterId, req.getSymbol(), req.getSide(), orderKey);
+            log.warn("COPY_DUPLICATE_SIGNAL master={} symbol={} side={} dedupKey={} — ignoring duplicate within 60s",
+                    masterId, req.getSymbol(), req.getSide(), dedupBasis);
             return Mono.just(Map.<String, Object>of(
                     "message", "Duplicate signal detected — same trade already processed within 60 seconds",
                     "duplicate", true,
@@ -355,9 +367,11 @@ public class CopyEngineService {
         }
         UUID brokerAccountId = account.getId();
         long startMs = System.currentTimeMillis();
-        return placeOrderOnBroker(account, req.getSymbol(), scaledQty,
-                req.getSide(), req.getProduct(), req.getOrderType(), req.getPrice(), req.getTriggerPrice(), req.getExchange(),
-                req.getMasterBrokerId())
+        // Respect each broker's per-sec/per-min order caps before dispatching the child order.
+        return rateLimiter.acquire(account.getBrokerId(), account.getId())
+                .then(Mono.defer(() -> placeOrderOnBroker(account, req.getSymbol(), scaledQty,
+                        req.getSide(), req.getProduct(), req.getOrderType(), req.getPrice(), req.getTriggerPrice(), req.getExchange(),
+                        req.getMasterBrokerId())))
                 .flatMap(response -> {
                     long latencyMs = System.currentTimeMillis() - startMs;
                     String orderId = extractOrderId(response);
@@ -370,7 +384,9 @@ public class CopyEngineService {
                     childTrade.setBrokerAccountId(brokerAccountId);
                     childTrade.setBrokerOrderId(orderId.length() > 100 ? orderId.substring(0, 100) : orderId);
                     childTrade.setInstrument(req.getSymbol());
-                    boolean childFnO = req.getSymbol() != null && req.getSymbol().matches(".*\\d+(CE|PE)$");
+                    // Use the instrument classifier (options AND futures), not a CE/PE-only regex,
+                    // so futures like NIFTY26MAYFUT are recorded as FNO, not EQUITY.
+                    boolean childFnO = symbolMapper.isDerivative(req.getSymbol());
                     childTrade.setExchange(req.getExchange() != null ? req.getExchange() : "NSE");
                     childTrade.setSegment(childFnO ? "FNO" : "EQUITY");
                     childTrade.setOrderType(req.getOrderType() != null ? req.getOrderType() : "MARKET");
@@ -395,7 +411,8 @@ public class CopyEngineService {
                     balanceAlert.checkAndAlert(childId, brokerAccountId).subscribe();
 
                     return logAndReturn(masterId, childId, req, "SUCCESS",
-                            "Order placed: " + orderId, account.getBrokerId(), null, latencyMs, copyGroupId, engineReceivedAt, scaledQty)
+                            "Order placed: " + orderId, account.getBrokerId(), null, latencyMs, copyGroupId, engineReceivedAt, scaledQty,
+                            orderId)
                             .map(r -> { r.put("latencyMs", latencyMs); r.put("orderKey", orderKey); r.put("childPlacedAt", Instant.now().toString()); return r; });
                 })
                 .onErrorResume(e -> {
@@ -451,27 +468,25 @@ public class CopyEngineService {
         boolean isSL = oType.equalsIgnoreCase("SL") || oType.equalsIgnoreCase("SL-M");
         // Check isFnO on ORIGINAL symbol (before translation) since translated format may differ
         boolean isFnO = symbolMapper.isFnO(symbol);
-        String txn = "BUY".equalsIgnoreCase(side) ? "BUY" : "SELL";
         String exch = exchange != null ? exchange.toUpperCase() : "NSE";
 
         switch (account.getBrokerId()) {
             case "GROWW": {
                 // POST /v1/order/create — JSON body, Bearer token
                 // Use exchange from master's order; fallback: detect SENSEX/BANKEX → BSE
-                String growwExchange = "BSE".equals(exch) ? "BSE"
-                        : (sym.toUpperCase().startsWith("SENSEX") || sym.toUpperCase().startsWith("BANKEX")) ? "BSE" : "NSE";
-                String growwProd = isFnO ? (prod.equalsIgnoreCase("CNC") ? "NRML" : prod) : prod;
+                String growwExch = ("BSE".equals(exch)
+                        || sym.toUpperCase().startsWith("SENSEX") || sym.toUpperCase().startsWith("BANKEX")) ? "BSE" : exch;
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("trading_symbol", sym);
                 b.put("quantity", qty);
                 b.put("price", isMarket ? 0 : price);
                 b.put("trigger_price", isSL ? triggerPrice : 0);
-                b.put("validity", "DAY");
-                b.put("exchange", growwExchange);
+                b.put(BrokerFieldTranslator.validityFieldName("GROWW"), BrokerFieldTranslator.validityValue("GROWW"));
+                b.put("exchange", BrokerFieldTranslator.exchangeSegment(growwExch, "GROWW", isFnO));
                 b.put("segment", isFnO ? "FNO" : "CASH");
-                b.put("product", growwProd);
-                b.put("order_type", isSL ? (oType.equalsIgnoreCase("SL-M") ? "SL-M" : "SL") : (isMarket ? "MARKET" : "LIMIT"));
-                b.put("transaction_type", txn);
+                b.put("product", BrokerFieldTranslator.product(prod, "GROWW", isFnO));
+                b.put("order_type", BrokerFieldTranslator.orderType(oType, "GROWW"));
+                b.put("transaction_type", BrokerFieldTranslator.transactionType(side, "GROWW"));
                 b.put("order_reference_id", "COPY-" + System.currentTimeMillis());
                 log.info("GROWW_ORDER_REQ masterSymbol={} childSymbol={} qty={} segment={} masterBroker={}",
                         symbol, sym, qty, isFnO ? "FNO" : "CASH", masterBrokerId);
@@ -482,12 +497,12 @@ public class CopyEngineService {
                 String apiKey = platformConfig.getZerodha().getApiKey();
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("tradingsymbol", sym);
-                b.put("exchange", BrokerProductMapper.toZerodhaExchange(exch, isFnO));
-                b.put("transaction_type", txn);
-                b.put("order_type", isSL ? (oType.equalsIgnoreCase("SL-M") ? "SL-M" : "SL") : (isMarket ? "MARKET" : "LIMIT"));
+                b.put("exchange", BrokerFieldTranslator.exchangeSegment(exch, "ZERODHA", isFnO));
+                b.put("transaction_type", BrokerFieldTranslator.transactionType(side, "ZERODHA"));
+                b.put("order_type", BrokerFieldTranslator.orderType(oType, "ZERODHA"));
                 b.put("quantity", qty);
-                b.put("product", prod);
-                b.put("validity", "DAY");
+                b.put("product", BrokerFieldTranslator.product(prod, "ZERODHA", isFnO));
+                b.put(BrokerFieldTranslator.validityFieldName("ZERODHA"), BrokerFieldTranslator.validityValue("ZERODHA"));
                 if (isSL) {
                     b.put("trigger_price", triggerPrice);
                     if (oType.equalsIgnoreCase("SL")) b.put("price", price);
@@ -512,19 +527,17 @@ public class CopyEngineService {
                 } else {
                     fyersSym = ("BSE".equals(exch) ? "BSE:" : "NSE:") + sym + "-EQ";
                 }
-                String fyersProd = prod.equalsIgnoreCase("MIS") ? "INTRADAY"
-                        : prod.equalsIgnoreCase("CNC") ? "CNC"
-                        : prod.equalsIgnoreCase("NRML") ? "MARGIN" : "INTRADAY";
-                int fyersType = isMarket ? 2 : isSL ? (oType.equalsIgnoreCase("SL-M") ? 3 : 4) : 1;
+                String fyersProd = BrokerFieldTranslator.product(prod, "FYERS", isFnO);
+                int fyersType = Integer.parseInt(BrokerFieldTranslator.orderType(oType, "FYERS"));
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("symbol", fyersSym);
                 b.put("qty", qty);
                 b.put("type", fyersType);
-                b.put("side", "BUY".equalsIgnoreCase(side) ? 1 : -1);
+                b.put("side", Integer.parseInt(BrokerFieldTranslator.transactionType(side, "FYERS")));
                 b.put("productType", fyersProd);
                 b.put("limitPrice", isMarket ? 0 : price);
                 b.put("stopPrice", isSL ? triggerPrice : 0);
-                b.put("validity", "DAY");
+                b.put(BrokerFieldTranslator.validityFieldName("FYERS"), BrokerFieldTranslator.validityValue("FYERS"));
                 b.put("disclosedQty", 0);
                 b.put("offlineOrder", false);
                 b.put("stopLoss", 0);
@@ -535,9 +548,11 @@ public class CopyEngineService {
                 // POST /v2/order/place — JSON, Bearer token
                 // instrument_token: "NSE_EQ|INE002A01018" (ISIN format from instrument master)
                 // product: I=intraday, D=delivery
-                String upProd = BrokerProductMapper.toUpstoxProduct(prod);
+                String upProd = BrokerFieldTranslator.product(prod, "UPSTOX", isFnO);
                 String upSym = instruments.getUpstoxInstrumentKey(sym, isFnO);
                 if (upSym == null) {
+                    // Fail safe: Upstox requires an ISIN-based instrument_token (e.g. NSE_EQ|INE002A01018).
+                    // Never fall back to a raw trading symbol — Upstox rejects it and it can mis-route.
                     return Mono.error(new RuntimeException(
                             "Upstox instrument not found for symbol=" + sym
                                     + " (load instrument master or check F&O symbol mapping)"));
@@ -545,12 +560,12 @@ public class CopyEngineService {
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("quantity", qty);
                 b.put("product", upProd);
-                b.put("validity", "DAY");
+                b.put(BrokerFieldTranslator.validityFieldName("UPSTOX"), BrokerFieldTranslator.validityValue("UPSTOX"));
                 b.put("price", isMarket ? 0 : price);
                 b.put("tag", "COPY" + System.currentTimeMillis());
                 b.put("instrument_token", upSym);
-                b.put("order_type", isSL ? (oType.equalsIgnoreCase("SL-M") ? "SL-M" : "SL") : (isMarket ? "MARKET" : "LIMIT"));
-                b.put("transaction_type", txn);
+                b.put("order_type", BrokerFieldTranslator.orderType(oType, "UPSTOX"));
+                b.put("transaction_type", BrokerFieldTranslator.transactionType(side, "UPSTOX"));
                 b.put("disclosed_quantity", 0);
                 b.put("trigger_price", isSL ? triggerPrice : 0);
                 b.put("is_amo", false);
@@ -563,8 +578,8 @@ public class CopyEngineService {
                 // POST /v2/orders — JSON, access-token header
                 // REQUIRED: dhanClientId, securityId (numeric), exchangeSegment
                 // securityId resolved from Dhan instrument CSV (loaded on startup)
-                String dhanExch = isFnO ? ("BSE".equals(exch) ? "BSE_FNO" : "NSE_FNO") : ("BSE".equals(exch) ? "BSE_EQ" : "NSE_EQ");
-                String dhanProd = BrokerProductMapper.toDhanProductType(prod, isFnO);
+                String dhanExch = BrokerFieldTranslator.exchangeSegment(exch, "DHAN", isFnO);
+                String dhanProd = BrokerFieldTranslator.product(prod, "DHAN", isFnO);
                 String secId = instruments.getDhanSecurityId(sym, isFnO);
                 if (secId == null && !sym.equalsIgnoreCase(symbol)) {
                     secId = instruments.getDhanSecurityId(symbol, isFnO);
@@ -573,11 +588,11 @@ public class CopyEngineService {
 
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("dhanClientId", clientId);
-                b.put("transactionType", txn);
+                b.put("transactionType", BrokerFieldTranslator.transactionType(side, "DHAN"));
                 b.put("exchangeSegment", dhanExch);
                 b.put("productType", dhanProd);
-                b.put("orderType", BrokerProductMapper.toDhanOrderType(oType, isMarket));
-                b.put("validity", "DAY");
+                b.put("orderType", BrokerFieldTranslator.orderType(oType, "DHAN"));
+                b.put(BrokerFieldTranslator.validityFieldName("DHAN"), BrokerFieldTranslator.validityValue("DHAN"));
                 b.put("quantity", qty);
                 b.put("price", isMarket ? 0 : price);
                 b.put("triggerPrice", isSL ? triggerPrice : 0);
@@ -610,9 +625,7 @@ public class CopyEngineService {
                 // producttype: INTRADAY, DELIVERY, CARRYFORWARD
                 // symboltoken is REQUIRED (numeric token from scrip master)
                 String apiKey = platformConfig.getAngelone().getApiKey();
-                String angelProd = prod.equalsIgnoreCase("MIS") ? "INTRADAY"
-                        : prod.equalsIgnoreCase("CNC") ? "DELIVERY"
-                        : prod.equalsIgnoreCase("NRML") ? "CARRYFORWARD" : "INTRADAY";
+                String angelProd = BrokerFieldTranslator.product(prod, "ANGELONE", isFnO);
                 String angelSym = isFnO ? sym : sym + "-EQ";
                 String angelToken = instruments.getAngelToken(angelSym, isFnO);
                 if (angelToken == null) angelToken = instruments.getAngelToken(sym, isFnO);
@@ -624,11 +637,12 @@ public class CopyEngineService {
                 b.put("variety", "NORMAL");
                 b.put("tradingsymbol", angelSym);
                 b.put("symboltoken", angelToken);
-                b.put("transactiontype", txn);
-                b.put("exchange", isFnO ? "NFO" : "NSE");
-                b.put("ordertype", isSL ? (oType.equalsIgnoreCase("SL-M") ? "STOPLOSS_MARKET" : "STOPLOSS_LIMIT") : (isMarket ? "MARKET" : "LIMIT"));
+                b.put("transactiontype", BrokerFieldTranslator.transactionType(side, "ANGELONE"));
+                // Honour the actual exchange: BSE equity -> BSE, BSE F&O -> BFO (was hardcoded NSE/NFO)
+                b.put("exchange", BrokerFieldTranslator.exchangeSegment(exch, "ANGELONE", isFnO));
+                b.put("ordertype", BrokerFieldTranslator.orderType(oType, "ANGELONE"));
                 b.put("producttype", angelProd);
-                b.put("duration", "DAY");
+                b.put(BrokerFieldTranslator.validityFieldName("ANGELONE"), BrokerFieldTranslator.validityValue("ANGELONE"));
                 b.put("price", isMarket ? "0" : String.valueOf(price));
                 b.put("squareoff", "0");
                 b.put("stoploss", "0");
@@ -683,14 +697,27 @@ public class CopyEngineService {
     private Mono<Map<String, Object>> logAndReturn(UUID masterId, UUID childId, CopyTradeRequest req,
                                                     String status, String message, String broker, String skipReason,
                                                     Long latencyMs, String copyGroupId, Instant engineReceivedAt, Integer childQty) {
+        return logAndReturn(masterId, childId, req, status, message, broker, skipReason, latencyMs, copyGroupId,
+                engineReceivedAt, childQty, null);
+    }
+
+    private Mono<Map<String, Object>> logAndReturn(UUID masterId, UUID childId, CopyTradeRequest req,
+                                                    String status, String message, String broker, String skipReason,
+                                                    Long latencyMs, String copyGroupId, Instant engineReceivedAt,
+                                                    Integer childQty, String childBrokerOrderId) {
         Instant childPlacedAt = "SUCCESS".equals(status) ? Instant.now() : null;
 
         // Save to copy_logs
         CopyLog cl = new CopyLog();
         cl.setMasterId(masterId);
         cl.setChildId(childId);
+        // Link this child copy back to the master order so cancel propagation / reconciliation can find it.
+        cl.setMasterTradeId(req.getMasterOrderId());
         cl.setSymbol(req.getSymbol());
-        cl.setQty(req.getQty());
+        cl.setQty(req.getQty());                 // master qty
+        cl.setChildQty(childQty);                // child scaled qty (was always logged as master qty before)
+        cl.setChildBrokerOrderId(childBrokerOrderId != null && childBrokerOrderId.length() > 100
+                ? childBrokerOrderId.substring(0, 100) : childBrokerOrderId);
         cl.setTradeType(req.getSide());
         cl.setMasterStatus("EXECUTED");
         cl.setChildStatus(status);
@@ -726,6 +753,8 @@ public class CopyEngineService {
                     r.put("masterQty", req.getQty());
                     if (childQty != null) r.put("childQty", childQty);
                     r.put("masterBroker", req.getMasterBrokerId());
+                    if (req.getMasterOrderId() != null) r.put("masterTradeId", req.getMasterOrderId());
+                    if (childBrokerOrderId != null) r.put("childBrokerOrderId", childBrokerOrderId);
                     r.put("scaledQty", childQty != null ? childQty : req.getQty());
                     r.put("engineReceivedAt", engineReceivedAt != null ? engineReceivedAt.toString() : null);
                     r.put("childPlacedAt", childPlacedAt != null ? childPlacedAt.toString() : null);
@@ -735,6 +764,47 @@ public class CopyEngineService {
                     }
                     return r;
                 });
+    }
+
+    /**
+     * Propagate a master-order cancellation to all of its child copies.
+     *
+     * <p>Looks up every child copy linked to the master order (via {@code master_trade_id}) that was
+     * placed successfully and still has a child broker order id, then cancels each via the broker API.
+     * Idempotent within an hour so repeated polling of the same CANCELLED master order does not re-cancel.
+     */
+    public Mono<Long> propagateCancel(UUID masterId, String masterOrderId) {
+        if (masterOrderId == null || masterOrderId.isBlank()) return Mono.just(0L);
+        String key = masterId + ":" + masterOrderId;
+        long now = System.currentTimeMillis();
+        if (cancelledMasterOrders.putIfAbsent(key, now) != null) {
+            return Mono.just(0L); // already propagated
+        }
+        cancelledMasterOrders.entrySet().removeIf(e -> (now - e.getValue()) > 3_600_000);
+        log.info("CANCEL_PROPAGATE_START master={} masterOrderId={}", masterId, masterOrderId);
+
+        return copyLogs.findByMasterTradeId(masterOrderId)
+                .filter(cl -> "SUCCESS".equals(cl.getChildStatus())
+                        && cl.getChildBrokerOrderId() != null && !cl.getChildBrokerOrderId().isBlank())
+                .flatMap(cl -> subs.findByMasterIdAndChildId(masterId, cl.getChildId())
+                        .filter(sub -> sub.getBrokerAccountId() != null)
+                        .flatMap(sub -> brokerService.cancelOrder(sub.getBrokerAccountId(), cl.getChildId(), cl.getChildBrokerOrderId())
+                                .doOnSuccess(r -> {
+                                    log.info("CANCEL_PROPAGATE_OK master={} child={} childOrderId={}",
+                                            masterId, cl.getChildId(), cl.getChildBrokerOrderId());
+                                    notifications.push(cl.getChildId(), "Copy order cancelled",
+                                            "Master cancelled " + cl.getSymbol() + " — your copied order was cancelled.",
+                                            "ORDER_CANCELLED").subscribe();
+                                })
+                                .thenReturn(1L)
+                                .onErrorResume(e -> {
+                                    log.warn("CANCEL_PROPAGATE_FAIL master={} child={} childOrderId={} error={}",
+                                            masterId, cl.getChildId(), cl.getChildBrokerOrderId(), e.getMessage());
+                                    return Mono.just(0L);
+                                })))
+                .reduce(0L, Long::sum)
+                .doOnNext(count -> log.info("CANCEL_PROPAGATE_DONE master={} masterOrderId={} cancelled={}",
+                        masterId, masterOrderId, count));
     }
 
     /**

@@ -113,6 +113,8 @@ CREATE TABLE IF NOT EXISTS copy_logs (
   master_trade_id  VARCHAR(100),
   symbol           VARCHAR(50),
   qty              INTEGER,
+  child_qty        INTEGER,
+  child_broker_order_id VARCHAR(100),
   trade_type       VARCHAR(10),
   master_status    VARCHAR(30),
   child_status     VARCHAR(30),

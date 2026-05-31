@@ -191,6 +191,14 @@ public class OrderPollingService {
             Map<String, Object> order = (Map<String, Object>) orderObj;
 
             CanonicalOrder canonical = canonicalMapper.fromBrokerOrder(order, account.getBrokerId());
+
+            // Cancel propagation: a master order that was cancelled at the exchange should cancel any
+            // linked child orders. Propagation is idempotent so repeated polls don't re-cancel.
+            if (BrokerStatusNormalizer.CANCELLED.equals(canonical.getStatus())
+                    && canonical.getOrderId() != null) {
+                copyEngine.propagateCancel(masterId, canonical.getOrderId()).subscribe();
+            }
+
             if (!canonical.isReadyForCopy()) continue;
 
             String orderId = canonical.getOrderId();

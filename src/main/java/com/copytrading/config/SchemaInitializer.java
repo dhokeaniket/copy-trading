@@ -107,6 +107,9 @@ public class SchemaInitializer {
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS master_placed_at TIMESTAMPTZ",
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS engine_received_at TIMESTAMPTZ",
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS child_placed_at TIMESTAMPTZ",
+                // Child scaled qty (distinct from master qty) and child's broker order id for tracking/cancel/reconcile
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS child_qty INTEGER",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS child_broker_order_id VARCHAR(100)",
                 // Add telegram_chat_id to users
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(100)",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_channel VARCHAR(10)",
