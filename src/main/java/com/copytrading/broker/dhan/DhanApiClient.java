@@ -1,10 +1,14 @@
 package com.copytrading.broker.dhan;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Component
@@ -13,8 +17,10 @@ public class DhanApiClient {
     private static final Logger log = LoggerFactory.getLogger(DhanApiClient.class);
     private final WebClient authClient;
     private final WebClient apiClient;
+    private final ObjectMapper objectMapper;
 
-    public DhanApiClient(WebClient.Builder builder) {
+    public DhanApiClient(WebClient.Builder builder, ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
         this.authClient = builder.clone().baseUrl("https://auth.dhan.co")
                 .defaultHeader("Accept", "application/json")
                 .build();
@@ -70,9 +76,10 @@ public class DhanApiClient {
                         .flatMap(e -> Mono.error(new RuntimeException("Dhan positions " + r.statusCode() + ": " + e))))
                 .bodyToMono(String.class)
                 .map(body -> {
-                    // Dhan returns an array, wrap it in a map
-                    Map<String, Object> result = new java.util.LinkedHashMap<>();
-                    result.put("raw", body);
+                    List<Map<String, Object>> positions = DhanResponseParser.parseListPayload(body, objectMapper);
+                    log.debug("DHAN_POSITIONS count={}", positions.size());
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("positions", positions);
                     return (Map) result;
                 });
     }
@@ -102,14 +109,11 @@ public class DhanApiClient {
                 .retrieve()
                 .bodyToMono(String.class)
                 .map(body -> {
-                    // Simple parse: look for securityId near the symbol in response
                     if (body.contains("securityId")) {
                         try {
-                            // Find securityId value after the symbol match
                             int idx = body.indexOf("\"securityId\"");
                             if (idx > 0) {
                                 String sub = body.substring(idx + 14, Math.min(idx + 30, body.length()));
-                                // Extract the number
                                 StringBuilder num = new StringBuilder();
                                 for (char c : sub.toCharArray()) {
                                     if (Character.isDigit(c)) num.append(c);
@@ -129,13 +133,17 @@ public class DhanApiClient {
                 .uri("/v2/orders")
                 .header("access-token", accessToken)
                 .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Dhan orders " + r.statusCode() + ": " + e))))
                 .bodyToMono(String.class)
                 .map(body -> {
-                    Map<String, Object> result = new java.util.LinkedHashMap<>();
-                    result.put("orders", body);
+                    List<Map<String, Object>> orders = DhanResponseParser.parseListPayload(body, objectMapper);
+                    log.debug("DHAN_ORDERS count={}", orders.size());
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("orders", orders);
                     return (Map) result;
                 })
-                .onErrorResume(e -> Mono.just(java.util.Map.of("orders", java.util.List.of(), "error", e.getMessage())));
+                .onErrorResume(e -> Mono.just(Map.of("orders", List.of(), "error", e.getMessage())));
     }
 
     public Mono<Map> getTrades(String accessToken) {
@@ -145,11 +153,11 @@ public class DhanApiClient {
                 .retrieve()
                 .bodyToMono(String.class)
                 .map(body -> {
-                    Map<String, Object> result = new java.util.LinkedHashMap<>();
-                    result.put("trades", body);
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("trades", DhanResponseParser.parseListPayload(body, objectMapper));
                     return (Map) result;
                 })
-                .onErrorResume(e -> Mono.just(java.util.Map.of("trades", java.util.List.of(), "error", e.getMessage())));
+                .onErrorResume(e -> Mono.just(Map.of("trades", List.of(), "error", e.getMessage())));
     }
 
     public Mono<Map> getHoldings(String accessToken) {
@@ -159,11 +167,11 @@ public class DhanApiClient {
                 .retrieve()
                 .bodyToMono(String.class)
                 .map(body -> {
-                    Map<String, Object> result = new java.util.LinkedHashMap<>();
-                    result.put("holdings", body);
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("holdings", DhanResponseParser.parseListPayload(body, objectMapper));
                     return (Map) result;
                 })
-                .onErrorResume(e -> Mono.just(java.util.Map.of("holdings", java.util.List.of(), "error", e.getMessage())));
+                .onErrorResume(e -> Mono.just(Map.of("holdings", List.of(), "error", e.getMessage())));
     }
 
     public Mono<Map> cancelOrder(String accessToken, String orderId) {

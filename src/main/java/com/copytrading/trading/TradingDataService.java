@@ -7,8 +7,10 @@ import com.copytrading.engine.OrderNormalizer;
 import com.copytrading.logs.CopyLog;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.master.MasterActiveAccountRepository;
+import com.copytrading.broker.dhan.DhanResponseParser;
 import com.copytrading.positions.PositionDto;
 import com.copytrading.positions.PositionsService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -24,17 +26,20 @@ public class TradingDataService {
     private final BrokerAccountService brokerService;
     private final PositionsService positionsService;
     private final CopyLogRepository copyLogs;
+    private final ObjectMapper objectMapper;
 
     public TradingDataService(BrokerAccountRepository brokerRepo,
                               MasterActiveAccountRepository activeAccountRepo,
                               BrokerAccountService brokerService,
                               PositionsService positionsService,
-                              CopyLogRepository copyLogs) {
+                              CopyLogRepository copyLogs,
+                              ObjectMapper objectMapper) {
         this.brokerRepo = brokerRepo;
         this.activeAccountRepo = activeAccountRepo;
         this.brokerService = brokerService;
         this.positionsService = positionsService;
         this.copyLogs = copyLogs;
+        this.objectMapper = objectMapper;
     }
 
     public Mono<Map<String, Object>> getOpenBook(UUID userId, boolean master) {
@@ -140,12 +145,27 @@ public class TradingDataService {
     }
 
     @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> toOrderList(Object ordersObj) {
+    private List<Map<String, Object>> toOrderList(Object ordersObj) {
+        if (ordersObj == null) {
+            return List.of();
+        }
         if (ordersObj instanceof List<?> list) {
             return list.stream()
                     .filter(Map.class::isInstance)
                     .map(o -> (Map<String, Object>) o)
                     .collect(Collectors.toList());
+        }
+        if (ordersObj instanceof String s && !s.isBlank()) {
+            return DhanResponseParser.parseListPayload(s, objectMapper);
+        }
+        if (ordersObj instanceof Map<?, ?> map) {
+            for (String key : List.of("order_list", "orderBook", "data", "orders")) {
+                Object inner = map.get(key);
+                List<Map<String, Object>> parsed = toOrderList(inner);
+                if (!parsed.isEmpty()) {
+                    return parsed;
+                }
+            }
         }
         return List.of();
     }

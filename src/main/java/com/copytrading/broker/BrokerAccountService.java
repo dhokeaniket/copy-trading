@@ -707,7 +707,8 @@ public class BrokerAccountService {
                             });
                 case "DHAN":
                     return dhanClient.getPositions(sessionToken(a))
-                            .map(resp -> Map.<String, Object>of("positions", resp));
+                            .map(resp -> Map.<String, Object>of(
+                                    "positions", resp.getOrDefault("positions", List.of())));
                 case "ANGELONE":
                     return angelOneClient.getPositions(platformConfig.getAngelone().getApiKey(), sessionToken(a))
                             .map(resp -> {

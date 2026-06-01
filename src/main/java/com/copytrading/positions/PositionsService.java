@@ -10,6 +10,7 @@ import com.copytrading.broker.upstox.UpstoxApiClient;
 import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import com.copytrading.broker.angelone.AngelOneApiClient;
 import com.copytrading.master.MasterActiveAccountRepository;
+import com.copytrading.security.BrokerCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -36,6 +37,7 @@ public class PositionsService {
     private final DhanApiClient dhanClient;
     private final AngelOneApiClient angelOneClient;
     private final PlatformBrokerConfig platformConfig;
+    private final BrokerCredentials credentials;
 
     public PositionsService(BrokerAccountRepository brokerRepo,
                             MasterActiveAccountRepository activeAccountRepo,
@@ -45,7 +47,8 @@ public class PositionsService {
                             UpstoxApiClient upstoxClient,
                             DhanApiClient dhanClient,
                             AngelOneApiClient angelOneClient,
-                            PlatformBrokerConfig platformConfig) {
+                            PlatformBrokerConfig platformConfig,
+                            BrokerCredentials credentials) {
         this.brokerRepo = brokerRepo;
         this.activeAccountRepo = activeAccountRepo;
         this.growwClient = growwClient;
@@ -55,6 +58,7 @@ public class PositionsService {
         this.dhanClient = dhanClient;
         this.angelOneClient = angelOneClient;
         this.platformConfig = platformConfig;
+        this.credentials = credentials;
     }
 
     /**
@@ -133,7 +137,10 @@ public class PositionsService {
     @SuppressWarnings("unchecked")
     private Mono<List<PositionDto>> fetchRawAndNormalize(BrokerAccount account) {
         String broker = account.getBrokerId();
-        String token = account.getAccessToken();
+        String token = credentials.accessToken(account);
+        if (token == null || token.isBlank()) {
+            return Mono.error(new IllegalStateException("Broker session token missing"));
+        }
 
         Mono<Map> rawMono;
         switch (broker) {
@@ -209,12 +216,15 @@ public class PositionsService {
                 return List.of();
             }
             case "DHAN": {
-                // Dhan may return raw JSON string or list
+                Object positions = raw.get("positions");
+                if (positions instanceof List<?> list) {
+                    return list.stream().filter(Map.class::isInstance).map(m -> (Map<String, Object>) m).toList();
+                }
                 Object rawData = raw.get("raw");
-                if (rawData instanceof List) return (List<Map<String, Object>>) rawData;
-                // If it's the map itself with positions
+                if (rawData instanceof List<?> list) {
+                    return list.stream().filter(Map.class::isInstance).map(m -> (Map<String, Object>) m).toList();
+                }
                 if (raw.containsKey("dhanClientId")) {
-                    // Single position object, wrap
                     return List.of((Map<String, Object>) raw);
                 }
                 return List.of();
@@ -300,8 +310,9 @@ public class PositionsService {
     }
 
     private PositionDto mapDhanPosition(Map<String, Object> p) {
-        String symbol = getString(p, "tradingSymbol", getString(p, "securityId", "UNKNOWN"));
-        int qty = getInt(p, "netQty", getInt(p, "quantity", 0));
+        String symbol = getString(p, "tradingSymbol", getString(p, "trading_symbol",
+                getString(p, "symbol", getString(p, "securityId", "UNKNOWN"))));
+        int qty = getInt(p, "netQty", getInt(p, "net_qty", getInt(p, "quantity", getInt(p, "netQuantity", 0))));
         double avgPrice = getDouble(p, "averagePrice", getDouble(p, "costPrice", 0));
         double ltp = getDouble(p, "ltp", getDouble(p, "currentPrice", 0));
         String side = qty >= 0 ? "BUY" : "SELL";

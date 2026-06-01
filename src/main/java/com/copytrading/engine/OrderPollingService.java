@@ -158,17 +158,7 @@ public class OrderPollingService {
                 .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
                 .flatMap(account -> brokerService.getOrders(brokerAccountId, masterId)
                         .map(resp -> {
-                            Object ordersObj = resp.get("orders");
-                            List<?> ordersList = null;
-                            if (ordersObj instanceof List<?> list) {
-                                ordersList = list;
-                            } else if (ordersObj instanceof Map<?,?> map) {
-                                // Groww wraps in {order_list: [...]}
-                                Object inner = map.get("order_list");
-                                if (inner == null) inner = map.get("orderBook");
-                                if (inner == null) inner = map.get("data");
-                                if (inner instanceof List<?> list2) ordersList = list2;
-                            }
+                            List<?> ordersList = extractOrdersList(resp.get("orders"));
                             if (ordersList != null && !ordersList.isEmpty()) {
                                 return processOrders(masterId, account, ordersList);
                             }
@@ -291,5 +281,21 @@ public class OrderPollingService {
                             "SESSION_REMINDER");
                 }))
             .subscribe();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<?> extractOrdersList(Object ordersObj) {
+        if (ordersObj instanceof List<?> list) {
+            return list;
+        }
+        if (ordersObj instanceof Map<?, ?> map) {
+            for (String key : List.of("order_list", "orderBook", "data", "orders")) {
+                Object inner = map.get(key);
+                if (inner instanceof List<?> list2) {
+                    return list2;
+                }
+            }
+        }
+        return null;
     }
 }

@@ -1,0 +1,13 @@
+---
+description: Never add Cursor co-author to git commits
+alwaysApply: true
+---
+
+# Git commits — no Cursor attribution
+
+When the user asks to commit or push:
+
+- Use **only**: `git commit -m "message"`
+- **NEVER** use `git commit --trailer "Co-authored-by: Cursor ..."`
+- **NEVER** add `Co-authored-by: Cursor <cursoragent@cursor.com>` to commit messages
+- Do **not** commit unless the user explicitly asks to commit or push
