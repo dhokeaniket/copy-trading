@@ -243,11 +243,11 @@ public class InstrumentCache {
         String clean = upper.replaceFirst("^NSE_FO\\|", "").replaceFirst("^NSE:", "");
         cached = lotSizeBySymbol.get(clean);
         if (cached != null && cached > 0) return cached;
-        // NSE revised lots (Nov 2024+); instrument cache overrides when loaded
+        // NSE revised lots (FAOP70616): NIFTY 65 from Jan 2026 series; instrument cache overrides when loaded
         if (clean.startsWith("BANKNIFTY")) return 30;
-        if (clean.startsWith("FINNIFTY")) return 65;
+        if (clean.startsWith("FINNIFTY")) return 60;
         if (clean.startsWith("MIDCPNIFTY")) return 120;
-        if (clean.startsWith("NIFTY")) return 75;
+        if (clean.startsWith("NIFTY")) return 65;
         if (clean.startsWith("SENSEX")) return 20;
         return 1;
     }
