@@ -27,4 +27,8 @@ public interface SubscriptionRepository extends ReactiveCrudRepository<Subscript
     @Modifying
     @Query("UPDATE subscriptions SET copying_status = :status, approved_once = :approvedOnce WHERE master_id = :masterId AND child_id = :childId")
     Mono<Integer> updateStatusAndApproval(UUID masterId, UUID childId, String status, boolean approvedOnce);
+
+    @Modifying
+    @Query("UPDATE subscriptions SET broker_account_id = NULL WHERE broker_account_id = :brokerAccountId")
+    Mono<Integer> clearBrokerAccountId(UUID brokerAccountId);
 }

@@ -10,8 +10,10 @@ import com.copytrading.broker.angelone.AngelOneApiClient;
 import com.copytrading.engine.BrokerFieldTranslator;
 import com.copytrading.engine.InstrumentCache;
 import com.copytrading.engine.SymbolMapper;
+import com.copytrading.master.MasterActiveAccountRepository;
 import com.copytrading.notification.NotificationService;
 import com.copytrading.security.BrokerCredentials;
+import com.copytrading.subscription.SubscriptionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -40,6 +42,8 @@ public class BrokerAccountService {
     private final NotificationService notifications;
     private final SymbolMapper symbolMapper;
     private final InstrumentCache instruments;
+    private final SubscriptionRepository subscriptionRepo;
+    private final MasterActiveAccountRepository masterActiveAccountRepo;
 
     public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
                                 ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
@@ -49,7 +53,9 @@ public class BrokerAccountService {
                                 BrokerCredentials credentials,
                                 NotificationService notifications,
                                 SymbolMapper symbolMapper,
-                                InstrumentCache instruments) {
+                                InstrumentCache instruments,
+                                SubscriptionRepository subscriptionRepo,
+                                MasterActiveAccountRepository masterActiveAccountRepo) {
         this.repo = repo;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
@@ -62,6 +68,8 @@ public class BrokerAccountService {
         this.notifications = notifications;
         this.symbolMapper = symbolMapper;
         this.instruments = instruments;
+        this.subscriptionRepo = subscriptionRepo;
+        this.masterActiveAccountRepo = masterActiveAccountRepo;
     }
 
     private String sessionToken(BrokerAccount a) {
@@ -237,20 +245,18 @@ public class BrokerAccountService {
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
-                .flatMap(a -> repo.delete(a)
-                        .thenReturn(Map.of("message", "Account unlinked"))
-                        .onErrorResume(e -> {
-                            clearBrokerSession(a);
-                            clearStoredCredentials(a);
-                            credentials.encryptSensitiveFields(a);
-                            return repo.save(a)
-                                    .flatMap(saved -> notifyBrokerReconnect(userId, saved, "BROKER_DISCONNECTED",
-                                            "Broker disconnected",
-                                            "Your " + BrokerAccountDto.from(saved).getBrokerName()
-                                                    + " account was disconnected. Unsubscribe from masters first to fully remove.")
-                                            .thenReturn(Map.of(
-                                                    "message", "Account disconnected. Unsubscribe from masters first to fully remove. Use login-options to reconnect.")));
-                        }));
+                .flatMap(a -> {
+                    log.info("BROKER_DELETE_START accountId={} userId={} broker={}", accountId, userId, a.getBrokerId());
+                    // Clear FK references before deleting:
+                    // 1. Null out broker_account_id on any subscriptions using this account
+                    // 2. Remove master_active_accounts row if it references this account
+                    return subscriptionRepo.clearBrokerAccountId(accountId)
+                            .then(masterActiveAccountRepo.deleteById(userId).onErrorResume(e -> Mono.empty()))
+                            .then(repo.delete(a))
+                            .thenReturn(Map.of("message", "Account unlinked"))
+                            .doOnSuccess(r -> log.info("BROKER_DELETE_OK accountId={} userId={} broker={}",
+                                    accountId, userId, a.getBrokerId()));
+                });
     }
 
     // 3.7 Login to broker (create session)
