@@ -40,7 +40,7 @@ public class InstrumentCache {
     private final ConcurrentHashMap<String, Integer> lotSizeBySymbol = new ConcurrentHashMap<>();
 
     public InstrumentCache(WebClient.Builder builder) {
-        this.client = builder.codecs(c -> c.defaultCodecs().maxInMemorySize(50 * 1024 * 1024)).build();
+        this.client = builder.codecs(c -> c.defaultCodecs().maxInMemorySize(120 * 1024 * 1024)).build();
     }
 
     @PostConstruct
@@ -104,26 +104,79 @@ public class InstrumentCache {
     private void loadUpstox() {
         loadUpstoxExchange("https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz", "NSE");
         loadUpstoxExchange("https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz", "BSE");
-        // NSE/BSE F&O live in separate files — required for Upstox option/futures copy
-        loadUpstoxExchange("https://assets.upstox.com/market-quote/instruments/exchange/NFO.json.gz", "NFO");
-        loadUpstoxExchange("https://assets.upstox.com/market-quote/instruments/exchange/BFO.json.gz", "BFO");
+        // Per-segment NFO/BFO URLs return 403 on CDN — F&O lives in complete.json.gz (official Upstox source)
+        loadUpstoxFnoFromComplete();
+    }
+
+    /** F&O symbols from Upstox complete instrument master (NSE_FO, BSE_FO, MCX_FO, etc.). */
+    private void loadUpstoxFnoFromComplete() {
+        loadUpstoxFnoUrl("https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz", "COMPLETE");
+    }
+
+    private void loadUpstoxFnoUrl(String url, String label) {
+        try {
+            client.get().uri(url)
+                    .header("Accept-Encoding", "gzip")
+                    .header("Accept", "*/*")
+                    .header("User-Agent", "AscentraCopyTrading/1.0")
+                    .retrieve()
+                    .bodyToMono(byte[].class)
+                    .map(InstrumentCache::gunzipToString)
+                    .subscribe(json -> {
+                        int count = indexUpstoxFnoJson(json);
+                        log.info("UPSTOX_INSTRUMENTS_{}: {} F&O symbols loaded", label, count);
+                    }, err -> log.warn("UPSTOX_INSTRUMENTS_{}_FAILED: {}", label, err.getMessage()));
+        } catch (Exception e) {
+            log.warn("UPSTOX_{}_INIT_FAILED: {}", label, e.getMessage());
+        }
+    }
+
+    private static String gunzipToString(byte[] bytes) {
+        try {
+            var bais = new java.io.ByteArrayInputStream(bytes);
+            var gis = new java.util.zip.GZIPInputStream(bais);
+            return new String(gis.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
+
+    /** Index only F&O rows (instrument_key contains _FO or segment ends with _FO). */
+    private int indexUpstoxFnoJson(String json) {
+        int count = 0;
+        for (String item : json.split("\\{")) {
+            try {
+                String sym = extractJsonField(item, "trading_symbol");
+                String key = extractJsonField(item, "instrument_key");
+                String segment = extractJsonField(item, "segment");
+                if (sym == null || key == null) continue;
+                boolean isFo = key.contains("_FO")
+                        || (segment != null && segment.endsWith("_FO"));
+                if (!isFo) continue;
+                String upper = sym.toUpperCase();
+                upstoxFno.put(upper, key);
+                upstoxFno.put(upper.replace(" ", ""), key);
+                String noWeekly = upper.replaceAll(" \\[\\d+\\]$", "");
+                if (!noWeekly.equals(upper)) {
+                    upstoxFno.put(noWeekly, key);
+                    upstoxFno.put(noWeekly.replace(" ", ""), key);
+                }
+                indexLotSize(sym, item);
+                count++;
+            } catch (Exception ignored) { /* skip bad row */ }
+        }
+        return count;
     }
 
     private void loadUpstoxExchange(String url, String exchange) {
         try {
             client.get().uri(url)
                     .header("Accept-Encoding", "gzip")
+                    .header("Accept", "*/*")
+                    .header("User-Agent", "AscentraCopyTrading/1.0")
                     .retrieve()
                     .bodyToMono(byte[].class)
-                    .map(bytes -> {
-                        try {
-                            var bais = new java.io.ByteArrayInputStream(bytes);
-                            var gis = new java.util.zip.GZIPInputStream(bais);
-                            return new String(gis.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                        } catch (Exception e) {
-                            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
-                        }
-                    })
+                    .map(InstrumentCache::gunzipToString)
                     .subscribe(json -> {
                         int count = 0;
                         String[] items = json.split("\\{");
