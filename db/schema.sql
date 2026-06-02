@@ -125,6 +125,10 @@ CREATE TABLE IF NOT EXISTS copy_logs (
   master_placed_at TIMESTAMPTZ,
   engine_received_at TIMESTAMPTZ,
   child_placed_at  TIMESTAMPTZ,
+  product          VARCHAR(10),
+  order_type       VARCHAR(20),
+  price            DOUBLE PRECISION,
+  trigger_price    DOUBLE PRECISION,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

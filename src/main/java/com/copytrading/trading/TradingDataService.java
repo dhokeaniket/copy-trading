@@ -47,12 +47,10 @@ public class TradingDataService {
                 .flatMap(a -> brokerService.getOrders(a.getId(), userId)
                         .map(resp -> {
                             List<Map<String, Object>> all = toOrderList(resp.get("orders"));
-                            List<Map<String, Object>> open = all.stream()
-                                    .filter(o -> !isTerminalOrder(OrderNormalizer.extractStatus(o)))
-                                    .toList();
+                            // Show ALL today's orders (not just open/pending)
                             Map<String, Object> r = new LinkedHashMap<>();
-                            r.put("orders", open);
-                            r.put("total", open.size());
+                            r.put("orders", all);
+                            r.put("total", all.size());
                             r.put("brokerAccountId", a.getId().toString());
                             r.put("broker", a.getBrokerId());
                             if (resp.containsKey("error")) r.put("error", resp.get("error"));
@@ -90,10 +88,9 @@ public class TradingDataService {
     public Mono<Map<String, Object>> getOptionStatus(UUID userId, boolean master) {
         var logsFlux = master ? copyLogs.findByMasterId(userId) : copyLogs.findByChildId(userId);
         return logsFlux.collectList().map(logs -> {
+            // Show ONLY option trades (strict isOptionSymbol filter)
             List<Map<String, Object>> items = logs.stream()
-                    .filter(l -> isOptionSymbol(l.getSymbol())
-                            || "SKIPPED".equals(l.getChildStatus())
-                            || "FAILED".equals(l.getChildStatus()))
+                    .filter(l -> isOptionSymbol(l.getSymbol()))
                     .sorted(Comparator.comparing(CopyLog::getCreatedAt,
                             Comparator.nullsLast(Comparator.reverseOrder())))
                     .map(this::toOptionStatusRow)

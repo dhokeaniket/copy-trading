@@ -738,6 +738,10 @@ public class CopyEngineService {
         cl.setCopyGroupId(copyGroupId);
         cl.setEngineReceivedAt(engineReceivedAt);
         cl.setChildPlacedAt(childPlacedAt);
+        cl.setProduct(req.getProduct());
+        cl.setOrderType(req.getOrderType());
+        cl.setPrice(req.getPrice() != 0 ? req.getPrice() : null);
+        cl.setTriggerPrice(req.getTriggerPrice() != 0 ? req.getTriggerPrice() : null);
         cl.setCreatedAt(Instant.now());
 
         // Send Telegram notification to child

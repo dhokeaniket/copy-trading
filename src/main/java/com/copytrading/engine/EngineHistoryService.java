@@ -127,6 +127,10 @@ public class EngineHistoryService {
         t.put("masterName", masterName);
         t.put("symbol", l.getSymbol());
         t.put("side", l.getTradeType());
+        t.put("product", l.getProduct());
+        t.put("orderType", l.getOrderType());
+        t.put("price", l.getPrice());
+        t.put("triggerPrice", l.getTriggerPrice());
         t.put("masterTriggeredAt", l.getMasterPlacedAt() != null
                 ? l.getMasterPlacedAt().toString() : l.getEngineReceivedAt());
         t.put("myOrderPlacedAt", l.getChildPlacedAt() != null

@@ -118,7 +118,12 @@ public class SchemaInitializer {
                 "ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS copy_paused BOOLEAN NOT NULL DEFAULT FALSE",
                 "ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS paused_until TIMESTAMPTZ",
                 // IP slot for Groww per-user IP routing (0 = primary IP, 1+ = proxy slots)
-                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS ip_slot INTEGER NOT NULL DEFAULT 0"
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS ip_slot INTEGER NOT NULL DEFAULT 0",
+                // Add product, order_type, price, trigger_price to copy_logs for order detail tracking
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS product VARCHAR(10)",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS order_type VARCHAR(20)",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS price DOUBLE PRECISION",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS trigger_price DOUBLE PRECISION"
             };
 
             for (String sql : statements) {

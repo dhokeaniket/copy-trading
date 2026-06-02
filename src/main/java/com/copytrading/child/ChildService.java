@@ -390,6 +390,10 @@ public class ChildService {
                             t.put("masterName", masterNames.getOrDefault(l.getMasterId(), "Unknown"));
                             t.put("instrument", l.getSymbol());
                             t.put("type", l.getTradeType());
+                            t.put("product", l.getProduct());
+                            t.put("orderType", l.getOrderType());
+                            t.put("price", l.getPrice());
+                            t.put("triggerPrice", l.getTriggerPrice());
                             t.put("masterQty", l.getQty() != null ? l.getQty() : 0);
                             t.put("myQty", l.getQty() != null ? l.getQty() : 0);
                             t.put("status", l.getChildStatus());

@@ -61,6 +61,16 @@ public class CopyLog {
     @Column("child_placed_at")
     private Instant childPlacedAt;
 
+    private String product;
+
+    @Column("order_type")
+    private String orderType;
+
+    private Double price;
+
+    @Column("trigger_price")
+    private Double triggerPrice;
+
     @Column("created_at")
     private Instant createdAt;
 
@@ -100,6 +110,14 @@ public class CopyLog {
     public void setEngineReceivedAt(Instant engineReceivedAt) { this.engineReceivedAt = engineReceivedAt; }
     public Instant getChildPlacedAt() { return childPlacedAt; }
     public void setChildPlacedAt(Instant childPlacedAt) { this.childPlacedAt = childPlacedAt; }
+    public String getProduct() { return product; }
+    public void setProduct(String product) { this.product = product; }
+    public String getOrderType() { return orderType; }
+    public void setOrderType(String orderType) { this.orderType = orderType; }
+    public Double getPrice() { return price; }
+    public void setPrice(Double price) { this.price = price; }
+    public Double getTriggerPrice() { return triggerPrice; }
+    public void setTriggerPrice(Double triggerPrice) { this.triggerPrice = triggerPrice; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }

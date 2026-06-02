@@ -179,6 +179,10 @@ public class MasterService {
                             m.put("childQty", l.getChildQty());
                             m.put("tradeType", l.getTradeType());
                             m.put("side", l.getTradeType());
+                            m.put("product", l.getProduct());
+                            m.put("orderType", l.getOrderType());
+                            m.put("price", l.getPrice());
+                            m.put("triggerPrice", l.getTriggerPrice());
                             m.put("masterStatus", l.getMasterStatus());
                             m.put("childStatus", l.getChildStatus());
                             m.put("status", l.getChildStatus());
@@ -232,8 +236,13 @@ public class MasterService {
     }
 
     // 4.1 List children (with live margin + P&L for follower table)
+    // Excludes master's own ID from children list and shows only ACTIVE/PAUSED/PENDING_APPROVAL
     public Mono<Map<String, Object>> listChildren(UUID masterId) {
         return subs.findByMasterId(masterId)
+                .filter(s -> !s.getChildId().equals(masterId)) // exclude master's own ID
+                .filter(s -> "ACTIVE".equals(s.getCopyingStatus())
+                        || "PAUSED".equals(s.getCopyingStatus())
+                        || "PENDING_APPROVAL".equals(s.getCopyingStatus())) // only active subscriptions
                 .flatMap(s -> buildFollowerRow(s), 2)
                 .collectList()
                 .map(list -> Map.of("children", (Object) list));
@@ -868,9 +877,14 @@ public class MasterService {
     // 4.8 Master dashboard (aggregated view + enriched followers)
     public Mono<Map<String, Object>> getDashboard(UUID masterId) {
         Mono<List<CopyLog>> logsMono = copyLogs.findByMasterId(masterId).collectList();
-        Mono<List<Subscription>> activeMono = subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE").collectList();
-        Mono<List<Subscription>> allMono = subs.findByMasterId(masterId).collectList();
+        Mono<List<Subscription>> activeMono = subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE")
+                .filter(s -> !s.getChildId().equals(masterId))
+                .collectList();
+        Mono<List<Subscription>> allMono = subs.findByMasterId(masterId)
+                .filter(s -> !s.getChildId().equals(masterId))
+                .collectList();
         Mono<List<Map<String, Object>>> enrichedMono = subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE")
+                .filter(s -> !s.getChildId().equals(masterId))
                 .flatMap(this::buildFollowerRow, 2)
                 .collectList();
 

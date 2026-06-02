@@ -112,4 +112,11 @@ public class AdminController {
             @RequestParam(required = false) String status) {
         return adminService.getTradeLogs(userId, status);
     }
+
+    // 2.13 GET /admin/master-child-map
+    @GetMapping("/master-child-map")
+    @Operation(summary = "Get all masters with their linked children (name, email, status, scalingFactor)")
+    public Mono<Map<String, Object>> getMasterChildMap() {
+        return adminService.getMasterChildMap();
+    }
 }

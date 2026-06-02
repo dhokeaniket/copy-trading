@@ -240,4 +240,41 @@ public class AdminService {
             return resp;
         });
     }
+
+    // 2.13 Master-child map (all masters with their linked children)
+    public Mono<Map<String, Object>> getMasterChildMap() {
+        return users.findByRole("MASTER").collectList().flatMap(masters -> {
+            return Flux.fromIterable(masters).flatMap(master ->
+                subscriptionRepo.findByMasterId(master.getId())
+                    .filter(s -> "ACTIVE".equals(s.getCopyingStatus())
+                            || "PAUSED".equals(s.getCopyingStatus())
+                            || "PENDING_APPROVAL".equals(s.getCopyingStatus()))
+                    .filter(s -> !s.getChildId().equals(master.getId()))
+                    .flatMap(s -> users.findById(s.getChildId())
+                        .map(child -> {
+                            Map<String, Object> c = new LinkedHashMap<>();
+                            c.put("childId", child.getId().toString());
+                            c.put("name", child.getName());
+                            c.put("email", child.getEmail());
+                            c.put("status", s.getCopyingStatus());
+                            c.put("scalingFactor", s.getScalingFactor());
+                            return c;
+                        }))
+                    .collectList()
+                    .map(children -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("masterId", master.getId().toString());
+                        m.put("masterName", master.getName());
+                        m.put("masterEmail", master.getEmail());
+                        m.put("children", children);
+                        return m;
+                    })
+            ).collectList().map(list -> {
+                Map<String, Object> resp = new LinkedHashMap<>();
+                resp.put("masters", list);
+                resp.put("total", list.size());
+                return resp;
+            });
+        });
+    }
 }
