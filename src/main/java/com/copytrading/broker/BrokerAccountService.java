@@ -44,6 +44,7 @@ public class BrokerAccountService {
     private final InstrumentCache instruments;
     private final SubscriptionRepository subscriptionRepo;
     private final MasterActiveAccountRepository masterActiveAccountRepo;
+    private final com.copytrading.broker.groww.GrowwProxyRouter proxyRouter;
 
     public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
                                 ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
@@ -55,7 +56,8 @@ public class BrokerAccountService {
                                 SymbolMapper symbolMapper,
                                 InstrumentCache instruments,
                                 SubscriptionRepository subscriptionRepo,
-                                MasterActiveAccountRepository masterActiveAccountRepo) {
+                                MasterActiveAccountRepository masterActiveAccountRepo,
+                                com.copytrading.broker.groww.GrowwProxyRouter proxyRouter) {
         this.repo = repo;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
@@ -70,6 +72,7 @@ public class BrokerAccountService {
         this.instruments = instruments;
         this.subscriptionRepo = subscriptionRepo;
         this.masterActiveAccountRepo = masterActiveAccountRepo;
+        this.proxyRouter = proxyRouter;
     }
 
     private String sessionToken(BrokerAccount a) {
@@ -138,6 +141,31 @@ public class BrokerAccountService {
             a.setStatus("AUTH_REQUIRED");
         }
         credentials.encryptSensitiveFields(a);
+
+        // Auto-assign ip_slot for Groww (each Groww user needs a unique IP)
+        if ("GROWW".equals(broker)) {
+            return repo.findMaxGrowwIpSlot()
+                    .defaultIfEmpty(-1)
+                    .flatMap(maxSlot -> {
+                        int nextSlot = maxSlot + 1;
+                        a.setIpSlot(nextSlot);
+                        return repo.save(a).map(saved -> {
+                            String assignedIp = proxyRouter.getPublicIp(nextSlot);
+                            log.info("BROKER_LINKED id={} user={} broker=GROWW ipSlot={} assignedIp={}",
+                                    saved.getId(), userId, nextSlot, assignedIp);
+                            Map<String, Object> r = new LinkedHashMap<>();
+                            r.put("accountId", saved.getId());
+                            r.put("brokerId", saved.getBrokerId());
+                            r.put("status", saved.getStatus());
+                            r.put("ipSlot", nextSlot);
+                            r.put("assignedIp", assignedIp);
+                            r.put("whitelistIp", assignedIp);
+                            r.put("message", "Whitelist IP " + assignedIp + " in your Groww API dashboard before connecting.");
+                            return r;
+                        });
+                    });
+        }
+
         return repo.save(a).map(saved -> {
             log.info("BROKER_LINKED id={} user={} broker={}", saved.getId(), userId, broker);
             Map<String, Object> r = new LinkedHashMap<>();
