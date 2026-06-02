@@ -2,9 +2,11 @@ package com.copytrading.broker.groww;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.netty.http.client.HttpClient;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -82,8 +84,24 @@ public class GrowwApiClient {
     }
 
     public Mono<Map> placeOrder(String accessToken, Map<String, Object> body) {
-        log.info("GROWW_ORDER_REQ body={}", body);
-        return client.post().uri("/v1/order/create")
+        return placeOrder(accessToken, body, null);
+    }
+
+    /**
+     * Place order with optional proxy routing (for Groww per-user IP).
+     * If proxyClient is null, uses the default WebClient (primary IP).
+     */
+    public Mono<Map> placeOrder(String accessToken, Map<String, Object> body, HttpClient proxyClient) {
+        WebClient orderClient = proxyClient != null
+                ? WebClient.builder().baseUrl(BASE)
+                    .clientConnector(new ReactorClientHttpConnector(proxyClient))
+                    .defaultHeader("Accept", "application/json")
+                    .defaultHeader("X-API-VERSION", "1.0")
+                    .build()
+                : this.client;
+
+        log.info("GROWW_ORDER_REQ body={} proxied={}", body, proxyClient != null);
+        return orderClient.post().uri("/v1/order/create")
                 .header("Authorization", "Bearer " + accessToken)
                 .header("Content-Type", "application/json")
                 .bodyValue(body)

@@ -1,0 +1,133 @@
+server:
+  port: ${PORT:8081}
+  address: 0.0.0.0
+
+app:
+  name: Ascentra Capital
+  kafka:
+    enabled: ${APP_KAFKA_ENABLED:false}
+  mail:
+    from: ${MAIL_FROM:${MAIL_USERNAME:}}
+
+# Master order polling — copy detection latency (fixedDelay between cycles)
+engine:
+  polling:
+    interval-ms: ${ENGINE_POLLING_INTERVAL_MS:500}
+    initial-delay-ms: ${ENGINE_POLLING_INITIAL_DELAY_MS:15000}
+  # Safety-net reconciliation of engine trade records vs broker orderbooks
+  reconciliation:
+    interval-ms: ${ENGINE_RECONCILIATION_INTERVAL_MS:120000}
+    initial-delay-ms: ${ENGINE_RECONCILIATION_INITIAL_DELAY_MS:60000}
+  # Per-broker child order placement rate limits (orders per second / per minute)
+  rate-limit:
+    enabled: ${ENGINE_RATE_LIMIT_ENABLED:true}
+
+spring:
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+  application:
+    name: copy-trading-backend
+  r2dbc:
+    url: ${SPRING_R2DBC_URL:r2dbc:postgresql://database-1.clysagkw8b8t.eu-north-1.rds.amazonaws.com:5432/copytrading?sslMode=require}
+    username: ${SPRING_R2DBC_USERNAME:postgres}
+    password: ${SPRING_R2DBC_PASSWORD:Ascentra123}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    consumer:
+      group-id: copy-trading-consumer
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring:
+          json:
+            use:
+              type:
+                headers: true
+            value:
+              default:
+                type: com.copytrading.replication.TradeEvent
+            trusted:
+              packages: com.copytrading.replication
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+jwt:
+  issuer: copy-trading
+  secret: ${JWT_SECRET:change-me}
+  accessTokenExpirationSeconds: 900
+  refreshTokenExpirationSeconds: 604800
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    url: /v3/api-docs
+  api-docs:
+    path: /v3/api-docs
+  use-management-port: false
+
+logging:
+  level:
+    com.copytrading.broker: INFO
+    com.copytrading.notification: INFO
+    com.copytrading.auth: INFO
+    com.copytrading.engine: INFO
+
+aws:
+  accessKeyId: ${AWS_ACCESS_KEY_ID:}
+  secretAccessKey: ${AWS_SECRET_ACCESS_KEY:}
+  region: ${AWS_REGION:ap-south-1}
+
+# Twilio Verify — OTP SMS (see TWILIO-OTP-SETUP.md). Do not commit secrets.
+twilio:
+  account-sid: ${TWILIO_ACCOUNT_SID:}
+  api-key: ${TWILIO_API_KEY:}
+  api-secret: ${TWILIO_API_SECRET:}
+  verify-service-sid: ${TWILIO_VERIFY_SERVICE_SID:}
+  default-country-code: ${TWILIO_DEFAULT_COUNTRY_CODE:91}
+
+telegram:
+  # Set on EC2 via env — never commit real tokens. Revoke token if exposed in chat/logs.
+  bot-token: ${TELEGRAM_BOT_TOKEN:}
+  bot-username: ${TELEGRAM_BOT_USERNAME:Copy_tradingsBot}
+  enabled: ${TELEGRAM_ENABLED:false}
+  # Public HTTPS URL for setWebhook (e.g. https://api.ascentracapital.com/api/v1/telegram/webhook)
+  webhook-base-url: ${TELEGRAM_WEBHOOK_BASE_URL:}
+
+brokers:
+  groww:
+    apiKey: ${GROWW_API_KEY:eyJraWQiOiJaTUtjVXciLCJhbGciOiJFUzI1NiJ9.eyJleHAiOjI1NjMzNDM2MDYsImlhdCI6MTc3NDk0MzYwNiwibmJmIjoxNzc0OTQzNjA2LCJzdWIiOiJ7XCJ0b2tlblJlZklkXCI6XCIzNGM5ZjFlYS04MGIzLTRlM2QtOTk1NC1mNTE5Mjc0MWY4NDRcIixcInZlbmRvckludGVncmF0aW9uS2V5XCI6XCJlMzFmZjIzYjA4NmI0MDZjODg3NGIyZjZkODQ5NTMxM1wiLFwidXNlckFjY291bnRJZFwiOlwiYjFjMzBhM2YtMjRjMC00MDJkLWIwNzQtYTI3YmJmMmNlNjBlXCIsXCJkZXZpY2VJZFwiOlwiNDJlM2RlNDUtOWI4OC01MWE3LTkzMmEtMTVmYmI0NTY2NmVhXCIsXCJzZXNzaW9uSWRcIjpcImEyNmMzYjkyLWQ1ODAtNGYzNC1iMGQ2LTE3MWM4NDk4NDcwNVwiLFwiYWRkaXRpb25hbERhdGFcIjpcIno1NC9NZzltdjE2WXdmb0gvS0EwYkQ0UmVwZG51NVc1VEtvUng4ZDlIR05STkczdTlLa2pWZDNoWjU1ZStNZERhWXBOVi9UOUxIRmtQejFFQisybTdRPT1cIixcInJvbGVcIjpcImF1dGgtdG90cFwiLFwic291cmNlSXBBZGRyZXNzXCI6XCIyNDAxOjQ5MDA6ODgxNjozMTlmOjM5NjU6ZGQ2MjplNTY6Yzk2ZCwxNzIuNjguMTU1LjE4MywzNS4yNDEuMjMuMTIzXCIsXCJ0d29GYUV4cGlyeVRzXCI6MjU2MzM0MzYwNjQ4MCxcInZlbmRvck5hbWVcIjpcImdyb3d3QXBpXCJ9IiwiaXNzIjoiYXBleC1hdXRoLXByb2QtYXBwIn0.RLvzRmZrVA-ZuBWFd3VJLhsgC1pBsW1_esjNvT7mBP018DDq5dB6zz9KZMOdDhe1owL6GueVTJIOqVdr2vfx1w}
+    apiSecret: "${GROWW_API_SECRET:)7lFQS0hKc@zY9mb!-*g$I*KvuyDfNyH}"
+  zerodha:
+    apiKey: ${ZERODHA_API_KEY:xdsce47bimlz9ndk}
+    apiSecret: ${ZERODHA_API_SECRET:df9ebtu5urrpuobhgg3lv430147d16yl}
+  fyers:
+    apiKey: ${FYERS_API_KEY:LACBO51M56-100}
+    apiSecret: ${FYERS_API_SECRET:9SM7H6AELS}
+  # Groww requires whitelisting this IP in each user's Groww API dashboard
+  serverEgressIp: ${SERVER_EGRESS_IP:13.53.246.13}
+  upstox:
+    apiKey: ${UPSTOX_API_KEY:63d0dbd0-1e58-42d3-9557-3292f4e41780}
+    apiSecret: ${UPSTOX_API_SECRET:9gq7cl1wmn}
+  dhan:
+    apiKey: ${DHAN_API_KEY:041e078d}
+    apiSecret: ${DHAN_API_SECRET:d5fa0ddf-f6d5-4e5e-9ab7-e68c0de71d90}
+  angelone:
+    apiKey: ${ANGELONE_API_KEY:3i6I4ad5}
+    apiSecret: ${ANGELONE_API_SECRET:0cba0738-29f7-460f-8485-da1a54fcd0e7}
+  callbackUrl: ${BROKER_CALLBACK_URL:https://api.ascentracapital.com/api/v1/brokers/callback}

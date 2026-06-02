@@ -116,7 +116,9 @@ public class SchemaInitializer {
                 "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS copy_sides VARCHAR(20) DEFAULT 'BUY_ONLY'",
                 "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS allow_short_selling BOOLEAN NOT NULL DEFAULT FALSE",
                 "ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS copy_paused BOOLEAN NOT NULL DEFAULT FALSE",
-                "ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS paused_until TIMESTAMPTZ"
+                "ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS paused_until TIMESTAMPTZ",
+                // IP slot for Groww per-user IP routing (0 = primary IP, 1+ = proxy slots)
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS ip_slot INTEGER NOT NULL DEFAULT 0"
             };
 
             for (String sql : statements) {

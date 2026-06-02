@@ -46,6 +46,9 @@ public class BrokerAccount {
     @Column("linked_at")
     private Instant linkedAt;
 
+    @Column("ip_slot")
+    private int ipSlot;
+
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
     public UUID getUserId() { return userId; }
@@ -70,4 +73,6 @@ public class BrokerAccount {
     public void setSessionExpires(Instant sessionExpires) { this.sessionExpires = sessionExpires; }
     public Instant getLinkedAt() { return linkedAt; }
     public void setLinkedAt(Instant linkedAt) { this.linkedAt = linkedAt; }
+    public int getIpSlot() { return ipSlot; }
+    public void setIpSlot(int ipSlot) { this.ipSlot = ipSlot; }
 }

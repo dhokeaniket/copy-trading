@@ -13,6 +13,7 @@ import com.copytrading.broker.dhan.DhanApiClient;
 import com.copytrading.broker.dto.BrokerAccountDto;
 import com.copytrading.broker.fyers.FyersApiClient;
 import com.copytrading.broker.groww.GrowwApiClient;
+import com.copytrading.broker.groww.GrowwProxyRouter;
 import com.copytrading.broker.upstox.UpstoxApiClient;
 import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import com.copytrading.logs.CopyLog;
@@ -70,6 +71,7 @@ public class CopyEngineService {
     private final TradeUpdatesHub hub;
     private final SymbolMapper symbolMapper;
     private final GrowwApiClient growwClient;
+    private final GrowwProxyRouter growwProxyRouter;
     private final ZerodhaApiClient zerodhaClient;
     private final FyersApiClient fyersClient;
     private final UpstoxApiClient upstoxClient;
@@ -96,6 +98,7 @@ public class CopyEngineService {
                              TradeUpdatesHub hub,
                              SymbolMapper symbolMapper,
                              GrowwApiClient growwClient,
+                             GrowwProxyRouter growwProxyRouter,
                              ZerodhaApiClient zerodhaClient,
                              FyersApiClient fyersClient,
                              UpstoxApiClient upstoxClient,
@@ -121,6 +124,7 @@ public class CopyEngineService {
         this.hub = hub;
         this.symbolMapper = symbolMapper;
         this.growwClient = growwClient;
+        this.growwProxyRouter = growwProxyRouter;
         this.zerodhaClient = zerodhaClient;
         this.fyersClient = fyersClient;
         this.upstoxClient = upstoxClient;
@@ -488,9 +492,10 @@ public class CopyEngineService {
                 b.put("order_type", BrokerFieldTranslator.orderType(oType, "GROWW"));
                 b.put("transaction_type", BrokerFieldTranslator.transactionType(side, "GROWW"));
                 b.put("order_reference_id", "COPY-" + System.currentTimeMillis());
-                log.info("GROWW_ORDER_REQ masterSymbol={} childSymbol={} qty={} segment={} masterBroker={}",
-                        symbol, sym, qty, isFnO ? "FNO" : "CASH", masterBrokerId);
-                return growwClient.placeOrder(token, b);
+                log.info("GROWW_ORDER_REQ masterSymbol={} childSymbol={} qty={} segment={} masterBroker={} ipSlot={}",
+                        symbol, sym, qty, isFnO ? "FNO" : "CASH", masterBrokerId, account.getIpSlot());
+                reactor.netty.http.client.HttpClient proxyClient = growwProxyRouter.getProxiedClient(account.getIpSlot());
+                return growwClient.placeOrder(token, b, proxyClient);
             }
             case "ZERODHA": {
                 // POST /orders/regular — form-urlencoded, token api_key:access_token
