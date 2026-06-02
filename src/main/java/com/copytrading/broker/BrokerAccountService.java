@@ -1550,7 +1550,12 @@ public class BrokerAccountService {
         config.put("loginOptionsUrl", "/api/v1/brokers/accounts/" + a.getId() + "/login-options");
         if ("GROWW".equals(a.getBrokerId())) {
             config.put("hasStoredApiKey", a.getApiKey() != null && !a.getApiKey().isBlank());
-            config.put("recommendedLoginMethod", "apiKeyWithTotp");
+            // If user has an API key stored, recommend TOTP login; otherwise recommend access token
+            if (a.getApiKey() != null && !a.getApiKey().isBlank()) {
+                config.put("recommendedLoginMethod", "apiKeyWithTotp");
+            } else {
+                config.put("recommendedLoginMethod", "accessToken");
+            }
         }
         List<String> methods = extractLoginOptionMethods(config.get("loginOptions"));
         config.put("loginOptionMethods", methods);
