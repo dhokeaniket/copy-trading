@@ -367,11 +367,13 @@ public class MasterService {
     }
 
     private Mono<Map<String, Object>> buildFollowerRow(Subscription s) {
-        return users.findById(s.getChildId()).flatMap(u -> {
+        return users.findById(s.getChildId())
+                .defaultIfEmpty(new com.copytrading.auth.UserAccount()) // fallback if user not found
+                .flatMap(u -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("childId", s.getChildId().toString());
-            m.put("name", u.getName());
-            m.put("email", u.getEmail());
+            m.put("name", u.getName() != null ? u.getName() : "Unknown");
+            m.put("email", u.getEmail() != null ? u.getEmail() : "");
             m.put("scalingFactor", s.getScalingFactor());
             m.put("multiplier", s.getScalingFactor());
             m.put("copyingStatus", s.getCopyingStatus());
@@ -806,16 +808,44 @@ public class MasterService {
         });
     }
 
-    // 4.7 Trade history (copy_logs — trade_logs is legacy and often empty)
+    // 4.7 Trade history (copy_logs + trades table for comprehensive history)
     public Mono<Map<String, Object>> getTradeHistory(UUID masterId) {
-        return getCopyLogs(masterId).map(m -> {
+        return Mono.zip(
+                getCopyLogs(masterId),
+                tradeRepository.findByUserIdOrderByPlacedAtDesc(masterId).collectList()
+        ).map(t -> {
+            Map<String, Object> copyLogResult = t.getT1();
+            List<com.copytrading.trade.Trade> masterTrades = t.getT2();
+            Object logs = copyLogResult.get("logs");
+            // Build master's own trade list
+            List<Map<String, Object>> tradesList = masterTrades.stream().map(tr -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", tr.getId());
+                m.put("symbol", tr.getInstrument());
+                m.put("side", tr.getTransactionType());
+                m.put("tradeType", tr.getTransactionType());
+                m.put("qty", tr.getQuantity());
+                m.put("price", tr.getPrice());
+                m.put("orderType", tr.getOrderType());
+                m.put("product", tr.getProduct());
+                m.put("status", tr.getStatus());
+                m.put("brokerOrderId", tr.getBrokerOrderId());
+                m.put("exchange", tr.getExchange());
+                m.put("segment", tr.getSegment());
+                m.put("placedAt", tr.getPlacedAt() != null ? tr.getPlacedAt().toString() : null);
+                m.put("executedAt", tr.getExecutedAt() != null ? tr.getExecutedAt().toString() : null);
+                m.put("replicationsTriggered", tr.getReplicationsTriggered());
+                return m;
+            }).toList();
             Map<String, Object> r = new LinkedHashMap<>();
-            Object logs = m.get("logs");
             r.put("logs", logs);
-            r.put("trades", logs);
+            r.put("trades", tradesList.isEmpty() ? logs : tradesList);
             r.put("tradeLogs", logs);
+            r.put("copyLogs", logs);
             r.put("data", logs);
-            r.put("total", m.getOrDefault("total", logs instanceof List<?> l ? l.size() : 0));
+            r.put("masterTrades", tradesList);
+            r.put("total", copyLogResult.getOrDefault("total", logs instanceof List<?> l ? l.size() : 0));
+            r.put("totalMasterTrades", tradesList.size());
             return r;
         });
     }
@@ -823,9 +853,16 @@ public class MasterService {
     /** Square off a position on the master's active broker account. */
     public Mono<Map<String, Object>> squareOffPosition(UUID masterId, Map<String, Object> body) {
         return activeAccountRepo.findById(masterId)
-                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "No active master broker account. Set active account first.")))
-                .flatMap(aa -> brokerService.closePosition(aa.getBrokerAccountId(), masterId, body));
+                .flatMap(aa -> brokerService.closePosition(aa.getBrokerAccountId(), masterId, body))
+                .switchIfEmpty(Mono.defer(() ->
+                    // Fallback: try the first active broker account if no active account is set
+                    brokerRepo.findByUserId(masterId)
+                            .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                            .next()
+                            .flatMap(a -> brokerService.closePosition(a.getId(), masterId, body))
+                            .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                    "No active master broker account. Set active account first.")))
+                ));
     }
 
     // 4.8 Master dashboard (aggregated view + enriched followers)

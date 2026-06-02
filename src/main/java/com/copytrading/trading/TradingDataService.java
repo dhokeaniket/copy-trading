@@ -91,7 +91,9 @@ public class TradingDataService {
         var logsFlux = master ? copyLogs.findByMasterId(userId) : copyLogs.findByChildId(userId);
         return logsFlux.collectList().map(logs -> {
             List<Map<String, Object>> items = logs.stream()
-                    .filter(l -> isOptionSymbol(l.getSymbol()))
+                    .filter(l -> isOptionSymbol(l.getSymbol())
+                            || "SKIPPED".equals(l.getChildStatus())
+                            || "FAILED".equals(l.getChildStatus()))
                     .sorted(Comparator.comparing(CopyLog::getCreatedAt,
                             Comparator.nullsLast(Comparator.reverseOrder())))
                     .map(this::toOptionStatusRow)

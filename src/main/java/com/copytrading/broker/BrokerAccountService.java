@@ -176,10 +176,30 @@ public class BrokerAccountService {
         });
     }
 
-    // 3.3 List user's accounts
+    // 3.3 List user's accounts (enriched with live margin/pnl/positions)
     public Mono<Map<String, Object>> listAccounts(UUID userId) {
         return repo.findByUserId(userId)
-                .map(BrokerAccountDto::from)
+                .flatMap(a -> {
+                    BrokerAccountDto dto = BrokerAccountDto.from(a);
+                    if (!a.isSessionActive() || a.getAccessToken() == null) {
+                        return Mono.just(dto);
+                    }
+                    // Enrich with live margin data
+                    return getMargin(a.getId(), userId)
+                            .map(margin -> {
+                                double avail = toDouble(margin.get("availableMargin"));
+                                double used = toDouble(margin.get("usedMargin"));
+                                double total = toDouble(margin.get("totalFunds"));
+                                dto.setMargin(avail);
+                                dto.setAvailableMargin(avail);
+                                dto.setUsedMargin(used);
+                                dto.setTotalFunds(total > 0 ? total : avail + used);
+                                dto.setPnl(toDouble(margin.get("totalPnl")));
+                                return dto;
+                            })
+                            .onErrorReturn(dto)
+                            .defaultIfEmpty(dto);
+                }, 2)
                 .collectList()
                 .map(list -> Map.<String, Object>of("accounts", list));
     }
@@ -1578,12 +1598,24 @@ public class BrokerAccountService {
         config.put("loginOptionsUrl", "/api/v1/brokers/accounts/" + a.getId() + "/login-options");
         if ("GROWW".equals(a.getBrokerId())) {
             config.put("hasStoredApiKey", a.getApiKey() != null && !a.getApiKey().isBlank());
+            // Always show both login methods for Groww reconnect
+            config.put("availableLoginMethods", List.of("accessToken", "apiKeyWithTotp"));
             // If user has an API key stored, recommend TOTP login; otherwise recommend access token
             if (a.getApiKey() != null && !a.getApiKey().isBlank()) {
                 config.put("recommendedLoginMethod", "apiKeyWithTotp");
             } else {
                 config.put("recommendedLoginMethod", "accessToken");
             }
+            // Ensure loginOptions always includes BOTH methods regardless of stored credentials
+            config.put("loginOptions", List.of(
+                    loginOption("accessToken",
+                            "Paste access token from Groww settings (no API key needed)",
+                            List.of("accessToken"),
+                            "PUT /api/v1/brokers/accounts/" + a.getId() + "/token"),
+                    loginOption("apiKeyWithTotp",
+                            "API key + TOTP code from authenticator app",
+                            List.of("apiKey", "totpCode"),
+                            "POST /api/v1/brokers/accounts/" + a.getId() + "/login { totpCode }")));
         }
         List<String> methods = extractLoginOptionMethods(config.get("loginOptions"));
         config.put("loginOptionMethods", methods);

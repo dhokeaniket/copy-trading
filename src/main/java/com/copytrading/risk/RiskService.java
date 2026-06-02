@@ -5,6 +5,7 @@ import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.trade.TradeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -26,13 +27,15 @@ public class RiskService {
     private final CopyLogRepository copyLogs;
     private final TradeRepository trades;
     private final BrokerAccountService brokerService;
+    private final DatabaseClient db;
 
     public RiskService(RiskRuleRepository riskRepo, CopyLogRepository copyLogs, TradeRepository trades,
-                       BrokerAccountService brokerService) {
+                       BrokerAccountService brokerService, DatabaseClient db) {
         this.riskRepo = riskRepo;
         this.copyLogs = copyLogs;
         this.trades = trades;
         this.brokerService = brokerService;
+        this.db = db;
     }
 
     public Mono<String> checkRiskLimits(UUID childId) {
@@ -217,40 +220,33 @@ public class RiskService {
     }
 
     public Mono<Map<String, Object>> pauseCopy(UUID childId, String reason, Instant pauseUntil) {
-        return riskRepo.findByUserId(childId)
-                .switchIfEmpty(Mono.defer(() -> {
-                    RiskRule r = defaultRules(childId);
-                    return riskRepo.save(r);
-                }))
-                .flatMap(rule -> {
-                    rule.setCopyPaused(true);
-                    rule.setPausedUntil(pauseUntil);
-                    rule.setUpdatedAt(Instant.now());
-                    return riskRepo.save(rule);
-                })
-                .map(rule -> Map.of(
+        String sql = pauseUntil != null
+                ? "INSERT INTO risk_rules (user_id, max_trades_per_day, max_open_positions, max_capital_exposure, " +
+                  "margin_check_enabled, copy_paused, paused_until, updated_at) " +
+                  "VALUES (:uid, 50, 20, 80, true, true, :until, now()) " +
+                  "ON CONFLICT (user_id) DO UPDATE SET copy_paused = true, paused_until = :until, updated_at = now()"
+                : "INSERT INTO risk_rules (user_id, max_trades_per_day, max_open_positions, max_capital_exposure, " +
+                  "margin_check_enabled, copy_paused, paused_until, updated_at) " +
+                  "VALUES (:uid, 50, 20, 80, true, true, NULL, now()) " +
+                  "ON CONFLICT (user_id) DO UPDATE SET copy_paused = true, paused_until = NULL, updated_at = now()";
+        var spec = db.sql(sql).bind("uid", childId);
+        if (pauseUntil != null) {
+            spec = spec.bind("until", pauseUntil);
+        }
+        return spec.then()
+                .thenReturn(Map.<String, Object>of(
                         "paused", true,
                         "pausedAt", Instant.now().toString(),
-                        "pausedUntil", pauseUntil != null ? pauseUntil.toString() : null,
+                        "pausedUntil", pauseUntil != null ? pauseUntil.toString() : "",
                         "reason", reason != null ? reason : "Manual pause"
                 ));
     }
 
     public Mono<Map<String, Object>> resumeCopy(UUID childId) {
-        return riskRepo.findByUserId(childId)
-                .flatMap(rule -> {
-                    rule.setCopyPaused(false);
-                    rule.setPausedUntil(null);
-                    rule.setUpdatedAt(Instant.now());
-                    return riskRepo.save(rule);
-                })
-                .map(rule -> {
-                    Map<String, Object> r = new java.util.LinkedHashMap<>();
-                    r.put("paused", false);
-                    r.put("message", "Copy trading resumed");
-                    return r;
-                })
-                .defaultIfEmpty(Map.of("paused", false, "message", "No risk rules found"));
+        return db.sql("UPDATE risk_rules SET copy_paused = false, paused_until = NULL, updated_at = now() WHERE user_id = :uid")
+                .bind("uid", childId)
+                .then()
+                .thenReturn(Map.<String, Object>of("paused", false, "message", "Copy trading resumed"));
     }
 
     public Mono<RiskRule> getRiskRules(UUID userId) {
@@ -260,25 +256,18 @@ public class RiskService {
 
     public Mono<RiskRule> saveRiskRules(UUID userId, int maxTradesPerDay, int maxOpenPositions,
                                          double maxCapitalExposure, boolean marginCheckEnabled) {
-        return riskRepo.findByUserId(userId)
-                .flatMap(existing -> {
-                    existing.setMaxTradesPerDay(maxTradesPerDay);
-                    existing.setMaxOpenPositions(maxOpenPositions);
-                    existing.setMaxCapitalExposure(maxCapitalExposure);
-                    existing.setMarginCheckEnabled(marginCheckEnabled);
-                    existing.setUpdatedAt(Instant.now());
-                    return riskRepo.save(existing);
-                })
-                .switchIfEmpty(Mono.defer(() -> {
-                    RiskRule r = new RiskRule();
-                    r.setUserId(userId);
-                    r.setMaxTradesPerDay(maxTradesPerDay);
-                    r.setMaxOpenPositions(maxOpenPositions);
-                    r.setMaxCapitalExposure(maxCapitalExposure);
-                    r.setMarginCheckEnabled(marginCheckEnabled);
-                    r.setUpdatedAt(Instant.now());
-                    return riskRepo.save(r);
-                }));
+        return db.sql("INSERT INTO risk_rules (user_id, max_trades_per_day, max_open_positions, max_capital_exposure, margin_check_enabled, updated_at) " +
+                       "VALUES (:uid, :maxTrades, :maxPos, :maxExp, :marginCheck, now()) " +
+                       "ON CONFLICT (user_id) DO UPDATE SET max_trades_per_day = :maxTrades, max_open_positions = :maxPos, " +
+                       "max_capital_exposure = :maxExp, margin_check_enabled = :marginCheck, updated_at = now()")
+                .bind("uid", userId)
+                .bind("maxTrades", maxTradesPerDay)
+                .bind("maxPos", maxOpenPositions)
+                .bind("maxExp", maxCapitalExposure)
+                .bind("marginCheck", marginCheckEnabled)
+                .then()
+                .then(riskRepo.findByUserId(userId))
+                .switchIfEmpty(Mono.just(defaultRules(userId)));
     }
 
     private RiskRule defaultRules(UUID userId) {

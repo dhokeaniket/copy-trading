@@ -274,11 +274,39 @@ public class InstrumentCache {
             if (key != null) return key;
             key = upstoxFno.get(upper + " [1]");
             if (key != null) return key;
+            // Try alternate day-padding: "02 JUN" <-> "2 JUN" (Upstox may store either format)
+            key = tryAlternateDayPadding(upper);
+            if (key != null) return key;
             // Already a valid instrument_key (NSE_FO|numeric)
             if (symbol.contains("|") && symbol.matches("(?i).+\\|\\d+$")) return symbol;
             return null;
         }
         return upstoxEq.get(upper);
+    }
+
+    /** Try alternate day-padding in spaced Upstox F&O symbols (e.g., "02 JUN" vs "2 JUN"). */
+    private String tryAlternateDayPadding(String upper) {
+        // Pattern: "NIFTY 24850 CE 02 JUN 25" — day is token after CE/PE/FUT
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("^(.+\\s(?:CE|PE|FUT))\\s(\\d{1,2})\\s([A-Z]{3})\\s(\\d{2})(.*)$")
+                .matcher(upper);
+        if (m.matches()) {
+            String prefix = m.group(1);
+            String day = m.group(2);
+            String month = m.group(3);
+            String year = m.group(4);
+            String suffix = m.group(5);
+            // Try the opposite padding
+            String altDay = day.length() == 1 ? "0" + day : day.replaceFirst("^0", "");
+            if (!altDay.equals(day)) {
+                String alt = prefix + " " + altDay + " " + month + " " + year + suffix;
+                String key = upstoxFno.get(alt);
+                if (key != null) return key;
+                key = upstoxFno.get(alt.replace(" ", ""));
+                if (key != null) return key;
+            }
+        }
+        return null;
     }
 
     /** Angel One: get numeric symboltoken */

@@ -57,9 +57,12 @@ public class ChildService {
                         subs.findByMasterIdAndChildId(m.getId(), childId)
                                 .map(Optional::of)
                                 .defaultIfEmpty(Optional.empty()),
-                        copyLogs.findByMasterId(m.getId()).collectList(),
+                        copyLogs.findByMasterId(m.getId()).collectList()
+                                .onErrorReturn(List.of()),
                         subs.findByMasterIdAndCopyingStatus(m.getId(), "ACTIVE").count()
-                ).map(t -> buildMasterDiscoveryCard(m, t.getT1(), t.getT2(), t.getT3())))
+                                .onErrorReturn(0L)
+                ).map(t -> buildMasterDiscoveryCard(m, t.getT1(), t.getT2(), t.getT3()))
+                .onErrorResume(e -> Mono.empty()))
                 .collectList()
                 .map(list -> Map.<String, Object>of("masters", list));
     }
