@@ -117,13 +117,17 @@ public class EngineHistoryService {
                                     ? l.getChildPlacedAt().toString() : l.getCreatedAt());
                             t.put("totalChildLatencyMs", l.getLatencyMs());
                             t.put("status", l.getChildStatus());
+                            t.put("childStatus", l.getChildStatus());
                             t.put("skipReason", l.getSkipReason());
                             t.put("errorMessage", l.getErrorMessage());
-                            t.put("failureReason", l.getErrorMessage());
+                            t.put("failureReason", l.getErrorMessage() != null ? l.getErrorMessage()
+                                    : (l.getSkipReason() != null ? l.getSkipReason() : null));
                             t.put("masterStatus", l.getMasterStatus());
                             t.put("qty", l.getQty());
+                            t.put("childQty", l.getChildQty());
                             t.put("masterQty", l.getQty());
                             t.put("orderId", l.getMasterTradeId());
+                            t.put("childBrokerOrderId", l.getChildBrokerOrderId());
                             return t;
                         }))
                 .collectList()

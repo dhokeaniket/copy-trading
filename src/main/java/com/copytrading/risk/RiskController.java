@@ -28,9 +28,18 @@ public class RiskController {
                     m.put("maxOpenPositions", r.getMaxOpenPositions());
                     m.put("maxCapitalExposure", r.getMaxCapitalExposure());
                     m.put("marginCheckEnabled", r.isMarginCheckEnabled());
+                    m.put("copyPaused", r.isCopyPaused());
+                    m.put("pausedUntil", r.getPausedUntil() != null ? r.getPausedUntil().toString() : null);
                     m.put("updatedAt", r.getUpdatedAt() != null ? r.getUpdatedAt().toString() : null);
                     return m;
                 });
+    }
+
+    private static boolean parseBoolean(Object val, boolean defaultVal) {
+        if (val == null) return defaultVal;
+        if (val instanceof Boolean b) return b;
+        if (val instanceof Number n) return n.intValue() != 0;
+        return Boolean.parseBoolean(String.valueOf(val));
     }
 
     @PutMapping("/rules")
@@ -39,7 +48,7 @@ public class RiskController {
         int maxTrades = body.containsKey("maxTradesPerDay") ? ((Number) body.get("maxTradesPerDay")).intValue() : 50;
         int maxPositions = body.containsKey("maxOpenPositions") ? ((Number) body.get("maxOpenPositions")).intValue() : 20;
         double maxExposure = body.containsKey("maxCapitalExposure") ? ((Number) body.get("maxCapitalExposure")).doubleValue() : 80;
-        boolean marginCheck = body.containsKey("marginCheckEnabled") ? (Boolean) body.get("marginCheckEnabled") : true;
+        boolean marginCheck = parseBoolean(body.get("marginCheckEnabled"), true);
 
         return riskService.saveRiskRules(UUID.fromString(userId), maxTrades, maxPositions, maxExposure, marginCheck)
                 .map(r -> {

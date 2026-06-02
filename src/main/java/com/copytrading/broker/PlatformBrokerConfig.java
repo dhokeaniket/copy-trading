@@ -14,6 +14,8 @@ public class PlatformBrokerConfig {
     private BrokerCreds dhan = new BrokerCreds();
     private BrokerCreds angelone = new BrokerCreds();
     private String callbackUrl;
+    /** Outbound IP to whitelist in Groww (and similar) broker dashboards. */
+    private String serverEgressIp;
 
     public BrokerCreds getGroww() { return groww; }
     public void setGroww(BrokerCreds groww) { this.groww = groww; }
@@ -29,6 +31,8 @@ public class PlatformBrokerConfig {
     public void setAngelone(BrokerCreds angelone) { this.angelone = angelone; }
     public String getCallbackUrl() { return callbackUrl; }
     public void setCallbackUrl(String callbackUrl) { this.callbackUrl = callbackUrl; }
+    public String getServerEgressIp() { return serverEgressIp; }
+    public void setServerEgressIp(String serverEgressIp) { this.serverEgressIp = serverEgressIp; }
 
     public BrokerCreds getFor(String brokerId) {
         return switch (brokerId) {

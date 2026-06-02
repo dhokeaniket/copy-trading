@@ -73,6 +73,10 @@ public class BrokerProfileService {
         p.put("marginAvailable", available);
         p.put("marginUsed", used);
         p.put("totalMargin", total);
+        p.put("margin", available);
+        p.put("availableMargin", available);
+        p.put("usedMargin", used);
+        p.put("totalFunds", total);
         p.put("marginUsedPercent", total > 0 ? round1(used / total * 100) : 0);
         p.put("marginAvailablePercent", total > 0 ? round1(available / total * 100) : 0);
         p.put("fundsUtilizationStatus", utilizationStatus(used, total));

@@ -176,14 +176,22 @@ public class MasterService {
                             m.put("childName", childNames.getOrDefault(l.getChildId(), "Unknown"));
                             m.put("symbol", l.getSymbol());
                             m.put("qty", l.getQty());
+                            m.put("childQty", l.getChildQty());
                             m.put("tradeType", l.getTradeType());
+                            m.put("side", l.getTradeType());
                             m.put("masterStatus", l.getMasterStatus());
                             m.put("childStatus", l.getChildStatus());
+                            m.put("status", l.getChildStatus());
                             m.put("errorMessage", l.getErrorMessage());
                             m.put("skipReason", l.getSkipReason());
+                            m.put("failureReason", l.getErrorMessage() != null ? l.getErrorMessage() : l.getSkipReason());
                             m.put("latencyMs", l.getLatencyMs());
                             m.put("copyGroupId", l.getCopyGroupId());
+                            m.put("orderId", l.getMasterTradeId());
+                            m.put("masterTradeId", l.getMasterTradeId());
+                            m.put("childBrokerOrderId", l.getChildBrokerOrderId());
                             m.put("engineReceivedAt", l.getEngineReceivedAt() != null ? l.getEngineReceivedAt().toString() : null);
+                            m.put("masterPlacedAt", l.getMasterPlacedAt() != null ? l.getMasterPlacedAt().toString() : null);
                             m.put("childPlacedAt", l.getChildPlacedAt() != null ? l.getChildPlacedAt().toString() : null);
                             m.put("createdAt", l.getCreatedAt() != null ? l.getCreatedAt().toString() : null);
                             return m;
@@ -679,7 +687,10 @@ public class MasterService {
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Link not found")))
                 .flatMap(s -> {
                     s.setCopyingStatus("INACTIVE");
-                    return subs.save(s).thenReturn(Map.of("message", "Child unlinked"));
+                    return subs.save(s).thenReturn(Map.of(
+                            "message", "Child removed",
+                            "childId", childId.toString(),
+                            "status", "INACTIVE"));
                 });
     }
 
@@ -802,6 +813,9 @@ public class MasterService {
             Object logs = m.get("logs");
             r.put("logs", logs);
             r.put("trades", logs);
+            r.put("tradeLogs", logs);
+            r.put("data", logs);
+            r.put("total", m.getOrDefault("total", logs instanceof List<?> l ? l.size() : 0));
             return r;
         });
     }
@@ -864,6 +878,13 @@ public class MasterService {
                 return p;
             }).toList());
             r.put("children", enrichedChildren);
+            r.put("summary", Map.of(
+                    "totalRealisedPnl", MasterChildMetricsHelper.round2(snap.totalRealised()),
+                    "totalUnrealisedPnl", MasterChildMetricsHelper.round2(snap.totalUnrealised()),
+                    "combinedPnl", MasterChildMetricsHelper.round2(totalPnl),
+                    "todayTradesCopied", todayTrades,
+                    "successRate", winRate
+            ));
             return r;
         });
     }

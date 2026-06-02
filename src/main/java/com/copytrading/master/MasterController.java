@@ -77,6 +77,11 @@ public class MasterController {
         return service.unlinkChild(UUID.fromString(userId), childId);
     }
 
+    @PostMapping("/children/{childId}/remove")
+    public Mono<Map<String, String>> removeChildPost(@AuthenticationPrincipal String userId, @PathVariable UUID childId) {
+        return service.unlinkChild(UUID.fromString(userId), childId);
+    }
+
     @PostMapping(value = "/children/bulk-unlink", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> bulkUnlinkChildren(@AuthenticationPrincipal String userId,
                                                          @RequestBody com.copytrading.master.dto.BulkUnlinkRequest req) {

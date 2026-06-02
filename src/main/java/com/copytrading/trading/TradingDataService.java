@@ -116,8 +116,10 @@ public class TradingDataService {
         m.put("symbol", l.getSymbol());
         m.put("side", l.getTradeType());
         m.put("qty", l.getQty());
+        m.put("childQty", l.getChildQty());
         m.put("masterQty", l.getQty());
         m.put("status", l.getChildStatus());
+        m.put("childStatus", l.getChildStatus());
         m.put("masterStatus", l.getMasterStatus());
         m.put("errorMessage", l.getErrorMessage());
         m.put("skipReason", l.getSkipReason());
@@ -126,9 +128,30 @@ public class TradingDataService {
         m.put("masterId", l.getMasterId() != null ? l.getMasterId().toString() : null);
         m.put("childId", l.getChildId() != null ? l.getChildId().toString() : null);
         m.put("orderId", l.getMasterTradeId());
+        m.put("childBrokerOrderId", l.getChildBrokerOrderId());
         m.put("createdAt", l.getCreatedAt() != null ? l.getCreatedAt().toString() : null);
         m.put("childPlacedAt", l.getChildPlacedAt() != null ? l.getChildPlacedAt().toString() : null);
+        m.put("masterPlacedAt", l.getMasterPlacedAt() != null ? l.getMasterPlacedAt().toString() : null);
+        applyOptionDetails(m, l.getSymbol());
         return m;
+    }
+
+    private static void applyOptionDetails(Map<String, Object> m, String symbol) {
+        if (symbol == null || symbol.isBlank()) return;
+        String u = symbol.toUpperCase();
+        m.put("instrumentType", u.contains("FUT") ? "FUT" : (u.endsWith("CE") || u.contains("CE") ? "CE" : (u.endsWith("PE") || u.contains("PE") ? "PE" : "OPT")));
+        m.put("isOption", u.contains("CE") || u.contains("PE") || u.contains("OPT"));
+        m.put("isFuture", u.contains("FUT"));
+        // NIFTY25JUN25000CE style
+        java.util.regex.Matcher opt = java.util.regex.Pattern
+                .compile("([A-Z]+)(\\d{2}[A-Z]{3})(\\d+)(CE|PE)", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(u.replace(" ", ""));
+        if (opt.find()) {
+            m.put("underlying", opt.group(1));
+            m.put("expiry", opt.group(2));
+            m.put("strike", opt.group(3));
+            m.put("optionType", opt.group(4));
+        }
     }
 
     private Mono<BrokerAccount> resolveAccount(UUID userId, boolean master) {

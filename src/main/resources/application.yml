@@ -117,8 +117,10 @@ brokers:
     apiKey: ${ZERODHA_API_KEY:xdsce47bimlz9ndk}
     apiSecret: ${ZERODHA_API_SECRET:df9ebtu5urrpuobhgg3lv430147d16yl}
   fyers:
-    apiKey: ${FYERS_API_KEY:X3OX66WB1J-100}
-    apiSecret: ${FYERS_API_SECRET:SQNAPQKU7M}
+    apiKey: ${FYERS_API_KEY:LACBO51M56-100}
+    apiSecret: ${FYERS_API_SECRET:9SM7H6AELS}
+  # Groww requires whitelisting this IP in each user's Groww API dashboard
+  serverEgressIp: ${SERVER_EGRESS_IP:13.53.246.13}
   upstox:
     apiKey: ${UPSTOX_API_KEY:63d0dbd0-1e58-42d3-9557-3292f4e41780}
     apiSecret: ${UPSTOX_API_SECRET:9gq7cl1wmn}

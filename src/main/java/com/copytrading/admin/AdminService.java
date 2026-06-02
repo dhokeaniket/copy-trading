@@ -93,6 +93,18 @@ public class AdminService {
                 });
     }
 
+    // 2.3b Create Admin
+    public Mono<Map<String, Object>> createAdmin(CreateAdminRequest req) {
+        return authService.createUser(req.getName(), req.getEmail(), req.getPassword(), "ADMIN", req.getPhone())
+                .map(u -> {
+                    log.info("ADMIN_CREATE_ADMIN id={} email={}", u.getId(), u.getEmail());
+                    Map<String, Object> resp = new LinkedHashMap<>();
+                    resp.put("userId", u.getId());
+                    resp.put("message", "Admin account created");
+                    return resp;
+                });
+    }
+
     // 2.4 Get user by ID
     public Mono<UserDto> getUserById(UUID userId) {
         return users.findById(userId)

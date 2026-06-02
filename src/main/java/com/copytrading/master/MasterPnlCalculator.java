@@ -12,13 +12,13 @@ import java.util.*;
 /**
  * Realised P&L from executed master trades (FIFO per instrument) and monthly breakdown for dashboard.
  */
-final class MasterPnlCalculator {
+public final class MasterPnlCalculator {
 
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
     private MasterPnlCalculator() {}
 
-    record PnlSnapshot(
+    public record PnlSnapshot(
             double totalRealised,
             double totalUnrealised,
             double todayRealised,
@@ -28,7 +28,7 @@ final class MasterPnlCalculator {
             List<Map<String, Object>> dailyPnl
     ) {}
 
-    static PnlSnapshot build(List<Trade> trades, List<CopyLog> copyLogs,
+    public static PnlSnapshot build(List<Trade> trades, List<CopyLog> copyLogs,
                                double unrealizedFromPositions, Map<String, Object> margin) {
         List<Trade> executed = filterExecuted(trades);
         RealisedBreakdown realised = computeRealised(executed);
@@ -206,7 +206,7 @@ final class MasterPnlCalculator {
         return ts != null && !ts.isBefore(start) && ts.isBefore(endExclusive);
     }
 
-    static void applySummaryAliases(Map<String, Object> summary, PnlSnapshot snap) {
+    public static void applySummaryAliases(Map<String, Object> summary, PnlSnapshot snap) {
         double combined = snap.totalRealised() + snap.totalUnrealised();
         summary.put("totalRealisedPnl", MasterChildMetricsHelper.round2(snap.totalRealised()));
         summary.put("totalRealizedPnl", MasterChildMetricsHelper.round2(snap.totalRealised()));

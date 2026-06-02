@@ -76,7 +76,9 @@ public class ChildService {
 
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("masterId", m.getId());
+        r.put("id", m.getId());
         r.put("name", m.getName());
+        r.put("masterName", m.getName());
         r.put("email", m.getEmail());
         r.put("winRate", winRate);
         r.put("totalTrades", success);
@@ -498,10 +500,13 @@ public class ChildService {
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("totalPnl", unrealized);
             r.put("totalPnL", unrealized);
-            r.put("personalPnL", 0);
+            r.put("personalPnL", unrealized);
             r.put("copiedPnL", unrealized);
             r.put("masterPnL", 0);
             r.put("unrealizedPnl", unrealized);
+            r.put("totalUnrealizedPnl", unrealized);
+            r.put("realizedPnl", 0);
+            r.put("combinedPnl", unrealized);
             r.put("personalTrades", 0);
             r.put("copiedTrades", copied);
             r.put("skippedCopies", skipped);

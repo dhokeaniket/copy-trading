@@ -7,6 +7,9 @@ import com.copytrading.broker.groww.GrowwApiClient;
 import com.copytrading.broker.upstox.UpstoxApiClient;
 import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import com.copytrading.broker.angelone.AngelOneApiClient;
+import com.copytrading.engine.BrokerFieldTranslator;
+import com.copytrading.engine.InstrumentCache;
+import com.copytrading.engine.SymbolMapper;
 import com.copytrading.notification.NotificationService;
 import com.copytrading.security.BrokerCredentials;
 import org.slf4j.Logger;
@@ -35,6 +38,8 @@ public class BrokerAccountService {
     private final PlatformBrokerConfig platformConfig;
     private final BrokerCredentials credentials;
     private final NotificationService notifications;
+    private final SymbolMapper symbolMapper;
+    private final InstrumentCache instruments;
 
     public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
                                 ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
@@ -42,7 +47,9 @@ public class BrokerAccountService {
                                 AngelOneApiClient angelOneClient,
                                 PlatformBrokerConfig platformConfig,
                                 BrokerCredentials credentials,
-                                NotificationService notifications) {
+                                NotificationService notifications,
+                                SymbolMapper symbolMapper,
+                                InstrumentCache instruments) {
         this.repo = repo;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
@@ -53,6 +60,8 @@ public class BrokerAccountService {
         this.platformConfig = platformConfig;
         this.credentials = credentials;
         this.notifications = notifications;
+        this.symbolMapper = symbolMapper;
+        this.instruments = instruments;
     }
 
     private String sessionToken(BrokerAccount a) {
@@ -69,7 +78,13 @@ public class BrokerAccountService {
             brokerInfo("ANGELONE", "Angel One", true, List.of(), "totp", "totpCode"),
             dhanBrokerInfo()
         );
-        return Mono.just(Map.of("brokers", brokers));
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("brokers", brokers);
+        if (platformConfig.getServerEgressIp() != null) {
+            resp.put("platformServerIp", platformConfig.getServerEgressIp());
+            resp.put("ipWhitelistNote", "Whitelist platformServerIp in Groww API dashboard (required for API access)");
+        }
+        return Mono.just(resp);
     }
 
     private Map<String, Object> dhanBrokerInfo() {
@@ -267,13 +282,14 @@ public class BrokerAccountService {
 
     // --- GROWW LOGIN ---
     private Mono<Map<String, Object>> loginGroww(BrokerAccount a, BrokerLoginRequest req) {
-        // Resolve API key: prefer per-user key, fall back to platform-level key
         String apiKey = a.getApiKey();
-        String apiSecret = a.getApiSecret();
+        String apiSecret = credentials.apiSecret(a);
         var platformCreds = platformConfig.getGroww();
         if ((apiKey == null || apiKey.isBlank()) && platformCreds != null && platformCreds.getApiKey() != null && !platformCreds.getApiKey().isBlank()) {
             apiKey = platformCreds.getApiKey();
-            apiSecret = platformCreds.getApiSecret();
+            if (apiSecret == null || apiSecret.isBlank()) {
+                apiSecret = platformCreds.getApiSecret();
+            }
         }
         if (apiKey == null || apiKey.isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -283,8 +299,11 @@ public class BrokerAccountService {
         Mono<Map> tokenMono;
         if (req != null && req.getTotpCode() != null && !req.getTotpCode().isBlank()) {
             tokenMono = growwClient.generateToken(apiKey, req.getTotpCode());
-        } else {
+        } else if (apiSecret != null && !apiSecret.isBlank()) {
             tokenMono = growwClient.generateTokenWithSecret(apiKey, apiSecret);
+        } else {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "totpCode required for Groww login. After disconnect, use API key + TOTP: POST .../login { \"totpCode\": \"123456\" }"));
         }
         return tokenMono.flatMap(resp -> extractAndSaveSession(a, resp, "Groww",
                 r -> {
@@ -293,9 +312,17 @@ public class BrokerAccountService {
                 }))
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
-                    log.error("GROWW_LOGIN_FAILED error={}", e.getMessage(), e);
+                    String msg = e.getMessage() != null ? e.getMessage() : "unknown";
+                    log.error("GROWW_LOGIN_FAILED error={}", msg, e);
+                    if (msg.toLowerCase().contains("ip") || msg.toLowerCase().contains("whitelist")
+                            || msg.toLowerCase().contains("forbidden")) {
+                        String ip = platformConfig.getServerEgressIp();
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                                "Groww IP whitelist error. Add platform IP " + (ip != null ? ip : "(see GET /api/v1/brokers)")
+                                        + " in your Groww API dashboard, then retry with totpCode. Detail: " + msg));
+                    }
                     return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                            "Groww API error: " + e.getMessage()));
+                            "Groww API error: " + msg));
                 });
     }
 
@@ -852,51 +879,105 @@ public class BrokerAccountService {
     // --- Close Position (place market order to close) ---
     public Mono<Map<String, Object>> closePosition(UUID accountId, UUID userId, Map<String, Object> body) {
         return getActiveAccount(accountId, userId).flatMap(a -> {
-            String symbol = (String) body.get("symbol");
-            Object qtyObj = body.get("qty");
-            int qty = qtyObj instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(qtyObj));
-            String type = (String) body.getOrDefault("type", "SELL");
-            String product = (String) body.getOrDefault("product", "MIS");
+            String symbol = bodyField(body, "symbol");
+            if (symbol == null || symbol.isBlank()) {
+                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "symbol is required"));
+            }
+            int qty = bodyInt(body, "qty", "quantity");
+            if (qty <= 0) {
+                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "qty must be > 0"));
+            }
+            String type = bodyField(body, "type", "side", "transaction_type");
+            if (type == null || type.isBlank()) type = "SELL";
+            String product = bodyField(body, "product", "productType");
+            if (product == null || product.isBlank()) product = "MIS";
+            String exchange = bodyField(body, "exchange");
+            if (exchange == null || exchange.isBlank()) exchange = "NSE";
+            boolean isFnO = symbolMapper.isFnO(symbol)
+                    || Boolean.TRUE.equals(body.get("isFnO"))
+                    || "FNO".equalsIgnoreCase(String.valueOf(body.getOrDefault("segment", "")));
 
             switch (a.getBrokerId()) {
-                case "GROWW":
-                    return growwClient.placeOrder(sessionToken(a), Map.of(
-                            "symbol", symbol, "qty", qty, "type", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL",
-                            "product", product, "order_type", "MARKET", "price", 0
-                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                case "GROWW": {
+                    Map<String, Object> order = new LinkedHashMap<>();
+                    order.put("trading_symbol", symbol);
+                    order.put("quantity", qty);
+                    order.put("transaction_type", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
+                    order.put("order_type", "MARKET");
+                    order.put("price", 0);
+                    order.put("trigger_price", 0);
+                    order.put("exchange", BrokerFieldTranslator.exchangeSegment(exchange, "GROWW", isFnO));
+                    order.put("segment", isFnO ? "FNO" : "CASH");
+                    order.put("product", BrokerFieldTranslator.product(product, "GROWW", isFnO));
+                    order.put(BrokerFieldTranslator.validityFieldName("GROWW"), BrokerFieldTranslator.validityValue("GROWW"));
+                    return growwClient.placeOrder(sessionToken(a), order)
+                            .map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                }
                 case "ZERODHA":
                     return zerodhaClient.placeOrder(platformConfig.getZerodha().getApiKey(), sessionToken(a), Map.of(
                             "tradingsymbol", symbol, "quantity", qty, "transaction_type", type,
-                            "product", product, "order_type", "MARKET", "exchange", "NSE"
+                            "product", BrokerFieldTranslator.product(product, "ZERODHA", isFnO),
+                            "order_type", "MARKET",
+                            "exchange", BrokerFieldTranslator.exchangeSegment(exchange, "ZERODHA", isFnO)
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 case "FYERS": {
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     int side = type.equalsIgnoreCase("BUY") ? 1 : -1;
+                    String fyersSym = symbol.contains(":") ? symbol : ("NSE:" + symbol + (isFnO ? "" : "-EQ"));
                     return fyersClient.placeOrder(fyersAuth, Map.of(
-                            "symbol", symbol, "qty", qty, "side", side,
-                            "productType", product, "type", 2, "limitPrice", 0, "stopPrice", 0
+                            "symbol", fyersSym, "qty", qty, "side", side,
+                            "productType", BrokerFieldTranslator.product(product, "FYERS", isFnO),
+                            "type", 2, "limitPrice", 0, "stopPrice", 0
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 }
-                case "UPSTOX":
-                    return upstoxClient.placeOrder(sessionToken(a), Map.of(
-                            "instrument_token", symbol, "quantity", qty, "transaction_type", type,
-                            "product", product, "order_type", "MARKET", "price", 0
-                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
-                case "DHAN":
-                    return dhanClient.placeOrder(sessionToken(a), Map.of(
-                            "tradingSymbol", symbol, "quantity", qty, "transactionType", type,
-                            "productType", product, "orderType", "MARKET", "exchangeSegment", "NSE_EQ"
-                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                case "UPSTOX": {
+                    String instrumentToken = bodyField(body, "instrument_token", "instrumentToken");
+                    if (instrumentToken == null || instrumentToken.isBlank()) {
+                        instrumentToken = instruments.getUpstoxInstrumentKey(symbol, isFnO);
+                    }
+                    if (instrumentToken == null) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Upstox instrument not found for " + symbol + ". Ensure F&O symbol is correct."));
+                    }
+                    Map<String, Object> upOrder = new LinkedHashMap<>();
+                    upOrder.put("instrument_token", instrumentToken);
+                    upOrder.put("quantity", qty);
+                    upOrder.put("transaction_type", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
+                    upOrder.put("product", BrokerFieldTranslator.product(product, "UPSTOX", isFnO));
+                    upOrder.put("order_type", "MARKET");
+                    upOrder.put("price", 0);
+                    upOrder.put("market_protection", -1);
+                    return upstoxClient.placeOrder(sessionToken(a), upOrder)
+                            .map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                }
+                case "DHAN": {
+                    String seg = BrokerFieldTranslator.exchangeSegment(exchange, "DHAN", isFnO);
+                    String secId = instruments.getDhanSecurityId(symbol, isFnO);
+                    Map<String, Object> dhanOrder = new LinkedHashMap<>();
+                    dhanOrder.put("dhanClientId", a.getClientId() != null ? a.getClientId() : "");
+                    dhanOrder.put("transactionType", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
+                    dhanOrder.put("exchangeSegment", seg);
+                    dhanOrder.put("productType", BrokerFieldTranslator.product(product, "DHAN", isFnO));
+                    dhanOrder.put("orderType", "MARKET");
+                    dhanOrder.put("quantity", qty);
+                    dhanOrder.put("price", 0);
+                    if (secId != null) dhanOrder.put("securityId", secId);
+                    else dhanOrder.put("tradingSymbol", symbol);
+                    return dhanClient.placeOrder(sessionToken(a), dhanOrder)
+                            .map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                }
                 case "ANGELONE": {
                     String apiKey = platformConfig.getAngelone().getApiKey();
+                    String angelSym = isFnO ? symbol : symbol + "-EQ";
+                    String angelToken = instruments.getAngelToken(angelSym, isFnO);
                     Map<String, Object> angelBody = new LinkedHashMap<>();
                     angelBody.put("variety", "NORMAL");
-                    angelBody.put("tradingsymbol", symbol + "-EQ");
-                    angelBody.put("symboltoken", "");
+                    angelBody.put("tradingsymbol", angelSym);
+                    angelBody.put("symboltoken", angelToken != null ? angelToken : "");
                     angelBody.put("transactiontype", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
-                    angelBody.put("exchange", "NSE");
+                    angelBody.put("exchange", BrokerFieldTranslator.exchangeSegment(exchange, "ANGELONE", isFnO));
                     angelBody.put("ordertype", "MARKET");
-                    angelBody.put("producttype", product.equalsIgnoreCase("CNC") ? "DELIVERY" : "INTRADAY");
+                    angelBody.put("producttype", BrokerFieldTranslator.product(product, "ANGELONE", isFnO));
                     angelBody.put("duration", "DAY");
                     angelBody.put("price", "0");
                     angelBody.put("squareoff", "0");
@@ -910,6 +991,25 @@ public class BrokerAccountService {
                     return Mono.just(Map.<String, Object>of("message", "Unsupported broker"));
             }
         });
+    }
+
+    private static String bodyField(Map<String, Object> body, String... keys) {
+        for (String key : keys) {
+            Object v = body.get(key);
+            if (v != null && !String.valueOf(v).isBlank()) return String.valueOf(v).trim();
+        }
+        return null;
+    }
+
+    private static int bodyInt(Map<String, Object> body, String... keys) {
+        for (String key : keys) {
+            Object v = body.get(key);
+            if (v instanceof Number n) return n.intValue();
+            if (v != null) {
+                try { return Integer.parseInt(String.valueOf(v)); } catch (Exception ignored) { /* try next */ }
+            }
+        }
+        return 0;
     }
 
     // --- Cancel Order ---
@@ -1360,16 +1460,20 @@ public class BrokerAccountService {
         return switch (b) {
             case "GROWW" -> {
                 Map<String, Object> m = brokerShell("GROWW", "Groww", "token", null);
+                m.put("requiresIpWhitelist", true);
+                if (platformConfig.getServerEgressIp() != null) {
+                    m.put("platformServerIp", platformConfig.getServerEgressIp());
+                }
                 m.put("loginOptions", List.of(
                         loginOption("accessToken",
                                 "Paste access token from Groww settings (no API key needed)",
                                 List.of("accessToken"),
                                 "PUT /api/v1/brokers/accounts/{accountId}/token"),
                         loginOption("apiKeyWithTotp",
-                                "API key + TOTP code from authenticator app",
+                                "API key + TOTP code from authenticator app (recommended after disconnect)",
                                 List.of("apiKey", "totpCode"),
-                                "PUT /api/v1/brokers/accounts/{accountId} then POST .../login")));
-                m.put("note", "Groww requires per-user credentials. Each user generates their own from Groww settings.");
+                                "POST /api/v1/brokers/accounts/{accountId}/login { totpCode }")));
+                m.put("note", "Groww requires whitelisting platformServerIp in your Groww API dashboard.");
                 yield m;
             }
             case "DHAN" -> {
@@ -1438,6 +1542,10 @@ public class BrokerAccountService {
         config.put("sessionActive", a.isSessionActive());
         config.put("requiresReconnect", !a.isSessionActive() || sessionToken(a) == null);
         config.put("loginOptionsUrl", "/api/v1/brokers/accounts/" + a.getId() + "/login-options");
+        if ("GROWW".equals(a.getBrokerId())) {
+            config.put("hasStoredApiKey", a.getApiKey() != null && !a.getApiKey().isBlank());
+            config.put("recommendedLoginMethod", "apiKeyWithTotp");
+        }
         List<String> methods = extractLoginOptionMethods(config.get("loginOptions"));
         config.put("loginOptionMethods", methods);
         enrichOAuthUrls(a, config, redirectUri);

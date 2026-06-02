@@ -102,10 +102,11 @@ public class InstrumentCache {
 
     // ── UPSTOX ──
     private void loadUpstox() {
-        // Load NSE equity
         loadUpstoxExchange("https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz", "NSE");
-        // Load BSE F&O (smaller file, for SENSEX/BANKEX options)
         loadUpstoxExchange("https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz", "BSE");
+        // NSE/BSE F&O live in separate files — required for Upstox option/futures copy
+        loadUpstoxExchange("https://assets.upstox.com/market-quote/instruments/exchange/NFO.json.gz", "NFO");
+        loadUpstoxExchange("https://assets.upstox.com/market-quote/instruments/exchange/BFO.json.gz", "BFO");
     }
 
     private void loadUpstoxExchange(String url, String exchange) {
