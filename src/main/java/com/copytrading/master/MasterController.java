@@ -224,8 +224,10 @@ public class MasterController {
 
     @Operation(summary = "Option copy status", description = "F&O copy attempts with success/fail/skip details")
     @GetMapping("/option-status")
-    public Mono<Map<String, Object>> optionStatus(@AuthenticationPrincipal String userId) {
-        return tradingDataService.getOptionStatus(UUID.fromString(userId), true);
+    public Mono<Map<String, Object>> optionStatus(@AuthenticationPrincipal String userId,
+                                                   @RequestParam(required = false) String from,
+                                                   @RequestParam(required = false) String to) {
+        return tradingDataService.getOptionStatus(UUID.fromString(userId), true, from, to);
     }
 
     @Operation(summary = "Square off position", description = "Close a position on master's active broker")

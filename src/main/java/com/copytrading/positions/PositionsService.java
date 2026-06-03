@@ -67,10 +67,10 @@ public class PositionsService {
     public Mono<Map<String, Object>> getMasterPositions(UUID masterId) {
         return activeAccountRepo.findById(masterId)
                 .flatMap(active -> brokerRepo.findById(active.getBrokerAccountId()))
+                .filter(a -> a.getAccessToken() != null)
                 .switchIfEmpty(
-                    // Fallback: find first active session broker account for this user
                     brokerRepo.findByUserId(masterId)
-                            .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                            .filter(a -> a.getAccessToken() != null)
                             .next()
                 )
                 .flatMap(this::fetchAndNormalizePositions)
@@ -82,7 +82,7 @@ public class PositionsService {
      */
     public Mono<Map<String, Object>> getChildPositions(UUID childId) {
         return brokerRepo.findByUserId(childId)
-                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                .filter(a -> a.getAccessToken() != null)
                 .next()
                 .flatMap(this::fetchAndNormalizePositions)
                 .defaultIfEmpty(noAccountResponse());
@@ -93,7 +93,7 @@ public class PositionsService {
      */
     public Mono<List<PositionDto>> getPositionsForAccount(UUID brokerAccountId) {
         return brokerRepo.findById(brokerAccountId)
-                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                .filter(a -> a.getAccessToken() != null)
                 .flatMap(this::fetchRawAndNormalize)
                 .defaultIfEmpty(List.of());
     }
@@ -103,7 +103,7 @@ public class PositionsService {
      */
     public Mono<List<PositionDto>> getPositionsForUser(UUID userId) {
         return brokerRepo.findByUserId(userId)
-                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                .filter(a -> a.getAccessToken() != null)
                 .next()
                 .flatMap(this::fetchRawAndNormalize)
                 .defaultIfEmpty(List.of());

@@ -86,11 +86,16 @@ public class TradingDataService {
     }
 
     public Mono<Map<String, Object>> getOptionStatus(UUID userId, boolean master) {
+        return getOptionStatus(userId, master, null, null);
+    }
+
+    public Mono<Map<String, Object>> getOptionStatus(UUID userId, boolean master, String from, String to) {
         var logsFlux = master ? copyLogs.findByMasterId(userId) : copyLogs.findByChildId(userId);
         return logsFlux.collectList().map(logs -> {
             // Show ONLY option trades (strict isOptionSymbol filter)
             List<Map<String, Object>> items = logs.stream()
                     .filter(l -> isOptionSymbol(l.getSymbol()))
+                    .filter(l -> filterByDateRange(l.getCreatedAt(), from, to))
                     .sorted(Comparator.comparing(CopyLog::getCreatedAt,
                             Comparator.nullsLast(Comparator.reverseOrder())))
                     .map(this::toOptionStatusRow)
@@ -157,12 +162,13 @@ public class TradingDataService {
         if (master) {
             return activeAccountRepo.findById(userId)
                     .flatMap(aa -> brokerRepo.findById(aa.getBrokerAccountId()))
+                    .filter(a -> a.getAccessToken() != null)
                     .switchIfEmpty(brokerRepo.findByUserId(userId)
-                            .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                            .filter(a -> a.getAccessToken() != null)
                             .next());
         }
         return brokerRepo.findByUserId(userId)
-                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                .filter(a -> a.getAccessToken() != null)
                 .next();
     }
 
@@ -197,6 +203,21 @@ public class TradingDataService {
         String s = status.trim().toUpperCase();
         return s.contains("COMPLETE") || s.contains("CANCEL") || s.contains("REJECT")
                 || "EXECUTED".equals(s) || "TRADED".equals(s);
+    }
+
+    private static boolean filterByDateRange(java.time.Instant ts, String from, String to) {
+        if (ts == null) return true;
+        try {
+            if (from != null && !from.isBlank()) {
+                java.time.Instant fromInstant = java.time.Instant.parse(from + "T00:00:00Z");
+                if (ts.isBefore(fromInstant)) return false;
+            }
+            if (to != null && !to.isBlank()) {
+                java.time.Instant toInstant = java.time.Instant.parse(to + "T23:59:59Z");
+                if (ts.isAfter(toInstant)) return false;
+            }
+        } catch (Exception ignored) {}
+        return true;
     }
 
     private boolean isOptionPosition(Object p) {

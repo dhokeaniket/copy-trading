@@ -271,10 +271,11 @@ public class MasterService {
                         "message", "No master account connected. Engine has nothing to poll."));
             } else if (Boolean.FALSE.equals(active.get("sessionActive"))
                     || Boolean.TRUE.equals(active.get("isTokenExpired"))) {
-                alerts.add(0, Map.of(
-                        "level", "ERROR",
-                        "code", "MASTER_SESSION_EXPIRED",
-                        "message", "Master broker session expired — reconnect to resume polling.",
+                // Downgrade to WARNING instead of blocking ERROR — session may still work
+                alerts.add(Map.of(
+                        "level", "WARNING",
+                        "code", "MASTER_SESSION_CHECK",
+                        "message", "Broker session may need refresh. If data is stale, reconnect.",
                         "broker", active.get("broker")));
             }
 

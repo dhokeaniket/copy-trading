@@ -160,8 +160,10 @@ public class ChildController {
     }
 
     @GetMapping("/option-status")
-    public Mono<Map<String, Object>> optionStatus(@AuthenticationPrincipal String userId) {
-        return tradingDataService.getOptionStatus(UUID.fromString(userId), false);
+    public Mono<Map<String, Object>> optionStatus(@AuthenticationPrincipal String userId,
+                                                   @RequestParam(required = false) String from,
+                                                   @RequestParam(required = false) String to) {
+        return tradingDataService.getOptionStatus(UUID.fromString(userId), false, from, to);
     }
 
     @Operation(summary = "Child P&L dashboard", description = "Alias for /analytics with live P&L")
