@@ -85,6 +85,7 @@ public class CopyEngineService {
     private final BrokerCredentials credentials;
     private final EnginePollingProperties pollingProperties;
     private final BrokerRateLimiter rateLimiter;
+    private final SubscriptionCache subscriptionCache;
 
     public CopyEngineService(SubscriptionRepository subs,
                              BrokerAccountRepository brokerRepo,
@@ -111,7 +112,8 @@ public class CopyEngineService {
                              LotSizeScaler lotScaler,
                              BrokerCredentials credentials,
                              EnginePollingProperties pollingProperties,
-                             BrokerRateLimiter rateLimiter) {
+                             BrokerRateLimiter rateLimiter,
+                             SubscriptionCache subscriptionCache) {
         this.subs = subs;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -138,6 +140,7 @@ public class CopyEngineService {
         this.credentials = credentials;
         this.pollingProperties = pollingProperties;
         this.rateLimiter = rateLimiter;
+        this.subscriptionCache = subscriptionCache;
     }
 
     /**
@@ -182,8 +185,7 @@ public class CopyEngineService {
                 masterId, preparedReq.getSymbol(), market, preparedReq.getQty(), preparedReq.getSide(), preparedReq.getProduct(),
                 preparedReq.getMasterBrokerId(), orderKey, copyGroupId);
 
-        return subs.findByMasterIdAndCopyingStatus(masterId, "ACTIVE")
-                .collectList()
+        return subscriptionCache.getActiveSubscriptions(masterId)
                 .flatMap(children -> {
                     if (children.isEmpty()) {
                         return Mono.just(Map.<String, Object>of(
@@ -328,7 +330,7 @@ public class CopyEngineService {
                         // Auto-fix the subscription with the found broker account
                         sub.setBrokerAccountId(account.getId());
                         return subs.save(sub)
-                                .then(placeOrderOnChild(masterId, childId, account, req, scaledQty, scale, orderKey, copyGroupId, engineReceivedAt));
+                                .then(placeOrderOnChild(masterId, childId, account, req, scaledQty, scale, orderKey, copyGroupId, engineReceivedAt, sub));
                     })
                     .switchIfEmpty(Mono.defer(() ->
                         logAndReturn(masterId, childId, req, "FAILED",
@@ -348,7 +350,7 @@ public class CopyEngineService {
                                 "Broker session inactive. Child needs to re-login.",
                                 account.getBrokerId(), null, null, copyGroupId, engineReceivedAt, scaledQty);
                     }
-                    return placeOrderOnChild(masterId, childId, account, req, scaledQty, scale, orderKey, copyGroupId, engineReceivedAt);
+                    return placeOrderOnChild(masterId, childId, account, req, scaledQty, scale, orderKey, copyGroupId, engineReceivedAt, sub);
                 });
     }
 
@@ -358,7 +360,8 @@ public class CopyEngineService {
     private Mono<Map<String, Object>> placeOrderOnChild(UUID masterId, UUID childId,
                                                          BrokerAccount account, CopyTradeRequest req,
                                                          int scaledQty, double scale, String orderKey,
-                                                         String copyGroupId, Instant engineReceivedAt) {
+                                                         String copyGroupId, Instant engineReceivedAt,
+                                                         Subscription sub) {
         boolean isFnO = symbolMapper.isFnO(req.getSymbol());
         if (BrokerProductMapper.shouldSkipIntradayCopy(req.getProduct(), isFnO)) {
             String msg = BrokerProductMapper.marketClosedMessage();
@@ -371,10 +374,31 @@ public class CopyEngineService {
         }
         UUID brokerAccountId = account.getId();
         long startMs = System.currentTimeMillis();
+
+        // Apply price tolerance: for LIMIT/SL orders, adjust price by child's tolerance %
+        double adjustedPrice = req.getPrice();
+        double adjustedTrigger = req.getTriggerPrice();
+        double tolerancePct = sub != null ? sub.getPriceTolerancePct() : 2.0;
+        if (tolerancePct > 0 && adjustedPrice > 0) {
+            String ot = req.getOrderType() != null ? req.getOrderType().toUpperCase() : "MARKET";
+            if ("LIMIT".equals(ot) || "SL".equals(ot) || "SL-M".equals(ot)) {
+                double factor = tolerancePct / 100.0;
+                if ("BUY".equalsIgnoreCase(req.getSide())) {
+                    adjustedPrice = Math.round(adjustedPrice * (1 + factor) * 100.0) / 100.0;
+                    if (adjustedTrigger > 0) adjustedTrigger = Math.round(adjustedTrigger * (1 + factor) * 100.0) / 100.0;
+                } else {
+                    adjustedPrice = Math.round(adjustedPrice * (1 - factor) * 100.0) / 100.0;
+                    if (adjustedTrigger > 0) adjustedTrigger = Math.round(adjustedTrigger * (1 - factor) * 100.0) / 100.0;
+                }
+            }
+        }
+        final double childPrice = adjustedPrice;
+        final double childTrigger = adjustedTrigger;
+
         // Respect each broker's per-sec/per-min order caps before dispatching the child order.
         return rateLimiter.acquire(account.getBrokerId(), account.getId())
                 .then(Mono.defer(() -> placeOrderOnBroker(account, req.getSymbol(), scaledQty,
-                        req.getSide(), req.getProduct(), req.getOrderType(), req.getPrice(), req.getTriggerPrice(), req.getExchange(),
+                        req.getSide(), req.getProduct(), req.getOrderType(), childPrice, childTrigger, req.getExchange(),
                         req.getMasterBrokerId())))
                 .flatMap(response -> {
                     long latencyMs = System.currentTimeMillis() - startMs;

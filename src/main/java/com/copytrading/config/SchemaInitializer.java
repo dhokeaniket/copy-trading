@@ -123,7 +123,9 @@ public class SchemaInitializer {
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS product VARCHAR(10)",
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS order_type VARCHAR(20)",
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS price DOUBLE PRECISION",
-                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS trigger_price DOUBLE PRECISION"
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS trigger_price DOUBLE PRECISION",
+                // Price tolerance per child subscription (default 2%)
+                "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS price_tolerance_pct DOUBLE PRECISION NOT NULL DEFAULT 2.0"
             };
 
             for (String sql : statements) {

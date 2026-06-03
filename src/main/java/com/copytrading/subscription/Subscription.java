@@ -41,6 +41,10 @@ public class Subscription {
     @Column("allow_short_selling")
     private boolean allowShortSelling;
 
+    /** Price tolerance percentage (0.0 to 10.0). Child's LIMIT orders use masterPrice ± tolerance%. Default 2%. */
+    @Column("price_tolerance_pct")
+    private double priceTolerancePct;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public UUID getMasterId() { return masterId; }
@@ -61,4 +65,6 @@ public class Subscription {
     public void setCopySides(String copySides) { this.copySides = copySides; }
     public boolean isAllowShortSelling() { return allowShortSelling; }
     public void setAllowShortSelling(boolean allowShortSelling) { this.allowShortSelling = allowShortSelling; }
+    public double getPriceTolerancePct() { return priceTolerancePct; }
+    public void setPriceTolerancePct(double priceTolerancePct) { this.priceTolerancePct = priceTolerancePct; }
 }

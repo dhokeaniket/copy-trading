@@ -100,7 +100,7 @@ public class ChildController {
     public Mono<Map<String, Object>> updateCopySettings(@AuthenticationPrincipal String userId,
                                                           @RequestBody CopySettingsRequest req) {
         return service.updateCopySettings(UUID.fromString(userId), req.getMasterId(),
-                req.getCopySides(), req.getAllowShortSelling());
+                req.getCopySides(), req.getAllowShortSelling(), req.getPriceTolerancePct());
     }
 
     @PostMapping(value = "/copying/pause", consumes = MediaType.APPLICATION_JSON_VALUE)

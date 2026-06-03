@@ -5,6 +5,7 @@ import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.logs.TradeLogRepository;
 import com.copytrading.engine.EngineHistoryService;
+import com.copytrading.engine.SubscriptionCache;
 import com.copytrading.positions.PositionDto;
 import com.copytrading.positions.PositionsService;
 import com.copytrading.subscription.CopySides;
@@ -31,11 +32,12 @@ public class ChildService {
     private final BrokerAccountRepository brokerRepo;
     private final PositionsService positionsService;
     private final EngineHistoryService engineHistory;
+    private final SubscriptionCache subscriptionCache;
 
     public ChildService(SubscriptionRepository subs, UserAccountRepository users,
                         TradeLogRepository logs, CopyLogRepository copyLogs,
                         BrokerAccountRepository brokerRepo, PositionsService positionsService,
-                        EngineHistoryService engineHistory) {
+                        EngineHistoryService engineHistory, SubscriptionCache subscriptionCache) {
         this.subs = subs;
         this.users = users;
         this.logs = logs;
@@ -43,6 +45,7 @@ public class ChildService {
         this.brokerRepo = brokerRepo;
         this.positionsService = positionsService;
         this.engineHistory = engineHistory;
+        this.subscriptionCache = subscriptionCache;
     }
 
     public Mono<Map<String, Object>> getTradeTimeline(UUID childId) {
@@ -287,6 +290,7 @@ public class ChildService {
                             r.put("scalingFactor", s.getScalingFactor());
                             r.put("copySides", CopySides.normalize(s.getCopySides()));
                             r.put("allowShortSelling", s.isAllowShortSelling());
+                            r.put("priceTolerancePct", s.getPriceTolerancePct());
                             r.put("copyingStatus", s.getCopyingStatus());
                             r.put("subscribedAt", s.getCreatedAt());
                             r.put("brokerAccountId", s.getBrokerAccountId());
@@ -316,17 +320,27 @@ public class ChildService {
 
     public Mono<Map<String, Object>> updateCopySettings(UUID childId, UUID masterId, String copySides,
                                                         Boolean allowShortSelling) {
+        return updateCopySettings(childId, masterId, copySides, allowShortSelling, null);
+    }
+
+    public Mono<Map<String, Object>> updateCopySettings(UUID childId, UUID masterId, String copySides,
+                                                        Boolean allowShortSelling, Double priceTolerancePct) {
         return subs.findByMasterIdAndChildId(masterId, childId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Subscription not found")))
                 .flatMap(s -> {
                     applyCopyPreferences(s, copySides, allowShortSelling);
+                    if (priceTolerancePct != null && priceTolerancePct >= 0 && priceTolerancePct <= 10.0) {
+                        s.setPriceTolerancePct(priceTolerancePct);
+                    }
                     return subs.save(s);
                 })
+                .doOnNext(s -> subscriptionCache.invalidate(masterId))
                 .map(s -> {
                     Map<String, Object> r = new LinkedHashMap<>();
                     r.put("masterId", masterId);
                     r.put("copySides", CopySides.normalize(s.getCopySides()));
                     r.put("allowShortSelling", s.isAllowShortSelling());
+                    r.put("priceTolerancePct", s.getPriceTolerancePct());
                     r.put("message", "Copy settings updated");
                     return r;
                 });
