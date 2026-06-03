@@ -25,7 +25,24 @@ public class PositionDto {
         this.side = side;
         this.exchange = exchange;
         this.product = product;
-        this.pnl = (ltp - avgPrice) * qty;
+        // P&L depends on side: BUY = (ltp - avg) * qty, SELL = (avg - ltp) * qty
+        if ("SELL".equalsIgnoreCase(side)) {
+            this.pnl = (avgPrice - ltp) * qty;
+        } else {
+            this.pnl = (ltp - avgPrice) * qty;
+        }
+    }
+
+    /** Constructor with broker-provided P&L (preferred — avoids recalculation errors). */
+    public PositionDto(String symbol, int qty, double avgPrice, double ltp, String side, String exchange, String product, double brokerPnl) {
+        this.symbol = symbol;
+        this.qty = qty;
+        this.avgPrice = avgPrice;
+        this.ltp = ltp;
+        this.side = side;
+        this.exchange = exchange;
+        this.product = product;
+        this.pnl = brokerPnl;
     }
 
     public String getSymbol() { return symbol; }

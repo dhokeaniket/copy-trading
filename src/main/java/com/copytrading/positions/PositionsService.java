@@ -268,9 +268,13 @@ public class PositionsService {
         int qty = getInt(p, "netQty", getInt(p, "quantity", 0));
         double avgPrice = getDouble(p, "averagePrice", getDouble(p, "buyAvgPrice", 0));
         double ltp = getDouble(p, "ltp", getDouble(p, "lastPrice", 0));
+        double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealisedPnl", getDouble(p, "realizedPnl", Double.NaN)));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
         String product = getString(p, "product", "CNC");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
@@ -279,22 +283,29 @@ public class PositionsService {
         int qty = getInt(p, "quantity", 0);
         double avgPrice = getDouble(p, "average_price", 0);
         double ltp = getDouble(p, "last_price", 0);
+        double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised", Double.NaN));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
         String product = getString(p, "product", "CNC");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
     private PositionDto mapFyersPosition(Map<String, Object> p) {
         String symbol = getString(p, "symbol", "UNKNOWN");
-        // Fyers symbol format: NSE:RELIANCE-EQ, extract just the name
         if (symbol.contains(":")) symbol = symbol.substring(symbol.indexOf(":") + 1);
         int qty = getInt(p, "netQty", getInt(p, "qty", 0));
         double avgPrice = getDouble(p, "avgPrice", getDouble(p, "buyAvg", 0));
         double ltp = getDouble(p, "ltp", 0);
+        double brokerPnl = getDouble(p, "pl", getDouble(p, "unrealized_profit", Double.NaN));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
         String product = getString(p, "productType", "CNC");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
@@ -303,9 +314,13 @@ public class PositionsService {
         int qty = getInt(p, "quantity", getInt(p, "net_quantity", 0));
         double avgPrice = getDouble(p, "average_price", 0);
         double ltp = getDouble(p, "last_price", getDouble(p, "ltp", 0));
+        double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised", Double.NaN));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
         String product = getString(p, "product", "D");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
@@ -315,9 +330,14 @@ public class PositionsService {
         int qty = getInt(p, "netQty", getInt(p, "net_qty", getInt(p, "quantity", getInt(p, "netQuantity", 0))));
         double avgPrice = getDouble(p, "averagePrice", getDouble(p, "costPrice", 0));
         double ltp = getDouble(p, "ltp", getDouble(p, "currentPrice", 0));
+        double brokerPnl = getDouble(p, "unrealizedProfit", getDouble(p, "realizedProfit",
+                getDouble(p, "dayPnl", Double.NaN)));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchangeSegment", "NSE_EQ");
         String product = getString(p, "productType", "CNC");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
@@ -326,9 +346,13 @@ public class PositionsService {
         int qty = getInt(p, "netqty", getInt(p, "quantity", 0));
         double avgPrice = getDouble(p, "averageprice", getDouble(p, "buyavgprice", 0));
         double ltp = getDouble(p, "ltp", 0);
+        double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised", Double.NaN));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
         String product = getString(p, "producttype", "DELIVERY");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
