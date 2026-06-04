@@ -340,6 +340,8 @@ public class MasterService {
             summary.put("totalFollowerMarginAvailable", MasterChildMetricsHelper.round2(totalMarginAvailable));
             summary.put("activeFollowers", children.stream().filter(c -> "ACTIVE".equals(c.get("copyingStatus"))).count());
             summary.put("totalTrades", masterTrades.size());
+            // Portfolio value from broker margin API (only available when broker session is active)
+            summary.put("portfolioValue", MasterChildMetricsHelper.round2(snap.portfolioValue()));
             summary.put("totalCopiesSuccess", success);
             summary.put("totalCopiesFailed", failed);
             summary.put("todayCopiesSuccess", todaySuccess);

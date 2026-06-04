@@ -613,7 +613,9 @@ public class CopyEngineService {
                 if (secId == null && !sym.equalsIgnoreCase(symbol)) {
                     secId = instruments.getDhanSecurityId(symbol, isFnO);
                 }
-                String clientId = account.getClientId() != null ? account.getClientId() : "";
+                String clientId = account.getClientId() != null && !account.getClientId().isBlank()
+                        ? account.getClientId()
+                        : account.getApiKey(); // Dhan: apiKey IS the clientId
 
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("dhanClientId", clientId);
