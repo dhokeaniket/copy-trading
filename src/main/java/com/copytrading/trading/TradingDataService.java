@@ -56,13 +56,47 @@ public class TradingDataService {
                             if (resp.containsKey("error")) r.put("error", resp.get("error"));
                             if (resp.containsKey("errorCode")) r.put("errorCode", resp.get("errorCode"));
                             return r;
-                        }))
+                        })
+                        .onErrorResume(e -> fallbackOrderBook(userId)))
+                .switchIfEmpty(Mono.defer(() -> fallbackOrderBook(userId)))
                 .switchIfEmpty(Mono.just(Map.of(
                         "orders", List.of(),
                         "total", 0,
-                        "error", "No active broker session. Login to your broker first.",
-                        "errorCode", "SESSION_EXPIRED",
-                        "action", "RE_LOGIN")));
+                        "error", "No broker account found.",
+                        "errorCode", "NO_ACCOUNT")));
+    }
+
+    private Mono<Map<String, Object>> fallbackOrderBook(UUID userId) {
+        return copyLogs.findByMasterId(userId).collectList().flatMap(masterLogs -> {
+            if (masterLogs.isEmpty()) {
+                return copyLogs.findByChildId(userId).collectList().map(childLogs -> buildOrderBookFromLogs(childLogs));
+            }
+            return Mono.just(buildOrderBookFromLogs(masterLogs));
+        });
+    }
+
+    private Map<String, Object> buildOrderBookFromLogs(List<CopyLog> logs) {
+        List<Map<String, Object>> orders = logs.stream()
+                .sorted(java.util.Comparator.comparing(CopyLog::getCreatedAt, java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+                .map(l -> {
+                    Map<String, Object> o = new LinkedHashMap<>();
+                    o.put("tradingsymbol", l.getSymbol());
+                    o.put("symbol", l.getSymbol());
+                    o.put("transaction_type", l.getTradeType());
+                    o.put("order_type", l.getOrderType() != null ? l.getOrderType() : "MARKET");
+                    o.put("product", l.getProduct() != null ? l.getProduct() : "MIS");
+                    o.put("quantity", l.getQty());
+                    o.put("price", l.getPrice());
+                    o.put("status", l.getChildStatus());
+                    o.put("order_timestamp", l.getCreatedAt() != null ? l.getCreatedAt().toString() : null);
+                    o.put("exchange", "NSE");
+                    return o;
+                }).toList();
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("orders", orders);
+        r.put("total", orders.size());
+        r.put("source", "DB_FALLBACK");
+        return r;
     }
 
     public Mono<Map<String, Object>> getOpenOptions(UUID userId, boolean master) {

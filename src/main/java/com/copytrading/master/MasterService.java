@@ -358,6 +358,13 @@ public class MasterService {
             r.put("summary", summary);
             r.put("masterActiveAccount", active);
             r.put("masterPositions", masterPos.getOrDefault("positions", List.of()));
+
+            // Best/worst trade and instrument-wise P&L from trades table
+            List<Map<String, Object>> instrumentPnl = computeInstrumentPnl(masterTrades);
+            r.put("instrumentPnl", instrumentPnl);
+            r.put("bestTrade", instrumentPnl.isEmpty() ? null : instrumentPnl.get(0));
+            r.put("worstTrade", instrumentPnl.isEmpty() ? null : instrumentPnl.get(instrumentPnl.size() - 1));
+
             r.put("childPerformance", children.stream().map(c -> {
                 Map<String, Object> p = new LinkedHashMap<>();
                 p.put("childId", c.get("childId"));
@@ -455,6 +462,54 @@ public class MasterService {
                 .filter(l -> l.getCreatedAt() != null && !l.getCreatedAt().isBefore(start))
                 .filter(l -> "SUCCESS".equals(l.getChildStatus()))
                 .count();
+    }
+
+    /** Compute realized P&L per instrument using FIFO matching from trades table. Sorted best→worst. */
+    private static List<Map<String, Object>> computeInstrumentPnl(List<com.copytrading.trade.Trade> trades) {
+        if (trades == null || trades.isEmpty()) return List.of();
+        // Group by instrument, compute net P&L per instrument using FIFO
+        Map<String, java.util.Deque<double[]>> books = new LinkedHashMap<>(); // instrument -> deque of [qty, price]
+        Map<String, Double> pnlMap = new LinkedHashMap<>();
+        Map<String, Integer> tradeCount = new LinkedHashMap<>();
+
+        for (com.copytrading.trade.Trade t : trades) {
+            if (t.getInstrument() == null) continue;
+            String status = t.getStatus() != null ? t.getStatus().toUpperCase() : "";
+            if (!status.contains("EXECUTED") && !status.contains("COMPLETE") && !status.contains("FILLED")) continue;
+            String inst = t.getInstrument();
+            int qty = t.getQuantity();
+            double price = t.getPrice();
+            if (qty <= 0 || price <= 0) continue;
+            String side = t.getTransactionType() != null ? t.getTransactionType().toUpperCase() : "BUY";
+            tradeCount.merge(inst, 1, Integer::sum);
+
+            if ("BUY".equals(side)) {
+                books.computeIfAbsent(inst, k -> new java.util.ArrayDeque<>()).addLast(new double[]{qty, price});
+            } else {
+                java.util.Deque<double[]> q = books.get(inst);
+                if (q == null || q.isEmpty()) continue;
+                int remaining = qty;
+                double realized = 0;
+                while (remaining > 0 && !q.isEmpty()) {
+                    double[] lot = q.peekFirst();
+                    int matched = (int) Math.min(remaining, lot[0]);
+                    realized += (price - lot[1]) * matched;
+                    remaining -= matched;
+                    if (matched >= lot[0]) q.pollFirst();
+                    else { q.pollFirst(); q.addFirst(new double[]{lot[0] - matched, lot[1]}); }
+                }
+                pnlMap.merge(inst, realized, Double::sum);
+            }
+        }
+        return pnlMap.entrySet().stream()
+                .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                .map(e -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("instrument", e.getKey());
+                    m.put("pnl", MasterChildMetricsHelper.round2(e.getValue()));
+                    m.put("trades", tradeCount.getOrDefault(e.getKey(), 0));
+                    return m;
+                }).toList();
     }
 
     private static List<Map<String, Object>> buildDailyCopyChart(List<CopyLog> logs, int days) {
