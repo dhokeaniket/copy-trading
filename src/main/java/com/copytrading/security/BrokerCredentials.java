@@ -28,5 +28,12 @@ public class BrokerCredentials {
         if (account.getApiSecret() != null) {
             account.setApiSecret(crypto.encrypt(account.getApiSecret()));
         }
+        if (account.getProxyPass() != null) {
+            account.setProxyPass(crypto.encrypt(account.getProxyPass()));
+        }
+    }
+
+    public String proxyPass(BrokerAccount account) {
+        return account == null ? null : crypto.decrypt(account.getProxyPass());
     }
 }

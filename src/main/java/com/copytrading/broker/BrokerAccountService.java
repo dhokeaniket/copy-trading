@@ -4,6 +4,7 @@ import com.copytrading.broker.dhan.DhanApiClient;
 import com.copytrading.broker.dto.*;
 import com.copytrading.broker.fyers.FyersApiClient;
 import com.copytrading.broker.groww.GrowwApiClient;
+import com.copytrading.broker.proxy.ProxyHttpClient;
 import com.copytrading.broker.upstox.UpstoxApiClient;
 import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import com.copytrading.broker.angelone.AngelOneApiClient;
@@ -45,6 +46,7 @@ public class BrokerAccountService {
     private final SubscriptionRepository subscriptionRepo;
     private final MasterActiveAccountRepository masterActiveAccountRepo;
     private final com.copytrading.broker.groww.GrowwProxyRouter proxyRouter;
+    private final ProxyHttpClient proxyHttpClient;
 
     public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
                                 ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
@@ -57,7 +59,8 @@ public class BrokerAccountService {
                                 InstrumentCache instruments,
                                 SubscriptionRepository subscriptionRepo,
                                 MasterActiveAccountRepository masterActiveAccountRepo,
-                                com.copytrading.broker.groww.GrowwProxyRouter proxyRouter) {
+                                com.copytrading.broker.groww.GrowwProxyRouter proxyRouter,
+                                ProxyHttpClient proxyHttpClient) {
         this.repo = repo;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
@@ -73,6 +76,7 @@ public class BrokerAccountService {
         this.subscriptionRepo = subscriptionRepo;
         this.masterActiveAccountRepo = masterActiveAccountRepo;
         this.proxyRouter = proxyRouter;
+        this.proxyHttpClient = proxyHttpClient;
     }
 
     private String sessionToken(BrokerAccount a) {
@@ -115,6 +119,12 @@ public class BrokerAccountService {
         a.setNickname(req.getAccountNickname());
         a.setSessionActive(false);
         a.setLinkedAt(Instant.now());
+
+        // Per-user proxy settings (optional)
+        if (req.getProxyHost() != null) a.setProxyHost(req.getProxyHost());
+        if (req.getProxyPort() != null) a.setProxyPort(req.getProxyPort());
+        if (req.getProxyUser() != null) a.setProxyUser(req.getProxyUser());
+        if (req.getProxyPass() != null) a.setProxyPass(req.getProxyPass());
 
         // For OAuth brokers, use platform-level keys; for Groww, also fall back to platform keys
         PlatformBrokerConfig.BrokerCreds platformCreds = platformConfig.getFor(broker);
@@ -222,6 +232,16 @@ public class BrokerAccountService {
                     if (req.getApiSecret() != null) a.setApiSecret(req.getApiSecret());
                     if (req.getAccountNickname() != null) a.setNickname(req.getAccountNickname());
                     if (req.getClientId() != null) a.setClientId(req.getClientId());
+                    // Proxy settings
+                    boolean proxyChanged = false;
+                    if (req.getProxyHost() != null) { a.setProxyHost(req.getProxyHost()); proxyChanged = true; }
+                    if (req.getProxyPort() != null) { a.setProxyPort(req.getProxyPort()); proxyChanged = true; }
+                    if (req.getProxyUser() != null) { a.setProxyUser(req.getProxyUser()); proxyChanged = true; }
+                    if (req.getProxyPass() != null) { a.setProxyPass(req.getProxyPass()); proxyChanged = true; }
+                    if (proxyChanged) {
+                        proxyHttpClient.evict(accountId);
+                        log.info("PROXY_UPDATED accountId={} host={} port={}", accountId, a.getProxyHost(), a.getProxyPort());
+                    }
                     credentials.encryptSensitiveFields(a);
                     return repo.save(a).thenReturn(Map.of("message", "Account updated"));
                 });

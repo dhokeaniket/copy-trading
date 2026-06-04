@@ -14,6 +14,7 @@ import com.copytrading.broker.dto.BrokerAccountDto;
 import com.copytrading.broker.fyers.FyersApiClient;
 import com.copytrading.broker.groww.GrowwApiClient;
 import com.copytrading.broker.groww.GrowwProxyRouter;
+import com.copytrading.broker.proxy.ProxyHttpClient;
 import com.copytrading.broker.upstox.UpstoxApiClient;
 import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import com.copytrading.logs.CopyLog;
@@ -29,6 +30,7 @@ import com.copytrading.ws.TradeUpdatesHub;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -72,6 +74,7 @@ public class CopyEngineService {
     private final SymbolMapper symbolMapper;
     private final GrowwApiClient growwClient;
     private final GrowwProxyRouter growwProxyRouter;
+    private final ProxyHttpClient proxyHttpClient;
     private final ZerodhaApiClient zerodhaClient;
     private final FyersApiClient fyersClient;
     private final UpstoxApiClient upstoxClient;
@@ -100,6 +103,7 @@ public class CopyEngineService {
                              SymbolMapper symbolMapper,
                              GrowwApiClient growwClient,
                              GrowwProxyRouter growwProxyRouter,
+                             ProxyHttpClient proxyHttpClient,
                              ZerodhaApiClient zerodhaClient,
                              FyersApiClient fyersClient,
                              UpstoxApiClient upstoxClient,
@@ -127,6 +131,7 @@ public class CopyEngineService {
         this.symbolMapper = symbolMapper;
         this.growwClient = growwClient;
         this.growwProxyRouter = growwProxyRouter;
+        this.proxyHttpClient = proxyHttpClient;
         this.zerodhaClient = zerodhaClient;
         this.fyersClient = fyersClient;
         this.upstoxClient = upstoxClient;
@@ -516,9 +521,13 @@ public class CopyEngineService {
                 b.put("order_type", BrokerFieldTranslator.orderType(oType, "GROWW"));
                 b.put("transaction_type", BrokerFieldTranslator.transactionType(side, "GROWW"));
                 b.put("order_reference_id", "COPY-" + System.currentTimeMillis());
-                log.info("GROWW_ORDER_REQ masterSymbol={} childSymbol={} qty={} segment={} masterBroker={} ipSlot={}",
-                        symbol, sym, qty, isFnO ? "FNO" : "CASH", masterBrokerId, account.getIpSlot());
-                reactor.netty.http.client.HttpClient proxyClient = growwProxyRouter.getProxiedClient(account.getIpSlot());
+                log.info("GROWW_ORDER_REQ masterSymbol={} childSymbol={} qty={} segment={} masterBroker={} ipSlot={} hasUserProxy={}",
+                        symbol, sym, qty, isFnO ? "FNO" : "CASH", masterBrokerId, account.getIpSlot(), account.hasProxy());
+                // Per-user proxy takes priority over ip_slot-based routing
+                reactor.netty.http.client.HttpClient proxyClient = proxyHttpClient.getHttpClient(account);
+                if (proxyClient == null) {
+                    proxyClient = growwProxyRouter.getProxiedClient(account.getIpSlot());
+                }
                 return growwClient.placeOrder(token, b, proxyClient);
             }
             case "ZERODHA": {
@@ -539,6 +548,25 @@ public class CopyEngineService {
                     b.put("market_protection", 5); // 5% protection band for market orders
                 } else {
                     b.put("price", price);
+                }
+                // Route through per-user proxy if configured
+                if (account.hasProxy()) {
+                    WebClient proxiedClient = proxyHttpClient.getWebClient(account, "https://api.kite.trade");
+                    StringBuilder form = new StringBuilder();
+                    b.forEach((k, v) -> {
+                        if (form.length() > 0) form.append("&");
+                        form.append(k).append("=").append(v);
+                    });
+                    return proxiedClient.post()
+                            .uri("/orders/regular")
+                            .header("Authorization", "token " + apiKey + ":" + token)
+                            .header("Content-Type", "application/x-www-form-urlencoded")
+                            .header("X-Kite-Version", "3")
+                            .bodyValue(form.toString())
+                            .retrieve()
+                            .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                                    .flatMap(e -> Mono.error(new RuntimeException("Zerodha order " + r.statusCode() + ": " + e))))
+                            .bodyToMono(Map.class);
                 }
                 return zerodhaClient.placeOrder(apiKey, token, b);
             }
@@ -571,6 +599,19 @@ public class CopyEngineService {
                 b.put("offlineOrder", true);
                 b.put("stopLoss", 0);
                 b.put("takeProfit", 0);
+                // Route through per-user proxy if configured
+                if (account.hasProxy()) {
+                    WebClient proxiedClient = proxyHttpClient.getWebClient(account, "https://api-t1.fyers.in/api/v3");
+                    return proxiedClient.post()
+                            .uri("/orders/sync")
+                            .header("Authorization", fyersAuth)
+                            .header("Content-Type", "application/json")
+                            .bodyValue(b)
+                            .retrieve()
+                            .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                                    .flatMap(e -> Mono.error(new RuntimeException("Fyers order " + r.statusCode() + ": " + e))))
+                            .bodyToMono(Map.class);
+                }
                 return fyersClient.placeOrder(fyersAuth, b);
             }
             case "UPSTOX": {
@@ -600,6 +641,19 @@ public class CopyEngineService {
                 b.put("is_amo", false);
                 if (isMarket || oType.equalsIgnoreCase("SL-M")) {
                     b.put("market_protection", -1);
+                }
+                // Route through per-user proxy if configured
+                if (account.hasProxy()) {
+                    WebClient proxiedClient = proxyHttpClient.getWebClient(account, "https://api.upstox.com");
+                    return proxiedClient.post()
+                            .uri("/v2/order/place")
+                            .header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .bodyValue(b)
+                            .retrieve()
+                            .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                                    .flatMap(e -> Mono.error(new RuntimeException("Upstox order " + r.statusCode() + ": " + e))))
+                            .bodyToMono(Map.class);
                 }
                 return upstoxClient.placeOrder(token, b);
             }
@@ -635,6 +689,19 @@ public class CopyEngineService {
                     b.put("securityId", secId);
                     log.info("DHAN_ORDER_REQ masterSymbol={} childSymbol={} securityId={} qty={} exchangeSegment={} lotSize={} masterBroker={}",
                             symbol, sym, secId, qty, dhanExch, instruments.getLotSize(symbol), masterBrokerId);
+                    // Route through per-user proxy if configured
+                    if (account.hasProxy()) {
+                        WebClient proxiedClient = proxyHttpClient.getWebClient(account, "https://api.dhan.co");
+                        return proxiedClient.post()
+                                .uri("/v2/orders")
+                                .header("access-token", token)
+                                .header("Content-Type", "application/json")
+                                .bodyValue(b)
+                                .retrieve()
+                                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                                        .flatMap(e -> Mono.error(new RuntimeException("Dhan order " + r.statusCode() + ": " + e))))
+                                .bodyToMono(Map.class);
+                    }
                     return dhanClient.placeOrder(token, b);
                 }
                 return dhanClient.searchSecurityId(token, sym, dhanExch)
@@ -646,6 +713,19 @@ public class CopyEngineService {
                             b.put("securityId", found);
                             log.info("DHAN_ORDER_REQ masterSymbol={} childSymbol={} securityId={} qty={} (API search) masterBroker={}",
                                     symbol, sym, found, qty, masterBrokerId);
+                            // Route through per-user proxy if configured
+                            if (account.hasProxy()) {
+                                WebClient proxiedClient = proxyHttpClient.getWebClient(account, "https://api.dhan.co");
+                                return proxiedClient.post()
+                                        .uri("/v2/orders")
+                                        .header("access-token", token)
+                                        .header("Content-Type", "application/json")
+                                        .bodyValue(b)
+                                        .retrieve()
+                                        .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                                                .flatMap(e -> Mono.error(new RuntimeException("Dhan order " + r.statusCode() + ": " + e))))
+                                        .bodyToMono(Map.class);
+                            }
                             return dhanClient.placeOrder(token, b);
                         })
                         .switchIfEmpty(Mono.error(new RuntimeException(
@@ -679,6 +759,25 @@ public class CopyEngineService {
                 b.put("stoploss", "0");
                 b.put("quantity", String.valueOf(qty));
                 b.put("triggerprice", isSL ? String.valueOf(triggerPrice) : "0");
+                // Route through per-user proxy if configured
+                if (account.hasProxy()) {
+                    WebClient proxiedClient = proxyHttpClient.getWebClient(account, "https://apiconnect.angelone.in");
+                    return proxiedClient.post()
+                            .uri("/rest/secure/angelbroking/order/v1/placeOrder")
+                            .header("Authorization", "Bearer " + token)
+                            .header("X-PrivateKey", apiKey)
+                            .header("X-ClientLocalIP", "127.0.0.1")
+                            .header("X-ClientPublicIP", "127.0.0.1")
+                            .header("X-MACAddress", "00:00:00:00:00:00")
+                            .header("X-UserType", "USER")
+                            .header("X-SourceID", "WEB")
+                            .header("Content-Type", "application/json")
+                            .bodyValue(b)
+                            .retrieve()
+                            .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                                    .flatMap(e -> Mono.error(new RuntimeException("AngelOne placeOrder " + r.statusCode() + ": " + e))))
+                            .bodyToMono(Map.class);
+                }
                 return angelOneClient.placeOrder(apiKey, token, b);
             }
             default:

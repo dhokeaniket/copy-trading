@@ -7,6 +7,10 @@ public class LinkAccountRequest {
     private String apiSecret;
     private String accessToken;
     private String accountNickname;
+    private String proxyHost;
+    private Integer proxyPort;
+    private String proxyUser;
+    private String proxyPass;
 
     public String getBrokerId() { return brokerId; }
     public void setBrokerId(String brokerId) { this.brokerId = brokerId; }
@@ -20,4 +24,12 @@ public class LinkAccountRequest {
     public void setAccessToken(String accessToken) { this.accessToken = accessToken; }
     public String getAccountNickname() { return accountNickname; }
     public void setAccountNickname(String accountNickname) { this.accountNickname = accountNickname; }
+    public String getProxyHost() { return proxyHost; }
+    public void setProxyHost(String proxyHost) { this.proxyHost = proxyHost; }
+    public Integer getProxyPort() { return proxyPort; }
+    public void setProxyPort(Integer proxyPort) { this.proxyPort = proxyPort; }
+    public String getProxyUser() { return proxyUser; }
+    public void setProxyUser(String proxyUser) { this.proxyUser = proxyUser; }
+    public String getProxyPass() { return proxyPass; }
+    public void setProxyPass(String proxyPass) { this.proxyPass = proxyPass; }
 }

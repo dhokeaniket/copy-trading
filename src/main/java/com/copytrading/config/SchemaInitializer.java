@@ -125,7 +125,12 @@ public class SchemaInitializer {
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS price DOUBLE PRECISION",
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS trigger_price DOUBLE PRECISION",
                 // Price tolerance per child subscription (default 2%)
-                "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS price_tolerance_pct DOUBLE PRECISION NOT NULL DEFAULT 2.0"
+                "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS price_tolerance_pct DOUBLE PRECISION NOT NULL DEFAULT 2.0",
+                // Per-user proxy support: route broker API calls through user's own proxy
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_host VARCHAR(255)",
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_port INTEGER",
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_user VARCHAR(255)",
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_pass TEXT"
             };
 
             for (String sql : statements) {

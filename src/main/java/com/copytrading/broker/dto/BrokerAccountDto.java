@@ -22,6 +22,9 @@ public class BrokerAccountDto {
     private double pnl;
     private int positions;
     private int orders;
+    private String proxyHost;
+    private Integer proxyPort;
+    private boolean proxyConfigured;
 
     public static BrokerAccountDto from(BrokerAccount a) {
         BrokerAccountDto d = new BrokerAccountDto();
@@ -41,6 +44,9 @@ public class BrokerAccountDto {
         d.pnl = 0;
         d.positions = 0;
         d.orders = 0;
+        d.proxyHost = a.getProxyHost();
+        d.proxyPort = a.getProxyPort();
+        d.proxyConfigured = a.hasProxy();
         return d;
     }
 
@@ -79,4 +85,7 @@ public class BrokerAccountDto {
     public void setPositions(int positions) { this.positions = positions; }
     public int getOrders() { return orders; }
     public void setOrders(int orders) { this.orders = orders; }
+    public String getProxyHost() { return proxyHost; }
+    public Integer getProxyPort() { return proxyPort; }
+    public boolean isProxyConfigured() { return proxyConfigured; }
 }

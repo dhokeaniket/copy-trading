@@ -97,6 +97,10 @@ CREATE TABLE IF NOT EXISTS broker_accounts (
   status          VARCHAR(30) NOT NULL DEFAULT 'LINKED' CHECK (status IN ('LINKED','ACTIVE','INACTIVE','AUTH_REQUIRED')),
   session_active  BOOLEAN NOT NULL DEFAULT FALSE,
   session_expires TIMESTAMPTZ,
+  proxy_host      VARCHAR(255),
+  proxy_port      INTEGER,
+  proxy_user      VARCHAR(255),
+  proxy_pass      TEXT,
   linked_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
