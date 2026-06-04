@@ -154,9 +154,10 @@ public class OrderPollingService {
         UUID masterId = active.getMasterId();
         UUID brokerAccountId = active.getBrokerAccountId();
 
-        return brokerRepo.findById(brokerAccountId)
-                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
-                .flatMap(account -> brokerService.getOrders(brokerAccountId, masterId)
+        // Poll the active account AND any other accounts with valid tokens
+        return brokerRepo.findByUserId(masterId)
+                .filter(a -> a.getAccessToken() != null)
+                .flatMap(account -> brokerService.getOrders(account.getId(), masterId)
                         .map(resp -> {
                             List<?> ordersList = extractOrdersList(resp.get("orders"));
                             if (ordersList != null && !ordersList.isEmpty()) {
@@ -165,7 +166,7 @@ public class OrderPollingService {
                             return 0;
                         })
                         .onErrorResume(e -> {
-                            log.debug("POLL_ORDERS_FAIL master={} error={}", masterId, e.getMessage());
+                            log.debug("POLL_ORDERS_FAIL master={} broker={} error={}", masterId, account.getBrokerId(), e.getMessage());
                             return Mono.just(0);
                         }))
                 .then();

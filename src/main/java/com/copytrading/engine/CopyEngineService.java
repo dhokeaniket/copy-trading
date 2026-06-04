@@ -568,7 +568,7 @@ public class CopyEngineService {
                 b.put("stopPrice", isSL ? triggerPrice : 0);
                 b.put(BrokerFieldTranslator.validityFieldName("FYERS"), BrokerFieldTranslator.validityValue("FYERS"));
                 b.put("disclosedQty", 0);
-                b.put("offlineOrder", false);
+                b.put("offlineOrder", true);
                 b.put("stopLoss", 0);
                 b.put("takeProfit", 0);
                 return fyersClient.placeOrder(fyersAuth, b);
