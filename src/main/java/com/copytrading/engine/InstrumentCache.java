@@ -27,6 +27,8 @@ public class InstrumentCache {
     // Dhan: "RELIANCE" → "2885"
     private final ConcurrentHashMap<String, String> dhanEq = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> dhanFno = new ConcurrentHashMap<>();
+    // Dhan F&O keyed by tradingSymbol+expiryDate: "NIFTY-JUN2026-26100-CE|2026-06-09" → "42466"
+    private final ConcurrentHashMap<String, String> dhanFnoByExpiry = new ConcurrentHashMap<>();
 
     // Upstox: "RELIANCE" → "NSE_EQ|INE002A01018"
     private final ConcurrentHashMap<String, String> upstoxEq = new ConcurrentHashMap<>();
@@ -85,10 +87,20 @@ public class InstrumentCache {
                                 } else if ("D".equalsIgnoreCase(seg)) {
                                     String upper = tradingSym.toUpperCase();
                                     dhanFno.put(upper, secId);
+                                    // Also key by tradingSymbol + expiryDate for weekly/monthly disambiguation
                                     if (c.length > 8) {
+                                        String expiry = c[8].trim(); // e.g. "2026-06-09 14:30:00"
+                                        if (expiry.length() >= 10) {
+                                            String expiryDate = expiry.substring(0, 10); // "2026-06-09"
+                                            dhanFnoByExpiry.put(upper + "|" + expiryDate, secId);
+                                        }
                                         try {
-                                            int lot = (int) Double.parseDouble(c[8].trim());
-                                            if (lot > 0) lotSizeBySymbol.put(upper, lot);
+                                            // Lot size is in column index 6 (0-based)
+                                            int lotIdx = 6;
+                                            if (c.length > lotIdx) {
+                                                int lot = (int) Double.parseDouble(c[lotIdx].trim());
+                                                if (lot > 0) lotSizeBySymbol.put(upper, lot);
+                                            }
                                         } catch (Exception ignored) { /* optional column */ }
                                     }
                                     count++;
@@ -251,9 +263,26 @@ public class InstrumentCache {
 
     /** Dhan: get numeric securityId for a symbol */
     public String getDhanSecurityId(String symbol, boolean isFnO) {
+        return getDhanSecurityId(symbol, isFnO, null);
+    }
+
+    /**
+     * Lookup Dhan securityId. If expiryDate (yyyy-MM-dd) is provided,
+     * does precise lookup by tradingSymbol+expiry to avoid weekly/monthly collisions.
+     */
+    public String getDhanSecurityId(String symbol, boolean isFnO, String expiryDate) {
         if (symbol == null) return null;
         String upper = symbol.toUpperCase().replace("-EQ", "").trim();
         if (!isFnO) return dhanEq.get(upper);
+        // Try precise lookup with expiry date first
+        if (expiryDate != null && !expiryDate.isBlank()) {
+            String precise = dhanFnoByExpiry.get(upper + "|" + expiryDate);
+            if (precise != null) return precise;
+            // Also try without spaces
+            precise = dhanFnoByExpiry.get(upper.replace(" ", "") + "|" + expiryDate);
+            if (precise != null) return precise;
+        }
+        // Fallback to simple lookup (may pick wrong expiry for duplicates)
         String id = dhanFno.get(upper);
         if (id != null) return id;
         return dhanFno.get(upper.replace(" ", ""));

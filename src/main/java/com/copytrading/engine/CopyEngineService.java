@@ -663,9 +663,11 @@ public class CopyEngineService {
                 // securityId resolved from Dhan instrument CSV (loaded on startup)
                 String dhanExch = BrokerFieldTranslator.exchangeSegment(exch, "DHAN", isFnO);
                 String dhanProd = BrokerFieldTranslator.product(prod, "DHAN", isFnO);
-                String secId = instruments.getDhanSecurityId(sym, isFnO);
+                // Derive expiry date from master symbol for precise weekly/monthly lookup
+                String expiryDate = symbolMapper.extractExpiryDate(symbol, masterBrokerId);
+                String secId = instruments.getDhanSecurityId(sym, isFnO, expiryDate);
                 if (secId == null && !sym.equalsIgnoreCase(symbol)) {
-                    secId = instruments.getDhanSecurityId(symbol, isFnO);
+                    secId = instruments.getDhanSecurityId(symbol, isFnO, expiryDate);
                 }
                 String clientId = account.getClientId() != null && !account.getClientId().isBlank()
                         ? account.getClientId()

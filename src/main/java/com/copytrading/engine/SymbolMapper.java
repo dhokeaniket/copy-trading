@@ -168,6 +168,8 @@ public class SymbolMapper {
                 }
                 if (p.month == null || p.month.isEmpty()) return p.underlying + p.year + p.strike + p.type;
                 String monthCap = p.month.substring(0, 1).toUpperCase() + p.month.substring(1).toLowerCase();
+                // Dhan uses same tradingSymbol for weekly and monthly (no day in symbol)
+                // The correct expiry is resolved via securityId lookup using expiryDate
                 return p.underlying + "-" + monthCap + "20" + p.year + "-" + p.strike + "-" + p.type;
             }
             case "ANGELONE" -> {
@@ -220,4 +222,27 @@ public class SymbolMapper {
     }
 
     private record ParsedSymbol(String underlying, String year, String month, String date, String strike, String type) {}
+
+    /**
+     * Extract expiry date as yyyy-MM-dd from an F&O symbol (any broker format).
+     * E.g., NIFTY2660926100CE → 2026-06-09
+     * Returns null if not parseable or not a derivative.
+     */
+    public String extractExpiryDate(String symbol, String broker) {
+        if (symbol == null || !isDerivative(symbol)) return null;
+        String src = broker != null && !broker.isBlank() ? broker.toUpperCase() : inferSourceBroker(symbol);
+        ParsedSymbol parsed = parse(symbol, src);
+        if (parsed == null) return null;
+        int monthNum = 0;
+        for (int i = 1; i < MONTHS.length; i++) {
+            if (MONTHS[i].equals(parsed.month)) { monthNum = i; break; }
+        }
+        if (monthNum == 0) return null;
+        String day = parsed.date;
+        if (day == null || day.isEmpty()) {
+            // Monthly — we don't know the exact day, return null to fall back
+            return null;
+        }
+        return String.format("20%s-%02d-%02d", parsed.year, monthNum, Integer.parseInt(day));
+    }
 }
