@@ -302,7 +302,8 @@ public class MasterService {
                 listChildren(masterId),
                 positionsService.getMasterPositions(masterId).onErrorReturn(Map.of("totalPnl", 0, "positions", List.of())),
                 copyLogs.findByMasterId(masterId).collectList(),
-                buildPnlSnapshot(masterId)
+                buildPnlSnapshot(masterId),
+                tradeRepository.findByUserIdOrderByPlacedAtDesc(masterId).collectList()
         ).map(t -> {
             Map<String, Object> active = t.getT1();
             @SuppressWarnings("unchecked")
@@ -310,6 +311,7 @@ public class MasterService {
             Map<String, Object> masterPos = t.getT3();
             List<CopyLog> logs = t.getT4();
             MasterPnlCalculator.PnlSnapshot snap = t.getT5();
+            List<com.copytrading.trade.Trade> masterTrades = t.getT6();
 
             double masterUnrealized = MasterChildMetricsHelper.toDouble(masterPos.get("totalPnl"));
             double followersUnrealized = children.stream()
@@ -337,11 +339,15 @@ public class MasterService {
             summary.put("todayPnl", MasterChildMetricsHelper.round2(snap.todayRealised() + masterUnrealized));
             summary.put("totalFollowerMarginAvailable", MasterChildMetricsHelper.round2(totalMarginAvailable));
             summary.put("activeFollowers", children.stream().filter(c -> "ACTIVE".equals(c.get("copyingStatus"))).count());
+            summary.put("totalTrades", masterTrades.size());
             summary.put("totalCopiesSuccess", success);
             summary.put("totalCopiesFailed", failed);
             summary.put("todayCopiesSuccess", todaySuccess);
-            summary.put("replicationSuccessRate", success + failed > 0
-                    ? Math.round(success * 100.0 / (success + failed)) : 0);
+            long totalCopyAttempts = success + failed;
+            summary.put("winRate", totalCopyAttempts > 0
+                    ? Math.round(success * 100.0 / totalCopyAttempts) : 0);
+            summary.put("replicationSuccessRate", totalCopyAttempts > 0
+                    ? Math.round(success * 100.0 / totalCopyAttempts) : 0);
 
             List<Map<String, Object>> dailyChart = snap.dailyPnl();
             if (dailyChart.size() > 7) {

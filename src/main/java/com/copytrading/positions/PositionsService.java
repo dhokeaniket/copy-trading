@@ -11,6 +11,8 @@ import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import com.copytrading.broker.angelone.AngelOneApiClient;
 import com.copytrading.master.MasterActiveAccountRepository;
 import com.copytrading.security.BrokerCredentials;
+import com.copytrading.trade.Trade;
+import com.copytrading.trade.TradeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -38,6 +40,7 @@ public class PositionsService {
     private final AngelOneApiClient angelOneClient;
     private final PlatformBrokerConfig platformConfig;
     private final BrokerCredentials credentials;
+    private final TradeRepository tradeRepo;
 
     public PositionsService(BrokerAccountRepository brokerRepo,
                             MasterActiveAccountRepository activeAccountRepo,
@@ -48,7 +51,8 @@ public class PositionsService {
                             DhanApiClient dhanClient,
                             AngelOneApiClient angelOneClient,
                             PlatformBrokerConfig platformConfig,
-                            BrokerCredentials credentials) {
+                            BrokerCredentials credentials,
+                            TradeRepository tradeRepo) {
         this.brokerRepo = brokerRepo;
         this.activeAccountRepo = activeAccountRepo;
         this.growwClient = growwClient;
@@ -59,10 +63,12 @@ public class PositionsService {
         this.angelOneClient = angelOneClient;
         this.platformConfig = platformConfig;
         this.credentials = credentials;
+        this.tradeRepo = tradeRepo;
     }
 
     /**
      * Get positions for a master user using their active broker account.
+     * Falls back to trades table if broker session unavailable.
      */
     public Mono<Map<String, Object>> getMasterPositions(UUID masterId) {
         return activeAccountRepo.findById(masterId)
@@ -74,17 +80,20 @@ public class PositionsService {
                             .next()
                 )
                 .flatMap(this::fetchAndNormalizePositions)
+                .switchIfEmpty(Mono.defer(() -> fallbackFromTrades(masterId)))
                 .defaultIfEmpty(noAccountResponse());
     }
 
     /**
      * Get positions for a child user using their first active broker account.
+     * Falls back to trades table if broker session unavailable.
      */
     public Mono<Map<String, Object>> getChildPositions(UUID childId) {
         return brokerRepo.findByUserId(childId)
                 .filter(a -> a.getAccessToken() != null)
                 .next()
                 .flatMap(this::fetchAndNormalizePositions)
+                .switchIfEmpty(Mono.defer(() -> fallbackFromTrades(childId)))
                 .defaultIfEmpty(noAccountResponse());
     }
 
@@ -123,14 +132,7 @@ public class PositionsService {
                 })
                 .onErrorResume(e -> {
                     log.error("POSITIONS_FETCH_ERROR broker={} error={}", account.getBrokerId(), e.getMessage());
-                    Map<String, Object> fallback = new LinkedHashMap<>();
-                    fallback.put("positions", List.of());
-                    fallback.put("totalPnl", 0);
-                    fallback.put("count", 0);
-                    fallback.put("error", "Failed to fetch positions: " + e.getMessage());
-                    fallback.put("errorCode", "SESSION_EXPIRED");
-                    fallback.put("action", "RE_LOGIN");
-                    return Mono.just(fallback);
+                    return Mono.empty(); // fall through to DB fallback
                 });
     }
 
@@ -375,6 +377,55 @@ public class PositionsService {
         if (v == null) return defaultVal;
         if (v instanceof Number) return ((Number) v).doubleValue();
         try { return Double.parseDouble(v.toString()); } catch (Exception e) { return defaultVal; }
+    }
+
+    /**
+     * Fallback: build positions-like data from the trades table when broker is offline.
+     * Shows executed trades grouped by instrument with realized P&L from DB.
+     */
+    private Mono<Map<String, Object>> fallbackFromTrades(UUID userId) {
+        return tradeRepo.findByUserIdOrderByPlacedAtDesc(userId)
+                .filter(t -> "EXECUTED".equalsIgnoreCase(t.getStatus()) || "COMPLETE".equalsIgnoreCase(t.getStatus()))
+                .collectList()
+                .map(trades -> {
+                    if (trades.isEmpty()) return noAccountResponse();
+                    // Group by instrument, net out qty (BUY adds, SELL subtracts)
+                    Map<String, int[]> netQty = new LinkedHashMap<>(); // instrument -> [qty, totalBuyValue, totalSellValue]
+                    Map<String, double[]> prices = new LinkedHashMap<>(); // instrument -> [avgBuyPrice, lastPrice, realized]
+                    for (Trade t : trades) {
+                        String inst = t.getInstrument() != null ? t.getInstrument() : "UNKNOWN";
+                        netQty.putIfAbsent(inst, new int[]{0});
+                        prices.putIfAbsent(inst, new double[]{0, 0, 0});
+                        int qty = t.getQuantity();
+                        if ("BUY".equalsIgnoreCase(t.getTransactionType())) {
+                            netQty.get(inst)[0] += qty;
+                            if (t.getPrice() > 0) prices.get(inst)[0] = t.getPrice(); // last known buy price
+                        } else {
+                            netQty.get(inst)[0] -= qty;
+                            if (t.getPrice() > 0) prices.get(inst)[1] = t.getPrice(); // last known sell price
+                        }
+                    }
+                    List<PositionDto> positions = new ArrayList<>();
+                    double totalPnl = 0;
+                    for (Map.Entry<String, int[]> e : netQty.entrySet()) {
+                        int qty = e.getValue()[0];
+                        if (qty == 0) continue; // closed position
+                        double[] p = prices.get(e.getKey());
+                        double avgPrice = p[0] > 0 ? p[0] : p[1];
+                        double ltp = p[1] > 0 ? p[1] : avgPrice; // use sell price as last known or same as buy
+                        String side = qty > 0 ? "BUY" : "SELL";
+                        PositionDto dto = new PositionDto(e.getKey(), Math.abs(qty), avgPrice, ltp, side, "NSE", "MIS");
+                        totalPnl += dto.getPnl();
+                        positions.add(dto);
+                    }
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("positions", positions);
+                    result.put("totalPnl", totalPnl);
+                    result.put("count", positions.size());
+                    result.put("source", "DB_FALLBACK");
+                    result.put("note", "Live broker data unavailable. Showing positions from trade history.");
+                    return result;
+                });
     }
 
     private Map<String, Object> noAccountResponse() {
