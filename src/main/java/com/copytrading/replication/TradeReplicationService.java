@@ -79,7 +79,9 @@ public class TradeReplicationService {
         r.setSide(req.getSide());
         r.setOrderType(req.getOrderType());
         r.setPrice(req.getPrice());
-        r.setQuantity((int) Math.max(1, Math.round(req.getQuantity() * scale)));
+        // Use Math.round (consistent with CopyEngineService); don't force min 1
+        // — if scaled qty rounds to 0, the order should be skipped, not placed for 1 share.
+        r.setQuantity((int) Math.round(req.getQuantity() * scale));
         return r;
     }
 }

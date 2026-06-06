@@ -271,7 +271,8 @@ public class CopyEngineService {
         UUID childId = sub.getChildId();
         UUID brokerAccountId = sub.getBrokerAccountId();
         double scale = sub.getScalingFactor();
-        int rawScaled = (int) (req.getQty() * scale);
+        // Use Math.round to avoid float truncation (e.g., 3 * 1.0 stored as 0.9999... → 2 with (int) cast)
+        int rawScaled = (int) Math.round(req.getQty() * scale);
         int scaledQty = lotScaler.apply(rawScaled, req.getSymbol());
 
         if (scaledQty < 1) {

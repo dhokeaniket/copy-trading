@@ -122,7 +122,9 @@ public class RiskService {
         double available = toDouble(margin.getOrDefault("availableMargin", 0));
         if (total <= 0) return "";
         double usedPct = ((total - available) / total) * 100.0;
-        if (usedPct >= maxExposurePct) {
+        // Use > instead of >= with 0.01 tolerance to avoid float boundary non-determinism
+        // e.g., exactly at 80% stored as 79.99999... should NOT block
+        if (usedPct > maxExposurePct + 0.01) {
             return "MAX_CAPITAL_EXPOSURE: Margin utilization " + String.format("%.1f", usedPct)
                     + "% exceeds limit " + maxExposurePct + "%";
         }
@@ -133,8 +135,11 @@ public class RiskService {
         if (o == null) return 0;
         if (o instanceof Number n) return n.doubleValue();
         try {
-            return Double.parseDouble(o.toString());
+            String s = o.toString().trim();
+            if (s.isEmpty()) return 0;
+            return Double.parseDouble(s);
         } catch (Exception e) {
+            log.warn("RISK_PARSE_ERROR: cannot parse '{}' as double, treating as 0", o);
             return 0;
         }
     }
@@ -174,7 +179,7 @@ public class RiskService {
                         m.put("maxCapitalExposure", rule.getMaxCapitalExposure());
                         m.put("marginCheckEnabled", rule.isMarginCheckEnabled());
                         m.put("marginUtilizationPct", Math.round(usedPct * 10) / 10.0);
-                        m.put("marginBlocked", rule.isMarginCheckEnabled() && usedPct >= rule.getMaxCapitalExposure());
+                        m.put("marginBlocked", rule.isMarginCheckEnabled() && usedPct > rule.getMaxCapitalExposure() + 0.01);
                         m.put("availableMargin", available);
                         m.put("usedMargin", total - available);
                         m.put("totalFunds", total);
