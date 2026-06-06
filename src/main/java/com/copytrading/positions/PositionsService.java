@@ -312,13 +312,33 @@ public class PositionsService {
     }
 
     private PositionDto mapUpstoxPosition(Map<String, Object> p) {
-        String symbol = getString(p, "trading_symbol", getString(p, "tradingsymbol", "UNKNOWN"));
-        int qty = getInt(p, "quantity", getInt(p, "net_quantity", 0));
+        String symbol = getString(p, "trading_symbol", getString(p, "tradingsymbol",
+                getString(p, "symbol", "UNKNOWN")));
+        // Upstox v2: quantity = net qty (positive=long, negative=short)
+        // Also try buy_quantity - sell_quantity for net calculation
+        int qty = getInt(p, "quantity", 0);
+        if (qty == 0) {
+            int buyQty = getInt(p, "buy_quantity", getInt(p, "day_buy_quantity", 0));
+            int sellQty = getInt(p, "sell_quantity", getInt(p, "day_sell_quantity", 0));
+            qty = buyQty - sellQty;
+        }
+        // Upstox: average_price may be 0; fall back to buy_price or sell_price
         double avgPrice = getDouble(p, "average_price", 0);
-        double ltp = getDouble(p, "last_price", getDouble(p, "ltp", 0));
-        double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised", Double.NaN));
+        if (avgPrice == 0) {
+            avgPrice = getDouble(p, "buy_price", getDouble(p, "buy_avg",
+                    getDouble(p, "day_buy_price", 0)));
+        }
+        if (avgPrice == 0) {
+            avgPrice = getDouble(p, "sell_price", getDouble(p, "sell_avg",
+                    getDouble(p, "day_sell_price", 0)));
+        }
+        double ltp = getDouble(p, "last_price", getDouble(p, "ltp",
+                getDouble(p, "close_price", 0)));
+        double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised",
+                getDouble(p, "realised", Double.NaN)));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
+        // Upstox product: I=intraday, D=delivery, CO=cover, OCO=bracket
         String product = getString(p, "product", "D");
         if (!Double.isNaN(brokerPnl)) {
             return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
