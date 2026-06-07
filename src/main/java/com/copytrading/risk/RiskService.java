@@ -1,6 +1,7 @@
 package com.copytrading.risk;
 
 import com.copytrading.broker.BrokerAccountService;
+import com.copytrading.engine.Money;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.trade.TradeRepository;
 import org.slf4j.Logger;
@@ -121,11 +122,9 @@ public class RiskService {
         double total = toDouble(margin.getOrDefault("totalFunds", 0));
         double available = toDouble(margin.getOrDefault("availableMargin", 0));
         if (total <= 0) return "";
-        double usedPct = ((total - available) / total) * 100.0;
-        // Use > instead of >= with 0.01 tolerance to avoid float boundary non-determinism
-        // e.g., exactly at 80% stored as 79.99999... should NOT block
-        if (usedPct > maxExposurePct + 0.01) {
-            return "MAX_CAPITAL_EXPOSURE: Margin utilization " + String.format("%.1f", usedPct)
+        java.math.BigDecimal usedPct = Money.marginPct(total, available);
+        if (Money.exceeds(usedPct, java.math.BigDecimal.valueOf(maxExposurePct))) {
+            return "MAX_CAPITAL_EXPOSURE: Margin utilization " + usedPct.toPlainString()
                     + "% exceeds limit " + maxExposurePct + "%";
         }
         return "";
