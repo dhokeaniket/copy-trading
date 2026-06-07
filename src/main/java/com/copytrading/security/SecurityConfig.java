@@ -86,6 +86,7 @@ public class SecurityConfig {
                         .pathMatchers("/", "/health").permitAll()
                         .pathMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**").permitAll()
                         .pathMatchers("/api/v1/auth/register", "/api/v1/auth/login").permitAll()
+                        .pathMatchers("/api/v1/auth/google").permitAll()
                         .pathMatchers(
                                 "/api/v1/auth/send-email-otp",
                                 "/api/v1/auth/send-login-otp",

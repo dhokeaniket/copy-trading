@@ -42,6 +42,9 @@ dependencies {
     // Twilio Verify for OTP SMS
     implementation 'com.twilio.sdk:twilio:9.3.0'
 
+    // Google OAuth2 ID token verification
+    implementation 'com.google.api-client:google-api-client:2.2.0'
+
     runtimeOnly 'org.postgresql:postgresql'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

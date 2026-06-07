@@ -25,4 +25,6 @@ public interface UserAccountRepository extends ReactiveCrudRepository<UserAccoun
     Mono<UserAccount> findByPhone(String phone);
 
     Mono<Boolean> existsByPhone(String phone);
+
+    Mono<UserAccount> findByGoogleId(String googleId);
 }

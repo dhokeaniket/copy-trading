@@ -20,10 +20,12 @@ public class AuthController {
 
     private final AuthService authService;
     private final OtpService otpService;
+    private final GoogleAuthService googleAuthService;
 
-    public AuthController(AuthService authService, OtpService otpService) {
+    public AuthController(AuthService authService, OtpService otpService, GoogleAuthService googleAuthService) {
         this.authService = authService;
         this.otpService = otpService;
+        this.googleAuthService = googleAuthService;
     }
 
     @Operation(summary = "Send SMS OTP", description = "Send OTP to registered phone (Twilio)")
@@ -112,6 +114,17 @@ public class AuthController {
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<LoginResponse> login(@RequestBody LoginRequest req) {
         return authService.login(req);
+    }
+
+    @Operation(summary = "Login with Google", description = "Send the Google ID token (credential) from frontend Sign-In. Auto-registers if new user.")
+    @PostMapping(value = "/google", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> googleLogin(@RequestBody Map<String, String> body) {
+        String idToken = body.get("idToken");
+        if (idToken == null || idToken.isBlank()) {
+            idToken = body.get("credential"); // Google's default field name
+        }
+        String role = body.getOrDefault("role", "CHILD");
+        return googleAuthService.loginWithGoogle(idToken, role);
     }
 
     @PostMapping(value = "/logout", consumes = MediaType.APPLICATION_JSON_VALUE)

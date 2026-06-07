@@ -2,6 +2,9 @@ server:
   port: ${PORT:8081}
   address: 0.0.0.0
 
+google:
+  client-id: ${GOOGLE_CLIENT_ID:}
+
 app:
   name: Ascentra Capital
   kafka:

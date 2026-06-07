@@ -130,7 +130,10 @@ public class SchemaInitializer {
                 "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_host VARCHAR(255)",
                 "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_port INTEGER",
                 "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_user VARCHAR(255)",
-                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_pass TEXT"
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_pass TEXT",
+                // Google OAuth
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255)",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT"
             };
 
             for (String sql : statements) {
