@@ -55,6 +55,9 @@ public class BrokerAccount {
     @Column("proxy_pass")
     private String proxyPass;
 
+    @Column("totp_secret")
+    private String totpSecret;
+
     @Column("linked_at")
     private Instant linkedAt;
 
@@ -95,6 +98,8 @@ public class BrokerAccount {
     public void setProxyUser(String proxyUser) { this.proxyUser = proxyUser; }
     public String getProxyPass() { return proxyPass; }
     public void setProxyPass(String proxyPass) { this.proxyPass = proxyPass; }
+    public String getTotpSecret() { return totpSecret; }
+    public void setTotpSecret(String totpSecret) { this.totpSecret = totpSecret; }
 
     /** Returns true if this account has a per-user proxy configured. */
     public boolean hasProxy() {

@@ -789,21 +789,12 @@ public class CopyEngineService {
     }
 
     private String extractOrderId(Map response) {
-        if (response == null) return "unknown";
-        // Different brokers return orderId in different fields
-        for (String key : List.of("order_id", "orderId", "orderid", "uniqueorderid", "data", "id", "payload")) {
-            Object val = response.get(key);
-            if (val instanceof String s && !s.isBlank()) return s;
-            if (val instanceof Map m) {
-                // Nested: data.order_id (Upstox, Zerodha), data.orderid (AngelOne)
-                Object inner = m.get("order_id");
-                if (inner == null) inner = m.get("orderId");
-                if (inner == null) inner = m.get("orderid");
-                if (inner == null) inner = m.get("uniqueorderid");
-                if (inner != null) return inner.toString();
-            }
-        }
-        return response.toString().substring(0, Math.min(100, response.toString().length()));
+        return OrderIdExtractor.extract(response, null).brokerOrderId();
+    }
+
+    /** Extract both broker and exchange order IDs for a specific broker. */
+    private OrderIdExtractor.OrderIds extractOrderIds(Map response, String brokerId) {
+        return OrderIdExtractor.extract(response, brokerId);
     }
 
     private Mono<Map<String, Object>> logAndReturn(UUID masterId, UUID childId, CopyTradeRequest req,

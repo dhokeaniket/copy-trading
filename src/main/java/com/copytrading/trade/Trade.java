@@ -13,6 +13,7 @@ public class Trade {
     @Column("user_id") private UUID userId;
     @Column("broker_account_id") private UUID brokerAccountId;
     @Column("broker_order_id") private String brokerOrderId;
+    @Column("exchange_order_id") private String exchangeOrderId;
     private String instrument;
     private String exchange;
     private String segment;
@@ -33,6 +34,7 @@ public class Trade {
     public UUID getUserId() { return userId; } public void setUserId(UUID userId) { this.userId = userId; }
     public UUID getBrokerAccountId() { return brokerAccountId; } public void setBrokerAccountId(UUID v) { this.brokerAccountId = v; }
     public String getBrokerOrderId() { return brokerOrderId; } public void setBrokerOrderId(String v) { this.brokerOrderId = v; }
+    public String getExchangeOrderId() { return exchangeOrderId; } public void setExchangeOrderId(String v) { this.exchangeOrderId = v; }
     public String getInstrument() { return instrument; } public void setInstrument(String v) { this.instrument = v; }
     public String getExchange() { return exchange; } public void setExchange(String v) { this.exchange = v; }
     public String getSegment() { return segment; } public void setSegment(String v) { this.segment = v; }

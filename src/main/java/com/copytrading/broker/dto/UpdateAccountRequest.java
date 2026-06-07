@@ -9,6 +9,7 @@ public class UpdateAccountRequest {
     private Integer proxyPort;
     private String proxyUser;
     private String proxyPass;
+    private String totpSecret;
 
     public String getApiKey() { return apiKey; }
     public void setApiKey(String apiKey) { this.apiKey = apiKey; }
@@ -26,4 +27,6 @@ public class UpdateAccountRequest {
     public void setProxyUser(String proxyUser) { this.proxyUser = proxyUser; }
     public String getProxyPass() { return proxyPass; }
     public void setProxyPass(String proxyPass) { this.proxyPass = proxyPass; }
+    public String getTotpSecret() { return totpSecret; }
+    public void setTotpSecret(String totpSecret) { this.totpSecret = totpSecret; }
 }

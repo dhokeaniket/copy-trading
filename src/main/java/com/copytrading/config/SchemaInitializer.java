@@ -133,7 +133,12 @@ public class SchemaInitializer {
                 "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_pass TEXT",
                 // Google OAuth
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255)",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT"
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT",
+                // Exchange order ID for reconciliation
+                "ALTER TABLE trades ADD COLUMN IF NOT EXISTS exchange_order_id VARCHAR(100)",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS exchange_order_id VARCHAR(100)",
+                // TOTP secret per broker account (encrypted, for auto-TOTP generation)
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS totp_secret TEXT"
             };
 
             for (String sql : statements) {

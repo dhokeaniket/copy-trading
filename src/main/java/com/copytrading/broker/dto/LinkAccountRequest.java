@@ -11,6 +11,7 @@ public class LinkAccountRequest {
     private Integer proxyPort;
     private String proxyUser;
     private String proxyPass;
+    private String totpSecret;
 
     public String getBrokerId() { return brokerId; }
     public void setBrokerId(String brokerId) { this.brokerId = brokerId; }
@@ -32,4 +33,6 @@ public class LinkAccountRequest {
     public void setProxyUser(String proxyUser) { this.proxyUser = proxyUser; }
     public String getProxyPass() { return proxyPass; }
     public void setProxyPass(String proxyPass) { this.proxyPass = proxyPass; }
+    public String getTotpSecret() { return totpSecret; }
+    public void setTotpSecret(String totpSecret) { this.totpSecret = totpSecret; }
 }
