@@ -772,6 +772,18 @@ public class BrokerAccountService {
                 fallback.put("errorCode", "SESSION_EXPIRED");
                 fallback.put("action", "RE_LOGIN");
                 if (isAuthError(e)) {
+                    // Grace period: don't nuke session if it was activated less than 2 minutes ago
+                    // (prevents race condition where status check kills a freshly logged-in session)
+                    boolean withinGrace = a.getSessionExpires() != null
+                            && a.getSessionExpires().minusSeconds(86400 - 120).isAfter(Instant.now());
+                    if (withinGrace) {
+                        log.warn("AUTH_ERROR_WITHIN_GRACE_PERIOD accountId={} broker={} — skipping session nuke",
+                                accountId, a.getBrokerId());
+                        fallback.remove("action");
+                        fallback.put("errorCode", "TRANSIENT_ERROR");
+                        fallback.put("action", "RETRY");
+                        return Mono.just(fallback);
+                    }
                     a.setSessionActive(false);
                     a.setStatus("AUTH_REQUIRED");
                     a.setAccessToken(null);
@@ -1827,8 +1839,15 @@ public class BrokerAccountService {
 
     private static boolean isAuthError(Throwable e) {
         String msg = e != null ? e.getMessage() : null;
-        return msg != null && (msg.contains("401") || msg.contains("403")
-                || msg.contains("Unauthorized") || msg.contains("Invalid"));
+        if (msg == null) return false;
+        // 401 = definitely auth failure
+        if (msg.contains("401") || msg.contains("Unauthorized")) return true;
+        // 403 alone is NOT auth failure — Upstox/Groww use 403 for IP blocks and rate limits.
+        // Only treat 403 as auth if combined with explicit token/session messages:
+        if (msg.contains("403") && (msg.contains("token") || msg.contains("session") || msg.contains("login"))) return true;
+        // "Invalid" only if clearly about auth (not "Invalid quantity" etc.)
+        if (msg.contains("Invalid") && (msg.contains("token") || msg.contains("session") || msg.contains("key"))) return true;
+        return false;
     }
 
     private static String friendlyBrokerError(String broker, String rawError) {
