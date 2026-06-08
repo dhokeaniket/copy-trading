@@ -579,7 +579,17 @@ public class BrokerAccountService {
         a.setStatus("ACTIVE");
         a.setSessionExpires(Instant.now().plusSeconds(86400));
         credentials.encryptSensitiveFields(a);
-        return repo.save(a).map(s -> {
+        return repo.save(a).flatMap(s -> {
+            // Auto-migrate subscriptions: if user has other inactive accounts of same broker type,
+            // move all subscriptions to this newly active account
+            return subscriptionRepo.migrateToActiveAccount(s.getUserId(), s.getBrokerId(), s.getId())
+                    .doOnNext(count -> {
+                        if (count > 0) log.info("SUBSCRIPTION_MIGRATED userId={} broker={} toAccount={} count={}",
+                                s.getUserId(), s.getBrokerId(), s.getId(), count);
+                    })
+                    .onErrorResume(e -> { log.warn("SUBSCRIPTION_MIGRATE_FAILED: {}", e.getMessage()); return Mono.just(0); })
+                    .thenReturn(s);
+        }).map(s -> {
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("status", "SESSION_ACTIVE");
             r.put("broker", brokerName);
