@@ -17,4 +17,6 @@ public interface BrokerAccountRepository extends ReactiveCrudRepository<BrokerAc
 
     @Query("SELECT COALESCE(MAX(ip_slot), -1) FROM broker_accounts WHERE broker_id = 'GROWW'")
     Mono<Integer> findMaxGrowwIpSlot();
+
+    Mono<Void> deleteByUserId(UUID userId);
 }

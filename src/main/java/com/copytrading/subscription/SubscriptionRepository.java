@@ -36,4 +36,8 @@ public interface SubscriptionRepository extends ReactiveCrudRepository<Subscript
     @Modifying
     @Query("UPDATE subscriptions SET broker_account_id = :activeAccountId WHERE child_id = :childId AND broker_account_id IN (SELECT id FROM broker_accounts WHERE user_id = :childId AND broker_id = :brokerId AND id != :activeAccountId)")
     Mono<Integer> migrateToActiveAccount(UUID childId, String brokerId, UUID activeAccountId);
+
+    @Modifying
+    @Query("DELETE FROM subscriptions WHERE master_id = :masterId OR child_id = :childId")
+    Mono<Void> deleteByMasterIdOrChildId(UUID masterId, UUID childId);
 }
