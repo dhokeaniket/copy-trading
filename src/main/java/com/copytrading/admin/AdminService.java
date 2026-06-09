@@ -34,6 +34,7 @@ public class AdminService {
     private final com.copytrading.notification.NotificationRepository notificationRepo;
     private final com.copytrading.master.MasterActiveAccountRepository masterActiveRepo;
     private final com.copytrading.logs.CopyLogRepository copyLogRepo;
+    private final org.springframework.r2dbc.core.DatabaseClient databaseClient;
 
     public AdminService(UserAccountRepository users,
                         RefreshTokenRepository refreshTokens,
@@ -44,7 +45,8 @@ public class AdminService {
                         com.copytrading.trade.TradeRepository tradeRepo,
                         com.copytrading.notification.NotificationRepository notificationRepo,
                         com.copytrading.master.MasterActiveAccountRepository masterActiveRepo,
-                        com.copytrading.logs.CopyLogRepository copyLogRepo) {
+                        com.copytrading.logs.CopyLogRepository copyLogRepo,
+                        org.springframework.r2dbc.core.DatabaseClient databaseClient) {
         this.users = users;
         this.refreshTokens = refreshTokens;
         this.authService = authService;
@@ -55,6 +57,7 @@ public class AdminService {
         this.notificationRepo = notificationRepo;
         this.masterActiveRepo = masterActiveRepo;
         this.copyLogRepo = copyLogRepo;
+        this.databaseClient = databaseClient;
     }
 
     // 2.1 List users with optional filters
@@ -164,7 +167,7 @@ public class AdminService {
                 });
     }
 
-    // 2.8 Delete user (cascade: removes all related data)
+    // 2.8 Delete user (cascade: removes all related data using raw SQL)
     public Mono<Map<String, String>> deleteUser(UUID userId) {
         return users.findById(userId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
@@ -173,23 +176,23 @@ public class AdminService {
                         return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot delete admin accounts"));
                     }
                     log.warn("ADMIN_DELETE_USER id={} email={} role={}", u.getId(), u.getEmail(), u.getRole());
-                    // Use raw SQL via R2DBC to cascade-delete all user data
-                    return brokerAccountRepo.findByUserId(userId).collectList()
-                            .flatMap(accounts -> {
-                                // Simple approach: delete user and let individual tables clean up
-                                return subscriptionRepo.deleteByMasterIdOrChildId(userId, userId)
-                                        .then(copyLogRepo.deleteByMasterIdOrChildId(userId, userId))
-                                        .then(masterActiveRepo.deleteByMasterId(userId))
-                                        .then(refreshTokens.revokeAllByUserId(userId))
-                                        .onErrorResume(e -> { log.warn("DELETE_STEP_ERROR: {}", e.getMessage()); return Mono.empty(); })
-                                        .then(Mono.defer(() -> {
-                                            // Delete broker accounts
-                                            return Flux.fromIterable(accounts)
-                                                    .flatMap(a -> brokerAccountRepo.deleteById(a.getId()))
-                                                    .then();
-                                        }))
-                                        .then(users.deleteById(userId))
-                                        .thenReturn(Map.of("message", "User and all related data permanently deleted"));
+                    String uid = userId.toString();
+                    // Execute cascade delete as raw SQL statements
+                    return databaseClient.sql("DELETE FROM copy_logs WHERE master_id = :id OR child_id = :id").bind("id", userId).then()
+                            .then(databaseClient.sql("DELETE FROM trade_logs WHERE master_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM subscriptions WHERE master_id = :id OR child_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM master_active_accounts WHERE master_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM trades WHERE user_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM notifications WHERE user_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM broker_accounts WHERE user_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM refresh_tokens WHERE user_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM risk_rules WHERE user_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM users WHERE id = :id").bind("id", userId).then())
+                            .thenReturn(Map.of("message", "User and all related data permanently deleted"))
+                            .onErrorResume(e -> {
+                                log.error("ADMIN_DELETE_FAILED userId={} error={}", userId, e.getMessage());
+                                return Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                                        "Delete failed: " + e.getMessage()));
                             });
                 });
     }
