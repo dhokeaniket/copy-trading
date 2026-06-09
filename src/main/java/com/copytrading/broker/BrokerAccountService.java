@@ -31,6 +31,9 @@ public class BrokerAccountService {
     private static final Logger log = LoggerFactory.getLogger(BrokerAccountService.class);
     private static final Set<String> SUPPORTED = Set.of("GROWW", "ZERODHA", "ANGELONE", "UPSTOX", "DHAN", "FYERS");
 
+    /** Prevent frontend from retrying the same auth code (single-use, expires in 2 min). */
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> usedAuthCodes = new java.util.concurrent.ConcurrentHashMap<>();
+
     private final BrokerAccountRepository repo;
     private final GrowwApiClient growwClient;
     private final ZerodhaApiClient zerodhaClient;
@@ -81,6 +84,13 @@ public class BrokerAccountService {
 
     private String sessionToken(BrokerAccount a) {
         return credentials.accessToken(a);
+    }
+
+    /** Get Zerodha API key for a specific account (per-user credentials, fallback to platform). */
+    private String zerodhaApiKey(BrokerAccount a) {
+        if (a.getApiKey() != null && !a.getApiKey().isBlank()) return a.getApiKey();
+        var creds = platformConfig.getZerodha();
+        return creds != null ? creds.getApiKey() : null;
     }
 
     // 3.1 List supported brokers
@@ -402,9 +412,17 @@ public class BrokerAccountService {
 
     // --- ZERODHA LOGIN ---
     private Mono<Map<String, Object>> loginZerodha(BrokerAccount a, BrokerLoginRequest req) {
-        var creds = platformConfig.getZerodha();
-        String apiKey = creds.getApiKey();
-        String apiSecret = creds.getApiSecret();
+        // Per-user Zerodha: each user has their own api_key + api_secret from their Kite Connect app
+        String apiKey = a.getApiKey();
+        String apiSecret = a.getApiSecret();
+        // Fallback to platform-level if user hasn't set their own
+        if (apiKey == null || apiKey.isBlank()) apiKey = platformConfig.getZerodha().getApiKey();
+        if (apiSecret == null || apiSecret.isBlank()) apiSecret = platformConfig.getZerodha().getApiSecret();
+        
+        if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Zerodha API key and secret are required. Go to developers.kite.trade, create an app, and update your broker account with apiKey + apiSecret."));
+        }
         if (req == null || req.getRequestToken() == null || req.getRequestToken().isBlank()) {
             String loginUrl = "https://kite.zerodha.com/connect/login?v=3&api_key=" + apiKey;
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -455,6 +473,17 @@ public class BrokerAccountService {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "authCode required. Open this URL to login: " + loginUrl));
         }
+        // Dedup: reject reused auth codes (Upstox codes are single-use)
+        String codeKey = "UPSTOX:" + req.getAuthCode().substring(0, Math.min(10, req.getAuthCode().length()));
+        Long prev = usedAuthCodes.putIfAbsent(codeKey, System.currentTimeMillis());
+        if (prev != null) {
+            log.warn("UPSTOX_DUPLICATE_AUTH_CODE accountId={} — rejecting reused code", a.getId());
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "This auth code was already used. Please get a fresh one by opening the Upstox login page again."));
+        }
+        // Clean old entries (> 2 min)
+        usedAuthCodes.entrySet().removeIf(e -> System.currentTimeMillis() - e.getValue() > 120_000);
+
         return upstoxClient.generateToken(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode(), platformConfig.getCallbackUrl())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
                         r -> (String) r.get("access_token")))
@@ -748,7 +777,7 @@ public class BrokerAccountService {
                 case "GROWW":
                     result = growwClient.getMargin(sessionToken(a)).map(resp -> parseGrowwMargin(resp)); break;
                 case "ZERODHA":
-                    result = zerodhaClient.getMargins(platformConfig.getZerodha().getApiKey(), sessionToken(a)).map(resp -> parseZerodhaMargin(resp)); break;
+                    result = zerodhaClient.getMargins(zerodhaApiKey(a), sessionToken(a)).map(resp -> parseZerodhaMargin(resp)); break;
                 case "FYERS":
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     result = fyersClient.getFunds(fyersAuth).map(resp -> parseFyersMargin(resp)); break;
@@ -810,7 +839,7 @@ public class BrokerAccountService {
                                 return Map.<String, Object>of("positions", payload != null ? payload : List.of());
                             });
                 case "ZERODHA":
-                    return zerodhaClient.getPositions(platformConfig.getZerodha().getApiKey(), sessionToken(a))
+                    return zerodhaClient.getPositions(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> {
                                 Object data = resp.get("data");
                                 return Map.<String, Object>of("positions", data != null ? data : List.of());
@@ -884,7 +913,7 @@ public class BrokerAccountService {
                     return growwClient.listOrders(sessionToken(a), null)
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("payload", resp)));
                 case "ZERODHA":
-                    return zerodhaClient.getOrders(platformConfig.getZerodha().getApiKey(), sessionToken(a))
+                    return zerodhaClient.getOrders(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
                 case "FYERS":
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
@@ -917,7 +946,7 @@ public class BrokerAccountService {
                     return growwClient.listTrades(sessionToken(a), null)
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("payload", resp)));
                 case "ZERODHA":
-                    return zerodhaClient.getTrades(platformConfig.getZerodha().getApiKey(), sessionToken(a))
+                    return zerodhaClient.getTrades(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
                 case "FYERS":
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
@@ -950,7 +979,7 @@ public class BrokerAccountService {
                     return growwClient.getHoldings(sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("payload", resp)));
                 case "ZERODHA":
-                    return zerodhaClient.getHoldings(platformConfig.getZerodha().getApiKey(), sessionToken(a))
+                    return zerodhaClient.getHoldings(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
                 case "FYERS":
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
@@ -1010,7 +1039,7 @@ public class BrokerAccountService {
                             .map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 }
                 case "ZERODHA":
-                    return zerodhaClient.placeOrder(platformConfig.getZerodha().getApiKey(), sessionToken(a), Map.of(
+                    return zerodhaClient.placeOrder(zerodhaApiKey(a), sessionToken(a), Map.of(
                             "tradingsymbol", symbol, "quantity", qty, "transaction_type", type,
                             "product", BrokerFieldTranslator.product(product, "ZERODHA", isFnO),
                             "order_type", "MARKET",
@@ -1116,7 +1145,7 @@ public class BrokerAccountService {
                     return growwClient.cancelOrder(sessionToken(a), orderId, "EQ")
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "ZERODHA":
-                    return zerodhaClient.cancelOrder(platformConfig.getZerodha().getApiKey(), sessionToken(a), orderId)
+                    return zerodhaClient.cancelOrder(zerodhaApiKey(a), sessionToken(a), orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "FYERS": {
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
@@ -1413,7 +1442,7 @@ public class BrokerAccountService {
                             return p;
                         });
             case "ZERODHA":
-                return zerodhaClient.getProfile(platformConfig.getZerodha().getApiKey(), sessionToken(a))
+                return zerodhaClient.getProfile(zerodhaApiKey(a), sessionToken(a))
                         .map(resp -> {
                             Map<String, Object> p = new LinkedHashMap<>();
                             Object data = resp.get("data");
@@ -1589,9 +1618,12 @@ public class BrokerAccountService {
                 Map<String, Object> m = brokerShell("ZERODHA", "Zerodha", "oauth", "requestToken");
                 m.put("loginOptions", List.of(
                         loginOption("oauth",
-                                "Login with Zerodha Kite in browser",
+                                "Login with Zerodha Kite in browser (requires your own API key from developers.kite.trade)",
                                 List.of(),
                                 "GET .../oauth-url → open popup → POST .../login { requestToken }")));
+                m.put("requiresUserCredentials", true);
+                m.put("credentialFields", List.of("apiKey", "apiSecret"));
+                m.put("credentialNote", "Each user needs their own Kite Connect app. Go to developers.kite.trade → create app → set redirect URL to: " + (platformConfig.getCallbackUrl() != null ? platformConfig.getCallbackUrl() : "https://api.ascentracapital.com/api/v1/brokers/callback"));
                 yield m;
             }
             case "FYERS" -> {
@@ -1771,11 +1803,19 @@ public class BrokerAccountService {
                 : platformConfig.getCallbackUrl();
         switch (a.getBrokerId()) {
             case "ZERODHA" -> {
-                var creds = platformConfig.getZerodha();
-                if (creds != null && creds.getApiKey() != null) {
-                    config.put("oauthUrl", "https://kite.zerodha.com/connect/login?v=3&api_key=" + creds.getApiKey());
+                // Per-user Zerodha: use account's api_key, fallback to platform
+                String zApiKey = (a.getApiKey() != null && !a.getApiKey().isBlank())
+                        ? a.getApiKey() : (platformConfig.getZerodha() != null ? platformConfig.getZerodha().getApiKey() : null);
+                if (zApiKey != null) {
+                    config.put("oauthUrl", "https://kite.zerodha.com/connect/login?v=3&api_key=" + zApiKey);
                 }
-                config.put("message", "Open oauthUrl in browser, then POST login with requestToken from callback.");
+                if (a.getApiKey() == null || a.getApiKey().isBlank()) {
+                    config.put("message", "Set your Zerodha API key+secret first (from developers.kite.trade), then open oauthUrl.");
+                    config.put("needsCredentials", true);
+                    config.put("requiredFields", List.of("apiKey", "apiSecret"));
+                } else {
+                    config.put("message", "Open oauthUrl in browser, then POST login with requestToken from callback.");
+                }
             }
             case "FYERS" -> {
                 var creds = platformConfig.getFyers();

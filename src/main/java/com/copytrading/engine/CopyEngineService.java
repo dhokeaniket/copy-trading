@@ -533,7 +533,9 @@ public class CopyEngineService {
             }
             case "ZERODHA": {
                 // POST /orders/regular — form-urlencoded, token api_key:access_token
-                String apiKey = platformConfig.getZerodha().getApiKey();
+                // Per-user Zerodha: use account's own API key, fallback to platform
+                String apiKey = (account.getApiKey() != null && !account.getApiKey().isBlank())
+                        ? account.getApiKey() : platformConfig.getZerodha().getApiKey();
                 Map<String, Object> b = new java.util.LinkedHashMap<>();
                 b.put("tradingsymbol", sym);
                 b.put("exchange", BrokerFieldTranslator.exchangeSegment(exch, "ZERODHA", isFnO));
