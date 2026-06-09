@@ -177,7 +177,7 @@ public class AdminService {
                             .then(tradeRepo.deleteByUserId(userId))
                             .then(notificationRepo.deleteByUserId(userId))
                             .then(subscriptionRepo.deleteByMasterIdOrChildId(userId, userId))
-                            .then(masterActiveRepo.deleteByUserId(userId))
+                            .then(masterActiveRepo.deleteByMasterId(userId))
                             .then(brokerAccountRepo.deleteByUserId(userId))
                             .then(refreshTokens.revokeAllByUserId(userId))
                             .then(users.deleteById(userId))

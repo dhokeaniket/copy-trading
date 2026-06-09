@@ -6,5 +6,5 @@ import reactor.core.publisher.Mono;
 import java.util.UUID;
 
 public interface MasterActiveAccountRepository extends ReactiveCrudRepository<MasterActiveAccount, UUID> {
-    Mono<Void> deleteByUserId(UUID userId);
+    Mono<Void> deleteByMasterId(UUID masterId);
 }
