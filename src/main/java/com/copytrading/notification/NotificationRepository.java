@@ -15,6 +15,4 @@ public interface NotificationRepository extends ReactiveCrudRepository<Notificat
     @Modifying
     @Query("UPDATE notifications SET read = true WHERE user_id = :userId")
     Mono<Integer> markAllReadByUserId(UUID userId);
-
-    Mono<Void> deleteByUserId(UUID userId);
 }

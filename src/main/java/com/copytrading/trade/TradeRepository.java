@@ -16,6 +16,4 @@ public interface TradeRepository extends ReactiveCrudRepository<Trade, UUID> {
     Mono<Long> countTodayTrades(UUID userId);
 
     Mono<Trade> findByUserIdAndBrokerOrderId(UUID userId, String brokerOrderId);
-
-    Mono<Void> deleteByUserId(UUID userId);
 }

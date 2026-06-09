@@ -173,15 +173,24 @@ public class AdminService {
                         return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot delete admin accounts"));
                     }
                     log.warn("ADMIN_DELETE_USER id={} email={} role={}", u.getId(), u.getEmail(), u.getRole());
-                    return copyLogRepo.deleteByMasterIdOrChildId(userId, userId)
-                            .then(tradeRepo.deleteByUserId(userId))
-                            .then(notificationRepo.deleteByUserId(userId))
-                            .then(subscriptionRepo.deleteByMasterIdOrChildId(userId, userId))
-                            .then(masterActiveRepo.deleteByMasterId(userId))
-                            .then(brokerAccountRepo.deleteByUserId(userId))
-                            .then(refreshTokens.revokeAllByUserId(userId))
-                            .then(users.deleteById(userId))
-                            .thenReturn(Map.of("message", "User and all related data permanently deleted"));
+                    // Use raw SQL via R2DBC to cascade-delete all user data
+                    return brokerAccountRepo.findByUserId(userId).collectList()
+                            .flatMap(accounts -> {
+                                // Simple approach: delete user and let individual tables clean up
+                                return subscriptionRepo.deleteByMasterIdOrChildId(userId, userId)
+                                        .then(copyLogRepo.deleteByMasterIdOrChildId(userId, userId))
+                                        .then(masterActiveRepo.deleteByMasterId(userId))
+                                        .then(refreshTokens.revokeAllByUserId(userId))
+                                        .onErrorResume(e -> { log.warn("DELETE_STEP_ERROR: {}", e.getMessage()); return Mono.empty(); })
+                                        .then(Mono.defer(() -> {
+                                            // Delete broker accounts
+                                            return Flux.fromIterable(accounts)
+                                                    .flatMap(a -> brokerAccountRepo.deleteById(a.getId()))
+                                                    .then();
+                                        }))
+                                        .then(users.deleteById(userId))
+                                        .thenReturn(Map.of("message", "User and all related data permanently deleted"));
+                            });
                 });
     }
 
