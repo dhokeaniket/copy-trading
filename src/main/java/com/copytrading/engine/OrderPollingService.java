@@ -91,9 +91,45 @@ public class OrderPollingService {
 
     public boolean isPollingEnabled() { return pollingEnabled; }
     public void setPollingEnabled(boolean enabled) {
+        boolean wasDisabled = !this.pollingEnabled;
         this.pollingEnabled = enabled;
         // Persist to Redis so it survives restarts
         pollingCache.setPollingEnabled(enabled).subscribe();
+        // When resuming from OFF→ON, snapshot current orderbook so we don't copy
+        // orders that were placed while polling was disabled
+        if (enabled && wasDisabled) {
+            log.info("POLLING_RESUMED — snapshotting current orders to prevent stale copy");
+            snapshotCurrentOrders();
+        }
+        log.info("POLLING_STATE_CHANGED enabled={}", enabled);
+    }
+
+    /** Mark all current master orders as "known" so they won't trigger copies when polling resumes. */
+    private void snapshotCurrentOrders() {
+        activeAccountRepo.findAll()
+                .flatMap(active -> brokerService.getOrders(active.getBrokerAccountId(), active.getMasterId())
+                        .map(resp -> {
+                            List<?> ordersList = extractOrdersList(resp.get("orders"));
+                            if (ordersList != null) {
+                                Set<String> known = knownOrders.computeIfAbsent(active.getMasterId(), k -> ConcurrentHashMap.newKeySet());
+                                for (Object orderObj : ordersList) {
+                                    if (orderObj instanceof Map<?, ?> order) {
+                                        String orderId = OrderNormalizer.extractOrderId((Map<String, Object>) order);
+                                        if (orderId != null && !orderId.isBlank()) {
+                                            known.add(orderId);
+                                            pollingCache.markOrderKnown(active.getMasterId(), orderId).subscribe();
+                                        }
+                                    }
+                                }
+                                log.info("POLLING_SNAPSHOT master={} ordersMarkedKnown={}", active.getMasterId(), ordersList.size());
+                            }
+                            return 0;
+                        })
+                        .onErrorResume(e -> {
+                            log.warn("POLLING_SNAPSHOT_FAIL master={} err={}", active.getMasterId(), e.getMessage());
+                            return Mono.just(0);
+                        }))
+                .subscribe();
     }
     public Instant getLastResetAt() { return lastResetAt; }
 

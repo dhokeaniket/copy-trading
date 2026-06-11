@@ -502,7 +502,12 @@ public class BrokerAccountService {
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("UPSTOX_LOGIN_FAILED error={}", e.getMessage(), e);
-                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Upstox API error: " + e.getMessage()));
+                    String msg = e.getMessage() != null ? e.getMessage() : "unknown";
+                    if (msg.contains("401") || msg.contains("Invalid Credentials") || msg.contains("UDAPI100016")) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Upstox auth code expired or already used. Please open the Upstox login page again to get a fresh code."));
+                    }
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Upstox API error: " + msg));
                 });
     }
 
