@@ -52,7 +52,16 @@ public class SellGuardService {
         }
 
         if (CopySides.BUY_AND_SELL.equals(copySides) || CopySides.MIRROR.equals(copySides)) {
-            return livePositionSufficient(childBrokerAccountId, symbol, masterBrokerId, childBrokerId, scaledSellQty);
+            // For BUY_AND_SELL: if we previously copied a BUY for this symbol, allow the SELL
+            // (handles limit orders that may not have filled yet — position shows 0 but order exists)
+            return copiedBuyMono.flatMap(hasBuy -> {
+                if (hasBuy) {
+                    // We know we placed a BUY for this child — allow the exit SELL
+                    return Mono.just("");
+                }
+                // No prior BUY copy — check live position as fallback
+                return livePositionSufficient(childBrokerAccountId, symbol, masterBrokerId, childBrokerId, scaledSellQty);
+            });
         }
 
         return Mono.just("");
@@ -80,13 +89,16 @@ public class SellGuardService {
                 .map(positions -> {
                     int net = netLongQty(positions, symbol, masterBrokerId, childBrokerId);
                     if (net < qty) {
-                        log.info("SELL_GUARD net={} required={} symbol={}", net, qty, symbol);
+                        log.info("SELL_GUARD_BLOCKED net={} required={} symbol={} childBroker={} masterBroker={} positionsCount={} positionSymbols={}",
+                                net, qty, symbol, childBrokerId, masterBrokerId, positions.size(),
+                                positions.stream().map(p -> p.getSymbol() + ":" + p.getQty()).limit(10).toList());
                         return "INSUFFICIENT_POSITION: Live qty " + net + " < sell qty " + qty + " for " + symbol;
                     }
                     return "";
                 })
                 .onErrorResume(e -> {
-                    log.warn("SELL_GUARD_POSITION_FETCH_FAIL symbol={} err={}", symbol, e.getMessage());
+                    log.warn("SELL_GUARD_POSITION_FETCH_FAIL symbol={} broker={} err={}", symbol, childBrokerId, e.getMessage());
+                    // On error fetching positions, allow the sell through (fail-open)
                     return Mono.just("");
                 });
     }
@@ -100,13 +112,33 @@ public class SellGuardService {
                 : masterSymbol;
         String cleanMaster = cleanSymbol(masterSymbol);
         String cleanTranslated = cleanSymbol(translated);
+        String underlying = extractUnderlying(masterSymbol);
         int net = 0;
         for (PositionDto p : positions) {
             if (p.getSymbol() == null || p.getQty() <= 0) continue;
             String ps = cleanSymbol(p.getSymbol());
-            if (ps.equals(cleanMaster) || ps.equals(cleanTranslated)
+            boolean match = ps.equals(cleanMaster)
+                    || ps.equals(cleanTranslated)
                     || masterSymbol.equalsIgnoreCase(p.getSymbol())
-                    || translated.equalsIgnoreCase(p.getSymbol())) {
+                    || translated.equalsIgnoreCase(p.getSymbol());
+            // Fallback: if underlying matches and it's the same instrument type (CE/PE/FUT/equity)
+            if (!match && underlying != null && !underlying.isEmpty()) {
+                String posUnderlying = extractUnderlying(p.getSymbol());
+                if (underlying.equals(posUnderlying)) {
+                    // Same underlying — now check strike/type match loosely
+                    // For F&O: both must contain same CE/PE/FUT suffix
+                    String masterType = extractOptionType(masterSymbol);
+                    String posType = extractOptionType(p.getSymbol());
+                    if (masterType != null && masterType.equals(posType)) {
+                        // Same underlying + same option type — likely the same contract
+                        match = true;
+                    } else if (masterType == null && posType == null) {
+                        // Both equity — match
+                        match = true;
+                    }
+                }
+            }
+            if (match) {
                 if ("SELL".equalsIgnoreCase(p.getSide())) {
                     net -= p.getQty();
                 } else {
@@ -115,6 +147,39 @@ public class SellGuardService {
             }
         }
         return Math.max(0, net);
+    }
+
+    /** Extract underlying symbol (e.g., NIFTY from NIFTY2660924850CE or NIFTY-Jun2026-24850-CE) */
+    private static String extractUnderlying(String symbol) {
+        if (symbol == null || symbol.isEmpty()) return "";
+        String s = symbol.toUpperCase()
+                .replaceFirst("^NSE_FO\\|", "")
+                .replaceFirst("^NSE:", "")
+                .replace("-EQ", "");
+        // Dhan format: NIFTY-Jun2026-24850-CE → split by dash
+        if (s.contains("-")) {
+            return s.split("-")[0];
+        }
+        // Zerodha/Groww: NIFTY2660924850CE → take leading alpha chars
+        StringBuilder sb = new StringBuilder();
+        for (char c : s.toCharArray()) {
+            if (Character.isLetter(c)) sb.append(c);
+            else break;
+        }
+        String result = sb.toString();
+        // Remove trailing CE/PE/FUT if that's all we got
+        if (result.endsWith("FUT")) result = result.substring(0, result.length() - 3);
+        return result;
+    }
+
+    /** Extract option type: CE, PE, FUT, or null for equity */
+    private static String extractOptionType(String symbol) {
+        if (symbol == null) return null;
+        String upper = symbol.toUpperCase();
+        if (upper.endsWith("CE") || upper.contains("-CE")) return "CE";
+        if (upper.endsWith("PE") || upper.contains("-PE")) return "PE";
+        if (upper.endsWith("FUT") || upper.endsWith("F") || upper.contains("-FUT")) return "FUT";
+        return null;
     }
 
     private static String cleanSymbol(String s) {
