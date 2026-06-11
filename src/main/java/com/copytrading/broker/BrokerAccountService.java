@@ -277,7 +277,13 @@ public class BrokerAccountService {
                 .flatMap(a -> {
                     clearBrokerSession(a);
                     clearStoredCredentialsOnDisconnect(a);
-                    credentials.encryptSensitiveFields(a);
+                    // After clearing session (accessToken=null), only encrypt fields that were
+                    // freshly set to plaintext. For Groww, apiSecret stays encrypted in DB — don't touch it.
+                    // clearStoredCredentials sets apiKey/apiSecret to "" for non-Groww brokers, safe to encrypt.
+                    if (!"GROWW".equals(a.getBrokerId())) {
+                        credentials.encryptSensitiveFields(a);
+                    }
+                    // For Groww, nothing needs encryption here — accessToken is null, apiSecret already encrypted
                     return repo.save(a)
                             .flatMap(saved -> notifyBrokerReconnect(userId, saved, "BROKER_DISCONNECTED",
                                     "Broker disconnected",
@@ -303,7 +309,7 @@ public class BrokerAccountService {
                     a.setSessionActive(true);
                     a.setStatus("ACTIVE");
                     a.setSessionExpires(java.time.Instant.now().plusSeconds(86400));
-                    credentials.encryptSensitiveFields(a);
+                    credentials.encryptAccessTokenOnly(a);
                     return repo.save(a).map(saved -> {
                         Map<String, Object> r = new java.util.LinkedHashMap<>();
                         r.put("status", "SESSION_ACTIVE");
@@ -414,7 +420,7 @@ public class BrokerAccountService {
     private Mono<Map<String, Object>> loginZerodha(BrokerAccount a, BrokerLoginRequest req) {
         // Per-user Zerodha: each user has their own api_key + api_secret from their Kite Connect app
         String apiKey = a.getApiKey();
-        String apiSecret = a.getApiSecret();
+        String apiSecret = credentials.apiSecret(a); // decrypt stored secret
         // Fallback to platform-level if user hasn't set their own
         if (apiKey == null || apiKey.isBlank()) apiKey = platformConfig.getZerodha().getApiKey();
         if (apiSecret == null || apiSecret.isBlank()) apiSecret = platformConfig.getZerodha().getApiSecret();
@@ -467,9 +473,15 @@ public class BrokerAccountService {
 
     // --- UPSTOX LOGIN ---
     private Mono<Map<String, Object>> loginUpstox(BrokerAccount a, BrokerLoginRequest req) {
-        var creds = platformConfig.getUpstox();
+        // Per-user Upstox: support user's own api_key/api_secret, fallback to platform
+        String apiKey = a.getApiKey();
+        String apiSecret = credentials.apiSecret(a);
+        var platformCreds = platformConfig.getUpstox();
+        if (apiKey == null || apiKey.isBlank()) apiKey = platformCreds.getApiKey();
+        if (apiSecret == null || apiSecret.isBlank()) apiSecret = platformCreds.getApiSecret();
+
         if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
-            String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + creds.getApiKey() + "&redirect_uri=" + platformConfig.getCallbackUrl();
+            String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + apiKey + "&redirect_uri=" + platformConfig.getCallbackUrl();
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "authCode required. Open this URL to login: " + loginUrl));
         }
@@ -484,7 +496,7 @@ public class BrokerAccountService {
         // Clean old entries (> 2 min)
         usedAuthCodes.entrySet().removeIf(e -> System.currentTimeMillis() - e.getValue() > 120_000);
 
-        return upstoxClient.generateToken(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode(), platformConfig.getCallbackUrl())
+        return upstoxClient.generateToken(apiKey, apiSecret, req.getAuthCode(), platformConfig.getCallbackUrl())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
                         r -> (String) r.get("access_token")))
                 .onErrorResume(e -> {
@@ -607,7 +619,8 @@ public class BrokerAccountService {
         a.setSessionActive(true);
         a.setStatus("ACTIVE");
         a.setSessionExpires(Instant.now().plusSeconds(86400));
-        credentials.encryptSensitiveFields(a);
+        // Only encrypt the new access token — apiSecret/proxyPass are already encrypted in DB
+        credentials.encryptAccessTokenOnly(a);
         return repo.save(a).flatMap(s -> {
             // Auto-migrate subscriptions: if user has other inactive accounts of same broker type,
             // move all subscriptions to this newly active account
@@ -1603,6 +1616,9 @@ public class BrokerAccountService {
             }
             case "DHAN" -> {
                 Map<String, Object> m = brokerShell("DHAN", "Dhan", "oauth", "tokenId");
+                m.put("optionalFields", List.of(
+                        Map.of("field", "clientId", "label", "Dhan Client ID",
+                                "hint", "Your Dhan client ID (saved from first login, only needed if changed)")));
                 m.put("loginOptions", List.of(
                         loginOption("accessToken",
                                 "Paste access token from Dhan Web (Profile → DhanHQ Trading APIs)",
@@ -1610,8 +1626,8 @@ public class BrokerAccountService {
                                 "PUT /api/v1/brokers/accounts/{accountId}/token"),
                         loginOption("oauth",
                                 "Login via Dhan in browser (Connect button)",
-                                List.of(),
-                                "POST /api/v1/brokers/accounts/{accountId}/login {} then again with authCode")));
+                                List.of("clientId"),
+                                "POST /api/v1/brokers/accounts/{accountId}/login { clientId } then again with authCode")));
                 yield m;
             }
             case "ZERODHA" -> {
@@ -1693,6 +1709,10 @@ public class BrokerAccountService {
         }
         List<String> methods = extractLoginOptionMethods(config.get("loginOptions"));
         config.put("loginOptionMethods", methods);
+        // Dhan: include saved clientId so frontend can pre-fill on reconnect
+        if ("DHAN".equals(a.getBrokerId()) && a.getClientId() != null && !a.getClientId().isBlank()) {
+            config.put("savedClientId", a.getClientId());
+        }
         enrichOAuthUrls(a, config, redirectUri);
         return config;
     }
@@ -1725,9 +1745,10 @@ public class BrokerAccountService {
             a.setApiKey("");
             a.setApiSecret("");
         }
-        if ("ANGELONE".equals(b) || "DHAN".equals(b)) {
+        if ("ANGELONE".equals(b)) {
             a.setClientId("");
         }
+        // Dhan: keep clientId — it's needed for reconnect and order placement
     }
 
     private Mono<Void> notifyBrokerReconnect(UUID userId, BrokerAccount a, String type, String title, String message) {

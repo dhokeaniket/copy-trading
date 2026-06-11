@@ -33,6 +33,17 @@ public class BrokerCredentials {
         }
     }
 
+    /**
+     * Encrypt only the access token field. Use after login when apiSecret/proxyPass
+     * are already encrypted in the DB — avoids double-encrypting them.
+     */
+    public void encryptAccessTokenOnly(BrokerAccount account) {
+        if (account == null) return;
+        if (account.getAccessToken() != null) {
+            account.setAccessToken(crypto.encrypt(account.getAccessToken()));
+        }
+    }
+
     public String proxyPass(BrokerAccount account) {
         return account == null ? null : crypto.decrypt(account.getProxyPass());
     }
