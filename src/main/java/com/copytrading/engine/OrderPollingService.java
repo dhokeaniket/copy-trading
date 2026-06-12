@@ -95,42 +95,71 @@ public class OrderPollingService {
         this.pollingEnabled = enabled;
         // Persist to Redis so it survives restarts
         pollingCache.setPollingEnabled(enabled).subscribe();
-        // When resuming from OFF→ON, snapshot current orderbook so we don't copy
-        // orders that were placed while polling was disabled
+        // When resuming from OFF→ON, block polls until we've marked the full current order book
+        // as known. Otherwise the next poll cycle can run before the async snapshot finishes and
+        // would copy fills that happened while polling was off.
         if (enabled && wasDisabled) {
-            log.info("POLLING_RESUMED — snapshotting current orders to prevent stale copy");
-            snapshotCurrentOrders();
+            log.info("POLLING_RESUMED — snapshotting current orders (polls paused until complete)");
+            resetInProgress = true;
+            snapshotCurrentOrdersReactive()
+                    .doFinally(signal -> {
+                        resetInProgress = false;
+                        log.info("POLLING_SNAPSHOT_DONE signal={} — polls resumed", signal);
+                    })
+                    .subscribe();
         }
         log.info("POLLING_STATE_CHANGED enabled={}", enabled);
     }
 
-    /** Mark all current master orders as "known" so they won't trigger copies when polling resumes. */
-    private void snapshotCurrentOrders() {
-        activeAccountRepo.findAll()
-                .flatMap(active -> brokerService.getOrders(active.getBrokerAccountId(), active.getMasterId())
+    /**
+     * Mark all current master orders as "known" across every linked broker account that has a token
+     * (same coverage as {@link #pollSingleMaster}), so fills from the "off" period never copy after resume.
+     */
+    private Mono<Void> snapshotCurrentOrdersReactive() {
+        return activeAccountRepo.findAll()
+                .map(MasterActiveAccount::getMasterId)
+                .distinct()
+                .flatMap(this::snapshotSingleMasterOrders)
+                .then();
+    }
+
+    private Mono<Void> snapshotSingleMasterOrders(UUID masterId) {
+        return brokerRepo.findByUserId(masterId)
+                .filter(a -> a.getAccessToken() != null)
+                .flatMap(account -> brokerService.getOrders(account.getId(), masterId)
                         .map(resp -> {
                             List<?> ordersList = extractOrdersList(resp.get("orders"));
-                            if (ordersList != null) {
-                                Set<String> known = knownOrders.computeIfAbsent(active.getMasterId(), k -> ConcurrentHashMap.newKeySet());
+                            if (ordersList != null && !ordersList.isEmpty()) {
+                                Set<String> known = knownOrders.computeIfAbsent(masterId, k -> ConcurrentHashMap.newKeySet());
+                                int marked = 0;
                                 for (Object orderObj : ordersList) {
                                     if (orderObj instanceof Map<?, ?> order) {
-                                        String orderId = OrderNormalizer.extractOrderId((Map<String, Object>) order);
+                                        String orderId = OrderNormalizer.extractOrderId(toStringKeyMap(order));
                                         if (orderId != null && !orderId.isBlank()) {
                                             known.add(orderId);
-                                            pollingCache.markOrderKnown(active.getMasterId(), orderId).subscribe();
+                                            pollingCache.markOrderKnown(masterId, orderId).subscribe();
+                                            marked++;
                                         }
                                     }
                                 }
-                                log.info("POLLING_SNAPSHOT master={} ordersMarkedKnown={}", active.getMasterId(), ordersList.size());
+                                log.info("POLLING_SNAPSHOT master={} broker={} ordersMarkedKnown={}",
+                                        masterId, account.getBrokerId(), marked);
                             }
                             return 0;
                         })
                         .onErrorResume(e -> {
-                            log.warn("POLLING_SNAPSHOT_FAIL master={} err={}", active.getMasterId(), e.getMessage());
+                            log.warn("POLLING_SNAPSHOT_FAIL master={} broker={} err={}",
+                                    masterId, account.getBrokerId(), e.getMessage());
                             return Mono.just(0);
                         }))
-                .subscribe();
+                .then();
     }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> toStringKeyMap(Map<?, ?> raw) {
+        return (Map<String, Object>) raw;
+    }
+
     public Instant getLastResetAt() { return lastResetAt; }
 
     /** Restore polling state from Redis on startup. Defaults to ON if not set. */
@@ -188,9 +217,8 @@ public class OrderPollingService {
 
     private Mono<Void> pollSingleMaster(MasterActiveAccount active) {
         UUID masterId = active.getMasterId();
-        UUID brokerAccountId = active.getBrokerAccountId();
 
-        // Poll the active account AND any other accounts with valid tokens
+        // Poll every linked broker account that has a token (not only the designated active one)
         return brokerRepo.findByUserId(masterId)
                 .filter(a -> a.getAccessToken() != null)
                 .flatMap(account -> brokerService.getOrders(account.getId(), masterId)
@@ -320,7 +348,6 @@ public class OrderPollingService {
             .subscribe();
     }
 
-    @SuppressWarnings("unchecked")
     private static List<?> extractOrdersList(Object ordersObj) {
         if (ordersObj instanceof List<?> list) {
             return list;

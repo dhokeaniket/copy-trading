@@ -1,7 +1,6 @@
 package com.copytrading.engine;
 
 import com.copytrading.broker.BrokerAccountRepository;
-import com.copytrading.trade.Trade;
 import com.copytrading.trade.TradeRepository;
 import com.copytrading.ws.TradeUpdatesHub;
 import org.springframework.http.MediaType;
@@ -21,24 +20,40 @@ public class EnginePostbackAliasController {
     private final TradeRepository tradeRepo;
     private final TradeUpdatesHub hub;
     private final CanonicalOrderMapper canonicalMapper;
+    private final OrderPollingService orderPollingService;
 
     public EnginePostbackAliasController(CopyEngineService copyEngine, BrokerAccountRepository brokerRepo,
                                          TradeRepository tradeRepo, TradeUpdatesHub hub,
-                                         CanonicalOrderMapper canonicalMapper) {
+                                         CanonicalOrderMapper canonicalMapper,
+                                         OrderPollingService orderPollingService) {
         this.copyEngine = copyEngine;
         this.brokerRepo = brokerRepo;
         this.tradeRepo = tradeRepo;
         this.hub = hub;
         this.canonicalMapper = canonicalMapper;
+        this.orderPollingService = orderPollingService;
     }
 
     @PostMapping(value = "/zerodha", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, String>> zerodhaPostback(@RequestBody Map<String, Object> payload) {
         CanonicalOrder canonical = canonicalMapper.fromBrokerOrder(payload, "ZERODHA");
+        String userId = String.valueOf(payload.getOrDefault("user_id", ""));
+
+        if (BrokerStatusNormalizer.CANCELLED.equals(canonical.getStatus()) && canonical.getOrderId() != null) {
+            return brokerRepo.findByBrokerId("ZERODHA")
+                    .filter(a -> a.getClientId() != null && a.getClientId().equals(userId))
+                    .next()
+                    .flatMap(account -> copyEngine.propagateCancel(account.getUserId(), canonical.getOrderId())
+                            .map(n -> Map.of("message", "Cancel propagated to " + n + " child order(s)")))
+                    .defaultIfEmpty(Map.of("message", "No matching master account found for user_id: " + userId));
+        }
+
         if (!canonical.isReadyForCopy()) {
             return Mono.just(Map.of("message", "Ignored order status: " + canonical.getStatus()));
         }
-        String userId = String.valueOf(payload.getOrDefault("user_id", ""));
+        if (!orderPollingService.isPollingEnabled()) {
+            return Mono.just(Map.of("message", "Copy trading paused — fill not replicated"));
+        }
         return brokerRepo.findByBrokerId("ZERODHA")
                 .filter(a -> a.getClientId() != null && a.getClientId().equals(userId))
                 .next()

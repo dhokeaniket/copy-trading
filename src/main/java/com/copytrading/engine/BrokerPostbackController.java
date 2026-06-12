@@ -35,17 +35,20 @@ public class BrokerPostbackController {
     private final TradeUpdatesHub hub;
     private final CanonicalOrderMapper canonicalMapper;
     private final PlatformBrokerConfig platformConfig;
+    private final OrderPollingService orderPollingService;
 
     public BrokerPostbackController(CopyEngineService copyEngine, BrokerAccountRepository brokerRepo,
                                      TradeRepository tradeRepo, TradeUpdatesHub hub,
                                      CanonicalOrderMapper canonicalMapper,
-                                     PlatformBrokerConfig platformConfig) {
+                                     PlatformBrokerConfig platformConfig,
+                                     OrderPollingService orderPollingService) {
         this.copyEngine = copyEngine;
         this.brokerRepo = brokerRepo;
         this.tradeRepo = tradeRepo;
         this.hub = hub;
         this.canonicalMapper = canonicalMapper;
         this.platformConfig = platformConfig;
+        this.orderPollingService = orderPollingService;
     }
 
     /**
@@ -82,6 +85,11 @@ public class BrokerPostbackController {
 
         if (!canonical.isReadyForCopy()) {
             return Mono.just(Map.of("message", "Ignored order status: " + canonical.getStatus()));
+        }
+
+        if (!orderPollingService.isPollingEnabled()) {
+            log.info("ZERODHA_POSTBACK_COPY_SKIPPED master order — auto-copy is paused (polling off)");
+            return Mono.just(Map.of("message", "Copy trading paused — fill not replicated"));
         }
 
         return brokerRepo.findByBrokerId("ZERODHA")
