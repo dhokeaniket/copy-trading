@@ -60,7 +60,7 @@ public class SellGuardService {
 
     private Mono<Boolean> hasCopiedBuySinceSubscription(UUID masterId, UUID childId, String symbol, Instant subscribedAt) {
         return copyLogs.findByMasterIdAndChildId(masterId, childId)
-                .filter(cl -> symbol.equals(cl.getSymbol())
+                .filter(cl -> symbol.equalsIgnoreCase(cl.getSymbol())
                         && "BUY".equalsIgnoreCase(cl.getTradeType())
                         && "SUCCESS".equals(cl.getChildStatus()))
                 .filter(cl -> {
