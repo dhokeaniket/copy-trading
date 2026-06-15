@@ -540,15 +540,19 @@ public class ChildService {
             }
             double unrealized = toDouble(pos.get("totalPnl"));
 
-            double[] metrics = calculateGlobalMetrics(copyLogList, livePositions);
+            Instant monthStart = java.time.LocalDate.now().withDayOfMonth(1).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant();
+            double[] metrics = calculateGlobalMetrics(copyLogList, livePositions, monthStart);
             double globalTotal = metrics[0];
             double copiedPnl = metrics[1];
             double personalPnl = metrics[2];
+            double monthlyPnl = metrics[3];
             double realizedPnl = Math.round((globalTotal - unrealized) * 100.0) / 100.0;
 
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("totalPnl", globalTotal);
             r.put("totalPnL", globalTotal);
+            r.put("monthlyPnl", monthlyPnl);
+            r.put("monthlyPnL", monthlyPnl);
             r.put("personalPnL", personalPnl);
             r.put("copiedPnL", copiedPnl);
             r.put("masterPnL", 0);
@@ -636,7 +640,7 @@ public class ChildService {
         return new double[]{Math.round(totalMasterPnl * 100.0) / 100.0, Math.round(totalAllocation * 100.0) / 100.0};
     }
 
-    private double[] calculateGlobalMetrics(List<com.copytrading.logs.CopyLog> logs, List<PositionDto> livePositions) {
+    private double[] calculateGlobalMetrics(List<com.copytrading.logs.CopyLog> logs, List<PositionDto> livePositions, Instant monthStart) {
         Map<String, Double> ltpMap = livePositions.stream()
                 .collect(Collectors.toMap(p -> p.getSymbol().toUpperCase(), PositionDto::getLtp, (a, b) -> a));
 
@@ -647,13 +651,15 @@ public class ChildService {
         double globalTotal = 0.0;
         double copiedPnl = 0.0;
         double personalPnl = 0.0;
+        double monthlyPnl = 0.0;
 
         for (Map.Entry<String, List<com.copytrading.logs.CopyLog>> entry : bySymbol.entrySet()) {
             String sym = entry.getKey();
             double buyValue = 0, sellValue = 0;
             double copiedBuy = 0, copiedSell = 0;
             double personalBuy = 0, personalSell = 0;
-            int netQty = 0, copiedNet = 0, personalNet = 0;
+            double monthBuy = 0, monthSell = 0;
+            int netQty = 0, copiedNet = 0, personalNet = 0, monthNet = 0;
             double lastPriceInLog = 0;
 
             for (com.copytrading.logs.CopyLog l : entry.getValue()) {
@@ -662,17 +668,20 @@ public class ChildService {
                 if (price > 0) lastPriceInLog = price;
 
                 boolean isCopied = l.getMasterId() != null;
+                boolean isThisMonth = l.getCreatedAt() != null && !l.getCreatedAt().isBefore(monthStart);
 
                 if ("BUY".equalsIgnoreCase(l.getTradeType())) {
                     buyValue += (price * qty);
                     netQty += qty;
                     if (isCopied) { copiedBuy += (price * qty); copiedNet += qty; }
                     else { personalBuy += (price * qty); personalNet += qty; }
+                    if (isThisMonth) { monthBuy += (price * qty); monthNet += qty; }
                 } else if ("SELL".equalsIgnoreCase(l.getTradeType())) {
                     sellValue += (price * qty);
                     netQty -= qty;
                     if (isCopied) { copiedSell += (price * qty); copiedNet -= qty; }
                     else { personalSell += (price * qty); personalNet -= qty; }
+                    if (isThisMonth) { monthSell += (price * qty); monthNet -= qty; }
                 }
             }
 
@@ -681,12 +690,14 @@ public class ChildService {
             globalTotal += (sellValue - buyValue + (netQty * ltp));
             copiedPnl += (copiedSell - copiedBuy + (copiedNet * ltp));
             personalPnl += (personalSell - personalBuy + (personalNet * ltp));
+            monthlyPnl += (monthSell - monthBuy + (monthNet * ltp));
         }
 
         return new double[]{
             Math.round(globalTotal * 100.0) / 100.0,
             Math.round(copiedPnl * 100.0) / 100.0,
-            Math.round(personalPnl * 100.0) / 100.0
+            Math.round(personalPnl * 100.0) / 100.0,
+            Math.round(monthlyPnl * 100.0) / 100.0
         };
     }
 }
