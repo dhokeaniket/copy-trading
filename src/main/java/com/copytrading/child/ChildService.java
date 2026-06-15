@@ -568,8 +568,8 @@ public class ChildService {
                     Map.of("time", java.time.LocalDate.now().minusDays(4).toString(), "personal", 0, "copied", 0),
                     Map.of("time", java.time.LocalDate.now().minusDays(3).toString(), "personal", 0, "copied", 0),
                     Map.of("time", java.time.LocalDate.now().minusDays(2).toString(), "personal", 0, "copied", 0),
-                    Map.of("time", java.time.LocalDate.now().minusDays(1).toString(), "personal", 0, "copied", copied),
-                    Map.of("time", java.time.LocalDate.now().toString(), "personal", personal, "copied", copied)
+                    Map.of("time", java.time.LocalDate.now().minusDays(1).toString(), "personal", 0, "copied", 0),
+                    Map.of("time", java.time.LocalDate.now().toString(), "personal", personalPnl, "copied", copiedPnl)
             ));
             r.put("personalTradesList", List.of());
             r.put("masterPnlComparison", Map.of(
