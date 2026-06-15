@@ -91,7 +91,7 @@ public class ReconciliationService {
         }
         String desired = toTradeStatus(canonStatus);
         return tradeRepo.findByUserIdAndBrokerOrderId(account.getUserId(), orderId)
-                .filter(t -> !desired.equalsIgnoreCase(t.getStatus()))
+                .filter(t -> !desired.equalsIgnoreCase(t.getStatus()) || (canonical.getPrice() > 0 && t.getPrice() != canonical.getPrice()))
                 .flatMap(t -> {
                     String prev = t.getStatus();
                     t.setStatus(desired);
