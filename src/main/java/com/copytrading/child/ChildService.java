@@ -267,42 +267,55 @@ public class ChildService {
     public Mono<Map<String, Object>> listSubscriptions(UUID childId) {
         Instant todayStart = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"))
                 .atStartOfDay(java.time.ZoneId.of("Asia/Kolkata")).toInstant();
-        return subs.findByChildIdAndCopyingStatusNot(childId, "INACTIVE")
-                .flatMap(s -> users.findById(s.getMasterId())
-                        .zipWith(copyLogs.findByChildId(childId).collectList())
-                        .map(t -> {
-                            var m = t.getT1();
-                            var childLogs = t.getT2();
-                            long copied = childLogs.stream()
-                                    .filter(l -> s.getMasterId().equals(l.getMasterId())
-                                            && "SUCCESS".equals(l.getChildStatus()))
-                                    .count();
-                            long todayCopied = childLogs.stream()
-                                    .filter(l -> s.getMasterId().equals(l.getMasterId())
-                                            && "SUCCESS".equals(l.getChildStatus())
-                                            && l.getCreatedAt() != null
-                                            && !l.getCreatedAt().isBefore(todayStart))
-                                    .count();
-                            Map<String, Object> r = new LinkedHashMap<>();
-                            r.put("subscriptionId", s.getId());
-                            r.put("masterId", s.getMasterId());
-                            r.put("masterName", m.getName());
-                            r.put("scalingFactor", s.getScalingFactor());
-                            r.put("copySides", CopySides.normalize(s.getCopySides()));
-                            r.put("allowShortSelling", s.isAllowShortSelling());
-                            r.put("priceTolerancePct", s.getPriceTolerancePct());
-                            r.put("copyingStatus", s.getCopyingStatus());
-                            r.put("subscribedAt", s.getCreatedAt());
-                            r.put("brokerAccountId", s.getBrokerAccountId());
-                            r.put("pnl", 0);
-                            r.put("totalPnL", 0);
-                            r.put("tradesCopied", copied);
-                            r.put("tradesCopiedToday", todayCopied);
-                            r.put("allocation", 0);
-                            r.put("allocationAmount", 0);
-                            return r;
-                        }))
-                .collectList()
+                
+        Mono<List<PositionDto>> positionsMono = positionsService.getPositionsForUser(childId)
+                .onErrorResume(e -> Mono.just(List.of()));
+        Mono<List<com.copytrading.logs.CopyLog>> copyLogsMono = copyLogs.findByChildId(childId).collectList()
+                .onErrorResume(e -> Mono.just(List.of()));
+                
+        return Mono.zip(subs.findByChildIdAndCopyingStatusNot(childId, "INACTIVE").collectList(), copyLogsMono, positionsMono)
+                .flatMap(tuple -> {
+                    var subsList = tuple.getT1();
+                    var childLogs = tuple.getT2();
+                    var livePositions = tuple.getT3();
+                    
+                    return reactor.core.publisher.Flux.fromIterable(subsList)
+                            .flatMap(s -> users.findById(s.getMasterId())
+                                    .map(m -> {
+                                        long copied = childLogs.stream()
+                                                .filter(l -> s.getMasterId().equals(l.getMasterId())
+                                                        && "SUCCESS".equals(l.getChildStatus()))
+                                                .count();
+                                        long todayCopied = childLogs.stream()
+                                                .filter(l -> s.getMasterId().equals(l.getMasterId())
+                                                        && "SUCCESS".equals(l.getChildStatus())
+                                                        && l.getCreatedAt() != null
+                                                        && !l.getCreatedAt().isBefore(todayStart))
+                                                .count();
+                                        
+                                        double[] metrics = calculateMasterMetrics(s.getMasterId(), childLogs, livePositions);
+                                        
+                                        Map<String, Object> r = new LinkedHashMap<>();
+                                        r.put("subscriptionId", s.getId());
+                                        r.put("masterId", s.getMasterId());
+                                        r.put("masterName", m.getName());
+                                        r.put("scalingFactor", s.getScalingFactor());
+                                        r.put("copySides", CopySides.normalize(s.getCopySides()));
+                                        r.put("allowShortSelling", s.isAllowShortSelling());
+                                        r.put("priceTolerancePct", s.getPriceTolerancePct());
+                                        r.put("copyingStatus", s.getCopyingStatus());
+                                        r.put("subscribedAt", s.getCreatedAt());
+                                        r.put("brokerAccountId", s.getBrokerAccountId());
+                                        r.put("pnl", metrics[0]);
+                                        r.put("totalPnL", metrics[0]);
+                                        r.put("tradesCopied", copied);
+                                        r.put("tradesCopiedToday", todayCopied);
+                                        r.put("allocation", metrics[1]);
+                                        r.put("allocationAmount", metrics[1]);
+                                        return r;
+                                    }))
+                            .collectList();
+                })
                 .map(list -> Map.<String, Object>of("subscriptions", list));
     }
 
@@ -556,5 +569,55 @@ public class ChildService {
         if (o == null) return 0;
         if (o instanceof Number n) return n.doubleValue();
         try { return Double.parseDouble(o.toString()); } catch (Exception e) { return 0; }
+    }
+
+    private double[] calculateMasterMetrics(UUID masterId, List<com.copytrading.logs.CopyLog> logs, List<PositionDto> livePositions) {
+        Map<String, Double> ltpMap = livePositions.stream()
+                .collect(Collectors.toMap(p -> p.getSymbol().toUpperCase(), PositionDto::getLtp, (a, b) -> a));
+
+        Map<String, List<com.copytrading.logs.CopyLog>> bySymbol = logs.stream()
+                .filter(l -> masterId.equals(l.getMasterId()) && "SUCCESS".equals(l.getChildStatus()) && l.getSymbol() != null)
+                .collect(Collectors.groupingBy(l -> l.getSymbol().toUpperCase()));
+
+        double totalMasterPnl = 0.0;
+        double totalAllocation = 0.0;
+
+        for (Map.Entry<String, List<com.copytrading.logs.CopyLog>> entry : bySymbol.entrySet()) {
+            String sym = entry.getKey();
+            double buyValue = 0;
+            double sellValue = 0;
+            int netQty = 0;
+            int totalBuyQty = 0;
+            double lastPriceInLog = 0;
+
+            for (com.copytrading.logs.CopyLog l : entry.getValue()) {
+                double price = l.getPrice() != null ? l.getPrice() : 0.0;
+                int qty = l.getChildQty() != null ? l.getChildQty() : (l.getQty() != null ? l.getQty() : 0);
+                if (price > 0) lastPriceInLog = price;
+
+                if ("BUY".equalsIgnoreCase(l.getTradeType())) {
+                    buyValue += (price * qty);
+                    netQty += qty;
+                    totalBuyQty += qty;
+                } else if ("SELL".equalsIgnoreCase(l.getTradeType())) {
+                    sellValue += (price * qty);
+                    netQty -= qty;
+                }
+            }
+
+            double ltp = ltpMap.getOrDefault(sym, lastPriceInLog);
+            double symbolPnl = sellValue - buyValue + (netQty * ltp);
+            totalMasterPnl += symbolPnl;
+
+            if (netQty > 0 && totalBuyQty > 0) {
+                double avgBuyPrice = buyValue / totalBuyQty;
+                totalAllocation += (netQty * avgBuyPrice);
+            } else if (netQty < 0) {
+                // For short selling, allocation could be considered the margin required, but we'll approximate with the sell value
+                totalAllocation += Math.abs(netQty * ltp);
+            }
+        }
+        
+        return new double[]{Math.round(totalMasterPnl * 100.0) / 100.0, Math.round(totalAllocation * 100.0) / 100.0};
     }
 }
