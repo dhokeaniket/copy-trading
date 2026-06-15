@@ -42,8 +42,8 @@ public class TradingDataService {
         this.objectMapper = objectMapper;
     }
 
-    public Mono<Map<String, Object>> getOpenBook(UUID userId, boolean master) {
-        return resolveAccount(userId, master)
+    public Mono<Map<String, Object>> getOpenBook(UUID userId, UUID accountId, boolean master) {
+        return resolveAccount(userId, accountId, master)
                 .flatMap(a -> brokerService.getOrders(a.getId(), userId)
                         .map(resp -> {
                             List<Map<String, Object>> all = toOrderList(resp.get("orders"));
@@ -192,7 +192,11 @@ public class TradingDataService {
         }
     }
 
-    private Mono<BrokerAccount> resolveAccount(UUID userId, boolean master) {
+    private Mono<BrokerAccount> resolveAccount(UUID userId, UUID accountId, boolean master) {
+        if (accountId != null) {
+            return brokerRepo.findById(accountId)
+                    .filter(a -> a.getUserId().equals(userId) && a.getAccessToken() != null);
+        }
         if (master) {
             return activeAccountRepo.findById(userId)
                     .flatMap(aa -> brokerRepo.findById(aa.getBrokerAccountId()))

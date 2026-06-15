@@ -212,8 +212,9 @@ public class MasterController {
 
     @Operation(summary = "Open order book", description = "Pending/open orders from master's active broker")
     @GetMapping("/open-book")
-    public Mono<Map<String, Object>> openBook(@AuthenticationPrincipal String userId) {
-        return tradingDataService.getOpenBook(UUID.fromString(userId), true);
+    public Mono<Map<String, Object>> openBook(@AuthenticationPrincipal String userId,
+                                              @RequestParam(required = false) UUID accountId) {
+        return tradingDataService.getOpenBook(UUID.fromString(userId), accountId, true);
     }
 
     @Operation(summary = "Open F&O positions", description = "Option/futures positions from master's active broker")
