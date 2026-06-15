@@ -541,11 +541,14 @@ public class ChildService {
             double unrealized = toDouble(pos.get("totalPnl"));
 
             Instant monthStart = java.time.LocalDate.now().withDayOfMonth(1).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant();
-            double[] metrics = calculateGlobalMetrics(copyLogList, livePositions, monthStart);
+            Instant todayStart = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant();
+            double[] metrics = calculateGlobalMetrics(copyLogList, livePositions, monthStart, todayStart);
             double globalTotal = metrics[0];
             double copiedPnl = metrics[1];
             double personalPnl = metrics[2];
             double monthlyPnl = metrics[3];
+            double todayCopiedPnl = metrics[4];
+            double todayPersonalPnl = metrics[5];
             double realizedPnl = Math.round((globalTotal - unrealized) * 100.0) / 100.0;
 
             Map<String, Object> r = new LinkedHashMap<>();
@@ -573,7 +576,7 @@ public class ChildService {
                     Map.of("time", java.time.LocalDate.now().minusDays(3).toString(), "personal", 0, "copied", 0),
                     Map.of("time", java.time.LocalDate.now().minusDays(2).toString(), "personal", 0, "copied", 0),
                     Map.of("time", java.time.LocalDate.now().minusDays(1).toString(), "personal", 0, "copied", 0),
-                    Map.of("time", java.time.LocalDate.now().toString(), "personal", personalPnl, "copied", copiedPnl)
+                    Map.of("time", java.time.LocalDate.now().toString(), "personal", todayPersonalPnl, "copied", todayCopiedPnl)
             ));
             r.put("personalTradesList", List.of());
             r.put("masterPnlComparison", Map.of(
@@ -640,7 +643,7 @@ public class ChildService {
         return new double[]{Math.round(totalMasterPnl * 100.0) / 100.0, Math.round(totalAllocation * 100.0) / 100.0};
     }
 
-    private double[] calculateGlobalMetrics(List<com.copytrading.logs.CopyLog> logs, List<PositionDto> livePositions, Instant monthStart) {
+    private double[] calculateGlobalMetrics(List<com.copytrading.logs.CopyLog> logs, List<PositionDto> livePositions, Instant monthStart, Instant todayStart) {
         Map<String, Double> ltpMap = livePositions.stream()
                 .collect(Collectors.toMap(p -> p.getSymbol().toUpperCase(), PositionDto::getLtp, (a, b) -> a));
 
@@ -652,6 +655,8 @@ public class ChildService {
         double copiedPnl = 0.0;
         double personalPnl = 0.0;
         double monthlyPnl = 0.0;
+        double todayCopiedPnl = 0.0;
+        double todayPersonalPnl = 0.0;
 
         for (Map.Entry<String, List<com.copytrading.logs.CopyLog>> entry : bySymbol.entrySet()) {
             String sym = entry.getKey();
@@ -659,7 +664,10 @@ public class ChildService {
             double copiedBuy = 0, copiedSell = 0;
             double personalBuy = 0, personalSell = 0;
             double monthBuy = 0, monthSell = 0;
+            double todayCopiedBuy = 0, todayCopiedSell = 0;
+            double todayPersonalBuy = 0, todayPersonalSell = 0;
             int netQty = 0, copiedNet = 0, personalNet = 0, monthNet = 0;
+            int todayCopiedNet = 0, todayPersonalNet = 0;
             double lastPriceInLog = 0;
 
             for (com.copytrading.logs.CopyLog l : entry.getValue()) {
@@ -669,6 +677,7 @@ public class ChildService {
 
                 boolean isCopied = l.getMasterId() != null;
                 boolean isThisMonth = l.getCreatedAt() != null && !l.getCreatedAt().isBefore(monthStart);
+                boolean isToday = l.getCreatedAt() != null && !l.getCreatedAt().isBefore(todayStart);
 
                 if ("BUY".equalsIgnoreCase(l.getTradeType())) {
                     buyValue += (price * qty);
@@ -676,12 +685,20 @@ public class ChildService {
                     if (isCopied) { copiedBuy += (price * qty); copiedNet += qty; }
                     else { personalBuy += (price * qty); personalNet += qty; }
                     if (isThisMonth) { monthBuy += (price * qty); monthNet += qty; }
+                    if (isToday) {
+                        if (isCopied) { todayCopiedBuy += (price * qty); todayCopiedNet += qty; }
+                        else { todayPersonalBuy += (price * qty); todayPersonalNet += qty; }
+                    }
                 } else if ("SELL".equalsIgnoreCase(l.getTradeType())) {
                     sellValue += (price * qty);
                     netQty -= qty;
                     if (isCopied) { copiedSell += (price * qty); copiedNet -= qty; }
                     else { personalSell += (price * qty); personalNet -= qty; }
                     if (isThisMonth) { monthSell += (price * qty); monthNet -= qty; }
+                    if (isToday) {
+                        if (isCopied) { todayCopiedSell += (price * qty); todayCopiedNet -= qty; }
+                        else { todayPersonalSell += (price * qty); todayPersonalNet -= qty; }
+                    }
                 }
             }
 
@@ -691,13 +708,17 @@ public class ChildService {
             copiedPnl += (copiedSell - copiedBuy + (copiedNet * ltp));
             personalPnl += (personalSell - personalBuy + (personalNet * ltp));
             monthlyPnl += (monthSell - monthBuy + (monthNet * ltp));
+            todayCopiedPnl += (todayCopiedSell - todayCopiedBuy + (todayCopiedNet * ltp));
+            todayPersonalPnl += (todayPersonalSell - todayPersonalBuy + (todayPersonalNet * ltp));
         }
 
         return new double[]{
             Math.round(globalTotal * 100.0) / 100.0,
             Math.round(copiedPnl * 100.0) / 100.0,
             Math.round(personalPnl * 100.0) / 100.0,
-            Math.round(monthlyPnl * 100.0) / 100.0
+            Math.round(monthlyPnl * 100.0) / 100.0,
+            Math.round(todayCopiedPnl * 100.0) / 100.0,
+            Math.round(todayPersonalPnl * 100.0) / 100.0
         };
     }
 }
