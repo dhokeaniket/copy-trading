@@ -1205,14 +1205,14 @@ public class BrokerAccountService {
         if (data instanceof Map d) {
             Object equity = d.get("equity");
             if (equity instanceof Map eq) {
-                Object avail = eq.get("available");
                 Object util = eq.get("utilised");
-                double cash = avail instanceof Map a ? toDouble(((Map) a).getOrDefault("cash", 0)) : 0;
-                double debits = util instanceof Map u ? toDouble(((Map) u).getOrDefault("debits", 0)) : 0;
-                r.put("availableMargin", cash - debits);
+                double net = toDouble(eq.getOrDefault("net", 0));
+                double debits = util instanceof Map u ? toDouble(u.getOrDefault("debits", 0)) : 0;
+                r.put("availableMargin", net);
                 r.put("usedMargin", debits);
-                r.put("totalFunds", cash);
-                r.put("collateral", avail instanceof Map a2 ? toDouble(((Map) a2).getOrDefault("collateral", 0)) : 0);
+                r.put("totalFunds", net + debits);
+                Object avail = eq.get("available");
+                r.put("collateral", avail instanceof Map a2 ? toDouble(a2.getOrDefault("collateral", 0)) : 0);
                 return r;
             }
         }
