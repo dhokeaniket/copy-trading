@@ -73,6 +73,7 @@ public class MasterService {
                 .bind("mid", masterId)
                 .bind("bid", brokerAccountId)
                 .then()
+                .then(orderPollingService.snapshotSingleMasterOrders(masterId))
                 .thenReturn(Map.<String, Object>of(
                         "brokerAccountId", brokerAccountId.toString(),
                         "message", "Active account set"))
