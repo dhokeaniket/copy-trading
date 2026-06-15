@@ -97,6 +97,10 @@ CREATE TABLE IF NOT EXISTS broker_accounts (
   status          VARCHAR(30) NOT NULL DEFAULT 'LINKED' CHECK (status IN ('LINKED','ACTIVE','INACTIVE','AUTH_REQUIRED')),
   session_active  BOOLEAN NOT NULL DEFAULT FALSE,
   session_expires TIMESTAMPTZ,
+  proxy_host      VARCHAR(255),
+  proxy_port      INTEGER,
+  proxy_user      VARCHAR(255),
+  proxy_pass      TEXT,
   linked_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -113,6 +117,8 @@ CREATE TABLE IF NOT EXISTS copy_logs (
   master_trade_id  VARCHAR(100),
   symbol           VARCHAR(50),
   qty              INTEGER,
+  child_qty        INTEGER,
+  child_broker_order_id VARCHAR(100),
   trade_type       VARCHAR(10),
   master_status    VARCHAR(30),
   child_status     VARCHAR(30),
@@ -123,6 +129,10 @@ CREATE TABLE IF NOT EXISTS copy_logs (
   master_placed_at TIMESTAMPTZ,
   engine_received_at TIMESTAMPTZ,
   child_placed_at  TIMESTAMPTZ,
+  product          VARCHAR(10),
+  order_type       VARCHAR(20),
+  price            DOUBLE PRECISION,
+  trigger_price    DOUBLE PRECISION,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

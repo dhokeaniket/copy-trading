@@ -5,6 +5,11 @@ public class UpdateAccountRequest {
     private String apiSecret;
     private String accountNickname;
     private String clientId;
+    private String proxyHost;
+    private Integer proxyPort;
+    private String proxyUser;
+    private String proxyPass;
+    private String totpSecret;
 
     public String getApiKey() { return apiKey; }
     public void setApiKey(String apiKey) { this.apiKey = apiKey; }
@@ -14,4 +19,14 @@ public class UpdateAccountRequest {
     public void setAccountNickname(String accountNickname) { this.accountNickname = accountNickname; }
     public String getClientId() { return clientId; }
     public void setClientId(String clientId) { this.clientId = clientId; }
+    public String getProxyHost() { return proxyHost; }
+    public void setProxyHost(String proxyHost) { this.proxyHost = proxyHost; }
+    public Integer getProxyPort() { return proxyPort; }
+    public void setProxyPort(Integer proxyPort) { this.proxyPort = proxyPort; }
+    public String getProxyUser() { return proxyUser; }
+    public void setProxyUser(String proxyUser) { this.proxyUser = proxyUser; }
+    public String getProxyPass() { return proxyPass; }
+    public void setProxyPass(String proxyPass) { this.proxyPass = proxyPass; }
+    public String getTotpSecret() { return totpSecret; }
+    public void setTotpSecret(String totpSecret) { this.totpSecret = totpSecret; }
 }

@@ -107,12 +107,38 @@ public class SchemaInitializer {
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS master_placed_at TIMESTAMPTZ",
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS engine_received_at TIMESTAMPTZ",
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS child_placed_at TIMESTAMPTZ",
+                // Child scaled qty (distinct from master qty) and child's broker order id for tracking/cancel/reconcile
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS child_qty INTEGER",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS child_broker_order_id VARCHAR(100)",
                 // Add telegram_chat_id to users
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(100)",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_channel VARCHAR(10)",
                 "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS copy_sides VARCHAR(20) DEFAULT 'BUY_ONLY'",
                 "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS allow_short_selling BOOLEAN NOT NULL DEFAULT FALSE",
                 "ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS copy_paused BOOLEAN NOT NULL DEFAULT FALSE",
-                "ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS paused_until TIMESTAMPTZ"
+                "ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS paused_until TIMESTAMPTZ",
+                // IP slot for Groww per-user IP routing (0 = primary IP, 1+ = proxy slots)
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS ip_slot INTEGER NOT NULL DEFAULT 0",
+                // Add product, order_type, price, trigger_price to copy_logs for order detail tracking
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS product VARCHAR(10)",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS order_type VARCHAR(20)",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS price DOUBLE PRECISION",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS trigger_price DOUBLE PRECISION",
+                // Price tolerance per child subscription (default 2%)
+                "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS price_tolerance_pct DOUBLE PRECISION NOT NULL DEFAULT 2.0",
+                // Per-user proxy support: route broker API calls through user's own proxy
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_host VARCHAR(255)",
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_port INTEGER",
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_user VARCHAR(255)",
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS proxy_pass TEXT",
+                // Google OAuth
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255)",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT",
+                // Exchange order ID for reconciliation
+                "ALTER TABLE trades ADD COLUMN IF NOT EXISTS exchange_order_id VARCHAR(100)",
+                "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS exchange_order_id VARCHAR(100)",
+                // TOTP secret per broker account (encrypted, for auto-TOTP generation)
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS totp_secret TEXT"
             };
 
             for (String sql : statements) {

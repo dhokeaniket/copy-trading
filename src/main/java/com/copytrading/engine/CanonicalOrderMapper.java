@@ -21,11 +21,14 @@ public class CanonicalOrderMapper {
 
     public CanonicalOrder fromBrokerOrder(Map<String, Object> raw, String sourceBrokerId) {
         CanonicalOrder o = new CanonicalOrder();
-        o.setSourceBrokerId(sourceBrokerId != null ? sourceBrokerId.toUpperCase() : "GROWW");
+        o.setSourceBrokerId(sourceBrokerId != null && !sourceBrokerId.isBlank()
+                ? sourceBrokerId.toUpperCase() : null);
         o.setOrderId(OrderNormalizer.extractOrderId(raw));
-        o.setStatus(OrderNormalizer.extractStatus(raw));
+        // Normalize status and side to canonical values immediately on ingestion so the
+        // rest of the engine never reasons about raw broker strings.
+        o.setStatus(BrokerStatusNormalizer.toCanonical(OrderNormalizer.extractStatus(raw), sourceBrokerId));
         o.setSymbol(OrderNormalizer.extractSymbol(raw));
-        o.setSide(OrderNormalizer.extractSide(raw));
+        o.setSide(BrokerStatusNormalizer.toCanonicalSide(OrderNormalizer.extractSide(raw), sourceBrokerId));
         o.setFilledQty(OrderNormalizer.extractFilledQty(raw));
         o.setPrice(OrderNormalizer.extractPrice(raw));
         o.setTriggerPrice(OrderNormalizer.extractTriggerPrice(raw));
@@ -39,8 +42,9 @@ public class CanonicalOrderMapper {
         o.setInstrumentType(type);
         o.setSegment(type.isDerivative() ? "FNO" : defaultSegment(OrderNormalizer.extractField(raw, "segment")));
 
+        int orderQty = OrderNormalizer.extractOrderQty(raw);
         o.setReadyForCopy(o.getOrderId() != null && o.getSymbol() != null && o.getSide() != null
-                && OrderNormalizer.shouldProcessForCopy(o.getStatus(), o.getFilledQty()));
+                && OrderNormalizer.shouldProcessForCopy(o.getStatus(), o.getFilledQty(), orderQty));
         return o;
     }
 
@@ -53,6 +57,7 @@ public class CanonicalOrderMapper {
         req.setOrderType(o.getOrderType());
         req.setExchange(o.getExchange());
         req.setMasterBrokerId(o.getSourceBrokerId());
+        req.setMasterOrderId(o.getOrderId());
         boolean limit = "LIMIT".equalsIgnoreCase(o.getOrderType());
         boolean sl = "SL".equalsIgnoreCase(o.getOrderType()) || "SL-M".equalsIgnoreCase(o.getOrderType());
         req.setPrice(limit || sl ? o.getPrice() : 0);

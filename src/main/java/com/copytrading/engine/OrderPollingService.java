@@ -94,10 +94,75 @@ public class OrderPollingService {
 
     public boolean isPollingEnabled() { return pollingEnabled; }
     public void setPollingEnabled(boolean enabled) {
+        boolean wasDisabled = !this.pollingEnabled;
         this.pollingEnabled = enabled;
         // Persist to Redis so it survives restarts
         pollingCache.setPollingEnabled(enabled).subscribe();
+        // When resuming from OFF→ON, block polls until we've marked the full current order book
+        // as known. Otherwise the next poll cycle can run before the async snapshot finishes and
+        // would copy fills that happened while polling was off.
+        if (enabled && wasDisabled) {
+            log.info("POLLING_RESUMED — snapshotting current orders (polls paused until complete)");
+            resetInProgress = true;
+            snapshotCurrentOrdersReactive()
+                    .doFinally(signal -> {
+                        resetInProgress = false;
+                        log.info("POLLING_SNAPSHOT_DONE signal={} — polls resumed", signal);
+                    })
+                    .subscribe();
+        }
+        log.info("POLLING_STATE_CHANGED enabled={}", enabled);
     }
+
+    /**
+     * Mark all current master orders as "known" across every linked broker account that has a token
+     * (same coverage as {@link #pollSingleMaster}), so fills from the "off" period never copy after resume.
+     */
+    private Mono<Void> snapshotCurrentOrdersReactive() {
+        return activeAccountRepo.findAll()
+                .map(MasterActiveAccount::getMasterId)
+                .distinct()
+                .flatMap(this::snapshotSingleMasterOrders)
+                .then();
+    }
+
+    private Mono<Void> snapshotSingleMasterOrders(UUID masterId) {
+        return brokerRepo.findByUserId(masterId)
+                .filter(a -> a.getAccessToken() != null)
+                .flatMap(account -> brokerService.getOrders(account.getId(), masterId)
+                        .map(resp -> {
+                            List<?> ordersList = extractOrdersList(resp.get("orders"));
+                            if (ordersList != null && !ordersList.isEmpty()) {
+                                Set<String> known = knownOrders.computeIfAbsent(masterId, k -> ConcurrentHashMap.newKeySet());
+                                int marked = 0;
+                                for (Object orderObj : ordersList) {
+                                    if (orderObj instanceof Map<?, ?> order) {
+                                        String orderId = OrderNormalizer.extractOrderId(toStringKeyMap(order));
+                                        if (orderId != null && !orderId.isBlank()) {
+                                            known.add(orderId);
+                                            pollingCache.markOrderKnown(masterId, orderId).subscribe();
+                                            marked++;
+                                        }
+                                    }
+                                }
+                                log.info("POLLING_SNAPSHOT master={} broker={} ordersMarkedKnown={}",
+                                        masterId, account.getBrokerId(), marked);
+                            }
+                            return 0;
+                        })
+                        .onErrorResume(e -> {
+                            log.warn("POLLING_SNAPSHOT_FAIL master={} broker={} err={}",
+                                    masterId, account.getBrokerId(), e.getMessage());
+                            return Mono.just(0);
+                        }))
+                .then();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> toStringKeyMap(Map<?, ?> raw) {
+        return (Map<String, Object>) raw;
+    }
+
     public Instant getLastResetAt() { return lastResetAt; }
 
     /** Restore polling state from Redis on startup. Defaults to ON if not set. */
@@ -196,35 +261,23 @@ public class OrderPollingService {
 
     private Mono<Void> pollSingleMaster(MasterActiveAccount active) {
         UUID masterId = active.getMasterId();
-
         if (snapshotInProgressMasters.contains(masterId)) {
             return Mono.empty();
         }
 
-        UUID brokerAccountId = active.getBrokerAccountId();
-
-        return brokerRepo.findById(brokerAccountId)
-                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
-                .flatMap(account -> brokerService.getOrders(brokerAccountId, masterId)
+        // Poll every linked broker account that has a token (not only the designated active one)
+        return brokerRepo.findByUserId(masterId)
+                .filter(a -> a.getAccessToken() != null)
+                .flatMap(account -> brokerService.getOrders(account.getId(), masterId)
                         .map(resp -> {
-                            Object ordersObj = resp.get("orders");
-                            List<?> ordersList = null;
-                            if (ordersObj instanceof List<?> list) {
-                                ordersList = list;
-                            } else if (ordersObj instanceof Map<?,?> map) {
-                                // Groww wraps in {order_list: [...]}
-                                Object inner = map.get("order_list");
-                                if (inner == null) inner = map.get("orderBook");
-                                if (inner == null) inner = map.get("data");
-                                if (inner instanceof List<?> list2) ordersList = list2;
-                            }
+                            List<?> ordersList = extractOrdersList(resp.get("orders"));
                             if (ordersList != null && !ordersList.isEmpty()) {
                                 return processOrders(masterId, account, ordersList);
                             }
                             return 0;
                         })
                         .onErrorResume(e -> {
-                            log.debug("POLL_ORDERS_FAIL master={} error={}", masterId, e.getMessage());
+                            log.debug("POLL_ORDERS_FAIL master={} broker={} error={}", masterId, account.getBrokerId(), e.getMessage());
                             return Mono.just(0);
                         }))
                 .then();
@@ -240,6 +293,14 @@ public class OrderPollingService {
             Map<String, Object> order = (Map<String, Object>) orderObj;
 
             CanonicalOrder canonical = canonicalMapper.fromBrokerOrder(order, account.getBrokerId());
+
+            // Cancel propagation: a master order that was cancelled at the exchange should cancel any
+            // linked child orders. Propagation is idempotent so repeated polls don't re-cancel.
+            if (BrokerStatusNormalizer.CANCELLED.equals(canonical.getStatus())
+                    && canonical.getOrderId() != null) {
+                copyEngine.propagateCancel(masterId, canonical.getOrderId()).subscribe();
+            }
+
             if (!canonical.isReadyForCopy()) continue;
 
             String orderId = canonical.getOrderId();

@@ -5,6 +5,7 @@ import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.logs.TradeLogRepository;
 import com.copytrading.engine.EngineHistoryService;
+import com.copytrading.engine.SubscriptionCache;
 import com.copytrading.positions.PositionDto;
 import com.copytrading.positions.PositionsService;
 import com.copytrading.subscription.CopySides;
@@ -31,11 +32,12 @@ public class ChildService {
     private final BrokerAccountRepository brokerRepo;
     private final PositionsService positionsService;
     private final EngineHistoryService engineHistory;
+    private final SubscriptionCache subscriptionCache;
 
     public ChildService(SubscriptionRepository subs, UserAccountRepository users,
                         TradeLogRepository logs, CopyLogRepository copyLogs,
                         BrokerAccountRepository brokerRepo, PositionsService positionsService,
-                        EngineHistoryService engineHistory) {
+                        EngineHistoryService engineHistory, SubscriptionCache subscriptionCache) {
         this.subs = subs;
         this.users = users;
         this.logs = logs;
@@ -43,6 +45,7 @@ public class ChildService {
         this.brokerRepo = brokerRepo;
         this.positionsService = positionsService;
         this.engineHistory = engineHistory;
+        this.subscriptionCache = subscriptionCache;
     }
 
     public Mono<Map<String, Object>> getTradeTimeline(UUID childId) {
@@ -50,33 +53,64 @@ public class ChildService {
                 .map(trades -> Map.<String, Object>of("trades", trades));
     }
 
-    // 5.1 List available masters
-    public Mono<Map<String, Object>> listMasters() {
-        return users.findByRole("MASTER").collectList().flatMap(masters ->
-            reactor.core.publisher.Flux.fromIterable(masters)
-                .flatMap(m -> subs.findByMasterIdAndCopyingStatus(m.getId(), "ACTIVE").collectList()
-                    .map(activeSubs -> {
-                        Map<String, Object> r = new LinkedHashMap<>();
-                        r.put("masterId", m.getId());
-                        r.put("name", m.getName());
-                        r.put("winRate", 0);
-                        r.put("totalTrades", 0);
-                        r.put("avgPnl", 0);
-                        r.put("subscribers", activeSubs.size());
-                        r.put("return30d", 0);
-                        r.put("returnYTD", 0);
-                        r.put("riskLevel", "Medium");
-                        r.put("bestTrade", "₹0");
-                        r.put("worstTrade", "₹0");
-                        r.put("verified", true);
-                        r.put("description", m.getName() + " — Master trader on Ascentra");
-                        r.put("markets", List.of("Equity", "F&O"));
-                        r.put("equityCurve", List.of(100, 100, 100, 100, 100, 100));
-                        return r;
-                    }))
+    // 5.1 List available masters (enriched from copy_logs + child's subscription state)
+    public Mono<Map<String, Object>> listMasters(UUID childId) {
+        return users.findByRole("MASTER")
+                .flatMap(m -> Mono.zip(
+                        subs.findByMasterIdAndChildId(m.getId(), childId)
+                                .map(Optional::of)
+                                .defaultIfEmpty(Optional.empty()),
+                        copyLogs.findByMasterId(m.getId()).collectList()
+                                .onErrorReturn(List.of()),
+                        subs.findByMasterIdAndCopyingStatus(m.getId(), "ACTIVE").count()
+                                .onErrorReturn(0L)
+                ).map(t -> buildMasterDiscoveryCard(m, t.getT1(), t.getT2(), t.getT3()))
+                .onErrorResume(e -> Mono.empty()))
                 .collectList()
-                .map(list -> Map.<String, Object>of("masters", list))
-        );
+                .map(list -> Map.<String, Object>of("masters", list));
+    }
+
+    private static Map<String, Object> buildMasterDiscoveryCard(
+            com.copytrading.auth.UserAccount m,
+            Optional<Subscription> mySub,
+            List<com.copytrading.logs.CopyLog> masterLogs,
+            long activeSubscribers) {
+        long success = masterLogs.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
+        long failed = masterLogs.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
+        long total = success + failed;
+        double winRate = total > 0 ? Math.round(success * 100.0 / total) : 0;
+
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("masterId", m.getId());
+        r.put("id", m.getId());
+        r.put("name", m.getName());
+        r.put("masterName", m.getName());
+        r.put("email", m.getEmail());
+        r.put("winRate", winRate);
+        r.put("totalTrades", success);
+        r.put("totalCopies", masterLogs.size());
+        r.put("failedCopies", failed);
+        r.put("avgPnl", 0);
+        r.put("subscribers", activeSubscribers);
+        r.put("return30d", winRate);
+        r.put("returnYTD", winRate);
+        r.put("riskLevel", total > 50 ? "Medium" : "Low");
+        r.put("bestTrade", "—");
+        r.put("worstTrade", "—");
+        r.put("verified", true);
+        r.put("description", m.getName() + " — Master trader on Ascentra");
+        r.put("markets", List.of("Equity", "F&O"));
+        r.put("equityCurve", List.of(100, 100, 100, 100, 100, 100));
+        mySub.ifPresent(s -> {
+            r.put("mySubscriptionStatus", s.getCopyingStatus());
+            r.put("myScalingFactor", s.getScalingFactor());
+            r.put("subscribed", "ACTIVE".equals(s.getCopyingStatus()) || "PAUSED".equals(s.getCopyingStatus()));
+        });
+        if (!r.containsKey("mySubscriptionStatus")) {
+            r.put("mySubscriptionStatus", "NOT_SUBSCRIBED");
+            r.put("subscribed", false);
+        }
+        return r;
     }
 
     // 5.2 Subscribe to master
@@ -231,24 +265,43 @@ public class ChildService {
 
     // 5.4 List subscriptions (exclude INACTIVE)
     public Mono<Map<String, Object>> listSubscriptions(UUID childId) {
+        Instant todayStart = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"))
+                .atStartOfDay(java.time.ZoneId.of("Asia/Kolkata")).toInstant();
         return subs.findByChildIdAndCopyingStatusNot(childId, "INACTIVE")
-                .flatMap(s -> users.findById(s.getMasterId()).map(m -> {
-                    Map<String, Object> r = new LinkedHashMap<>();
-                    r.put("masterId", s.getMasterId());
-                    r.put("masterName", m.getName());
-                    r.put("scalingFactor", s.getScalingFactor());
-                    r.put("copySides", CopySides.normalize(s.getCopySides()));
-                    r.put("allowShortSelling", s.isAllowShortSelling());
-                    r.put("copyingStatus", s.getCopyingStatus());
-                    r.put("subscribedAt", s.getCreatedAt());
-                    r.put("brokerAccountId", s.getBrokerAccountId());
-                    r.put("pnl", 0);
-                    r.put("totalPnL", 0);
-                    r.put("tradesCopiedToday", 0);
-                    r.put("allocation", 0);
-                    r.put("allocationAmount", 0);
-                    return r;
-                }))
+                .flatMap(s -> users.findById(s.getMasterId())
+                        .zipWith(copyLogs.findByChildId(childId).collectList())
+                        .map(t -> {
+                            var m = t.getT1();
+                            var childLogs = t.getT2();
+                            long copied = childLogs.stream()
+                                    .filter(l -> s.getMasterId().equals(l.getMasterId())
+                                            && "SUCCESS".equals(l.getChildStatus()))
+                                    .count();
+                            long todayCopied = childLogs.stream()
+                                    .filter(l -> s.getMasterId().equals(l.getMasterId())
+                                            && "SUCCESS".equals(l.getChildStatus())
+                                            && l.getCreatedAt() != null
+                                            && !l.getCreatedAt().isBefore(todayStart))
+                                    .count();
+                            Map<String, Object> r = new LinkedHashMap<>();
+                            r.put("subscriptionId", s.getId());
+                            r.put("masterId", s.getMasterId());
+                            r.put("masterName", m.getName());
+                            r.put("scalingFactor", s.getScalingFactor());
+                            r.put("copySides", CopySides.normalize(s.getCopySides()));
+                            r.put("allowShortSelling", s.isAllowShortSelling());
+                            r.put("priceTolerancePct", s.getPriceTolerancePct());
+                            r.put("copyingStatus", s.getCopyingStatus());
+                            r.put("subscribedAt", s.getCreatedAt());
+                            r.put("brokerAccountId", s.getBrokerAccountId());
+                            r.put("pnl", 0);
+                            r.put("totalPnL", 0);
+                            r.put("tradesCopied", copied);
+                            r.put("tradesCopiedToday", todayCopied);
+                            r.put("allocation", 0);
+                            r.put("allocationAmount", 0);
+                            return r;
+                        }))
                 .collectList()
                 .map(list -> Map.<String, Object>of("subscriptions", list));
     }
@@ -267,17 +320,27 @@ public class ChildService {
 
     public Mono<Map<String, Object>> updateCopySettings(UUID childId, UUID masterId, String copySides,
                                                         Boolean allowShortSelling) {
+        return updateCopySettings(childId, masterId, copySides, allowShortSelling, null);
+    }
+
+    public Mono<Map<String, Object>> updateCopySettings(UUID childId, UUID masterId, String copySides,
+                                                        Boolean allowShortSelling, Double priceTolerancePct) {
         return subs.findByMasterIdAndChildId(masterId, childId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Subscription not found")))
                 .flatMap(s -> {
                     applyCopyPreferences(s, copySides, allowShortSelling);
+                    if (priceTolerancePct != null && priceTolerancePct >= 0 && priceTolerancePct <= 10.0) {
+                        s.setPriceTolerancePct(priceTolerancePct);
+                    }
                     return subs.save(s);
                 })
+                .doOnNext(s -> subscriptionCache.invalidate(masterId))
                 .map(s -> {
                     Map<String, Object> r = new LinkedHashMap<>();
                     r.put("masterId", masterId);
                     r.put("copySides", CopySides.normalize(s.getCopySides()));
                     r.put("allowShortSelling", s.isAllowShortSelling());
+                    r.put("priceTolerancePct", s.getPriceTolerancePct());
                     r.put("message", "Copy settings updated");
                     return r;
                 });
@@ -341,10 +404,16 @@ public class ChildService {
                             t.put("masterName", masterNames.getOrDefault(l.getMasterId(), "Unknown"));
                             t.put("instrument", l.getSymbol());
                             t.put("type", l.getTradeType());
+                            t.put("product", l.getProduct());
+                            t.put("orderType", l.getOrderType());
+                            t.put("price", l.getPrice());
+                            t.put("triggerPrice", l.getTriggerPrice());
                             t.put("masterQty", l.getQty() != null ? l.getQty() : 0);
                             t.put("myQty", l.getQty() != null ? l.getQty() : 0);
                             t.put("status", l.getChildStatus());
                             t.put("skipReason", l.getSkipReason());
+                            t.put("errorMessage", l.getErrorMessage());
+                            t.put("failureReason", l.getErrorMessage() != null ? l.getErrorMessage() : l.getSkipReason());
                             t.put("latencyMs", l.getLatencyMs());
                             t.put("engineReceivedAt", l.getEngineReceivedAt() != null ? l.getEngineReceivedAt().toString() : null);
                             t.put("childPlacedAt", l.getChildPlacedAt() != null ? l.getChildPlacedAt().toString() : null);
@@ -432,33 +501,60 @@ public class ChildService {
                         }));
     }
 
-    // 5.10 Child analytics
+    // 5.10 Child analytics (copy_logs + live positions)
     public Mono<Map<String, Object>> getAnalytics(UUID childId) {
-        return logs.findByChildId(childId).collectList().map(tradeLogs -> {
-            long copied = tradeLogs.stream().filter(l -> "REPLICATED".equals(l.getType())).count();
-            long failed = tradeLogs.stream().filter(l -> "FAILED".equals(l.getStatus())).count();
+        return Mono.zip(
+                copyLogs.findByChildId(childId).collectList(),
+                positionsService.getChildPositions(childId).onErrorReturn(Map.of("totalPnl", 0, "positions", List.of())),
+                subs.findByChildIdAndCopyingStatusNot(childId, "INACTIVE").count()
+        ).map(t -> {
+            var copyLogList = t.getT1();
+            Map<String, Object> pos = t.getT2();
+            long activeMasters = t.getT3();
+            long copied = copyLogList.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
+            long failed = copyLogList.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
+            long skipped = copyLogList.stream().filter(l -> "SKIPPED".equals(l.getChildStatus())).count();
+            double unrealized = toDouble(pos.get("totalPnl"));
+            long total = copied + failed;
+            double winRate = total > 0 ? Math.round(copied * 100.0 / total) : 0;
+
             Map<String, Object> r = new LinkedHashMap<>();
-            r.put("totalPnl", 0);
-            r.put("totalPnL", 0);
-            r.put("personalPnL", 0);
-            r.put("copiedPnL", 0);
+            r.put("totalPnl", unrealized);
+            r.put("totalPnL", unrealized);
+            r.put("personalPnL", unrealized);
+            r.put("copiedPnL", unrealized);
             r.put("masterPnL", 0);
+            r.put("unrealizedPnl", unrealized);
+            r.put("totalUnrealizedPnl", unrealized);
+            r.put("realizedPnl", 0);
+            r.put("combinedPnl", unrealized);
             r.put("personalTrades", 0);
             r.put("copiedTrades", copied);
+            r.put("skippedCopies", skipped);
             r.put("failedReplications", failed);
-            r.put("portfolioValue", 0);
-            r.put("winRate", 0);
-            r.put("activeMasters", 0);
+            r.put("portfolioValue", unrealized);
+            r.put("winRate", winRate);
+            r.put("activeMasters", activeMasters);
+            r.put("openPositions", pos.getOrDefault("positions", List.of()));
             r.put("pnlHistory", List.of(
                     Map.of("time", java.time.LocalDate.now().minusDays(4).toString(), "personal", 0, "copied", 0),
                     Map.of("time", java.time.LocalDate.now().minusDays(3).toString(), "personal", 0, "copied", 0),
                     Map.of("time", java.time.LocalDate.now().minusDays(2).toString(), "personal", 0, "copied", 0),
-                    Map.of("time", java.time.LocalDate.now().minusDays(1).toString(), "personal", 0, "copied", 0),
-                    Map.of("time", java.time.LocalDate.now().toString(), "personal", 0, "copied", 0)
+                    Map.of("time", java.time.LocalDate.now().minusDays(1).toString(), "personal", 0, "copied", copied),
+                    Map.of("time", java.time.LocalDate.now().toString(), "personal", 0, "copied", copied)
             ));
             r.put("personalTradesList", List.of());
-            r.put("masterPnlComparison", Map.of("masterPnl", 0, "childPnl", 0, "replicationAccuracy", 0));
+            r.put("masterPnlComparison", Map.of(
+                    "masterPnl", 0,
+                    "childPnl", unrealized,
+                    "replicationAccuracy", winRate));
             return r;
         });
+    }
+
+    private static double toDouble(Object o) {
+        if (o == null) return 0;
+        if (o instanceof Number n) return n.doubleValue();
+        try { return Double.parseDouble(o.toString()); } catch (Exception e) { return 0; }
     }
 }

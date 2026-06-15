@@ -104,28 +104,51 @@ public class EngineHistoryService {
 
     public Mono<List<Map<String, Object>>> getChildTimeline(UUID childId) {
         return copyLogs.findByChildId(childId)
-                .flatMap(l -> users.findById(l.getMasterId())
-                        .map(master -> {
-                            Map<String, Object> t = new LinkedHashMap<>();
-                            t.put("eventId", l.getCopyGroupId());
-                            t.put("masterName", master.getName());
-                            t.put("symbol", l.getSymbol());
-                            t.put("side", l.getTradeType());
-                            t.put("masterTriggeredAt", l.getMasterPlacedAt() != null
-                                    ? l.getMasterPlacedAt().toString() : l.getEngineReceivedAt());
-                            t.put("myOrderPlacedAt", l.getChildPlacedAt() != null
-                                    ? l.getChildPlacedAt().toString() : l.getCreatedAt());
-                            t.put("totalChildLatencyMs", l.getLatencyMs());
-                            t.put("status", l.getChildStatus());
-                            t.put("skipReason", l.getSkipReason());
-                            t.put("qty", l.getQty());
-                            return t;
-                        }))
+                .flatMap(l -> {
+                    if (l.getMasterId() == null) {
+                        // No master ID — still include the log with placeholder name
+                        Map<String, Object> t = buildTimelineEntry(l, "Unknown");
+                        return Mono.just(t);
+                    }
+                    return users.findById(l.getMasterId())
+                        .map(master -> buildTimelineEntry(l, master.getName()))
+                        .defaultIfEmpty(buildTimelineEntry(l, "Unknown"));
+                })
                 .collectList()
                 .map(list -> list.stream()
                         .sorted((a, b) -> String.valueOf(b.get("myOrderPlacedAt"))
                                 .compareTo(String.valueOf(a.get("myOrderPlacedAt"))))
                         .toList());
+    }
+
+    private static Map<String, Object> buildTimelineEntry(CopyLog l, String masterName) {
+        Map<String, Object> t = new LinkedHashMap<>();
+        t.put("eventId", l.getCopyGroupId());
+        t.put("masterName", masterName);
+        t.put("symbol", l.getSymbol());
+        t.put("side", l.getTradeType());
+        t.put("product", l.getProduct());
+        t.put("orderType", l.getOrderType());
+        t.put("price", l.getPrice());
+        t.put("triggerPrice", l.getTriggerPrice());
+        t.put("masterTriggeredAt", l.getMasterPlacedAt() != null
+                ? l.getMasterPlacedAt().toString() : l.getEngineReceivedAt());
+        t.put("myOrderPlacedAt", l.getChildPlacedAt() != null
+                ? l.getChildPlacedAt().toString() : (l.getCreatedAt() != null ? l.getCreatedAt().toString() : ""));
+        t.put("totalChildLatencyMs", l.getLatencyMs());
+        t.put("status", l.getChildStatus());
+        t.put("childStatus", l.getChildStatus());
+        t.put("skipReason", l.getSkipReason());
+        t.put("errorMessage", l.getErrorMessage());
+        t.put("failureReason", l.getErrorMessage() != null ? l.getErrorMessage()
+                : (l.getSkipReason() != null ? l.getSkipReason() : null));
+        t.put("masterStatus", l.getMasterStatus());
+        t.put("qty", l.getQty());
+        t.put("childQty", l.getChildQty());
+        t.put("masterQty", l.getQty());
+        t.put("orderId", l.getMasterTradeId());
+        t.put("childBrokerOrderId", l.getChildBrokerOrderId());
+        return t;
     }
 
     private static boolean filterLog(CopyLog l, String from, String to, String symbol, String side) {
@@ -151,6 +174,7 @@ public class EngineHistoryService {
         CopyLog first = logs.get(0);
         long succeeded = logs.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
         long failed = logs.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
+        long skipped = logs.stream().filter(l -> "SKIPPED".equals(l.getChildStatus())).count();
         List<Long> childLat = logs.stream()
                 .map(CopyLog::getLatencyMs)
                 .filter(Objects::nonNull)
@@ -172,18 +196,38 @@ public class EngineHistoryService {
         m.put("childrenTotal", logs.size());
         m.put("childrenSucceeded", succeeded);
         m.put("childrenFailed", failed);
+        m.put("childrenSkipped", skipped);
+        m.put("failures", logs.stream()
+                .filter(l -> "FAILED".equals(l.getChildStatus()) || "SKIPPED".equals(l.getChildStatus()))
+                .map(l -> {
+                    Map<String, Object> f = new LinkedHashMap<>();
+                    f.put("childId", l.getChildId() != null ? l.getChildId().toString() : null);
+                    f.put("status", l.getChildStatus());
+                    f.put("errorMessage", l.getErrorMessage());
+                    f.put("skipReason", l.getSkipReason());
+                    f.put("latencyMs", l.getLatencyMs());
+                    return f;
+                }).toList());
         return m;
     }
 
     private static Map<String, Object> toChildRow(CopyLog l, String childName) {
         Map<String, Object> c = new LinkedHashMap<>();
         c.put("childName", childName);
+        c.put("childId", l.getChildId() != null ? l.getChildId().toString() : null);
         c.put("broker", "—");
         c.put("status", l.getChildStatus());
+        c.put("symbol", l.getSymbol());
+        c.put("side", l.getTradeType());
+        c.put("qty", l.getQty());
+        c.put("masterQty", l.getQty());
         c.put("orderId", l.getMasterTradeId());
-        c.put("failureReason", l.getErrorMessage());
+        c.put("errorMessage", l.getErrorMessage());
+        c.put("skipReason", l.getSkipReason());
+        c.put("failureReason", l.getErrorMessage() != null ? l.getErrorMessage() : l.getSkipReason());
         c.put("totalChildLatencyMs", l.getLatencyMs());
         c.put("brokerLatencyMs", l.getLatencyMs());
+        c.put("childPlacedAt", l.getChildPlacedAt() != null ? l.getChildPlacedAt().toString() : null);
         return c;
     }
 

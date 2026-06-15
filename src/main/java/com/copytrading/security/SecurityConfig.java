@@ -52,6 +52,10 @@ public class SecurityConfig {
                         new PathPatternParserServerWebExchangeMatcher("/webjars/**"),
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/register"),
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/login"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/send-email-otp"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/send-login-otp"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/verify-email-otp"),
+                        new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/verify-login-otp"),
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/refresh-token"),
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/forgot-password"),
                         new PathPatternParserServerWebExchangeMatcher("/api/v1/auth/reset-password"),
@@ -82,6 +86,13 @@ public class SecurityConfig {
                         .pathMatchers("/", "/health").permitAll()
                         .pathMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**").permitAll()
                         .pathMatchers("/api/v1/auth/register", "/api/v1/auth/login").permitAll()
+                        .pathMatchers("/api/v1/auth/google").permitAll()
+                        .pathMatchers(
+                                "/api/v1/auth/send-email-otp",
+                                "/api/v1/auth/send-login-otp",
+                                "/api/v1/auth/verify-email-otp",
+                                "/api/v1/auth/verify-login-otp"
+                        ).permitAll()
                         .pathMatchers("/api/v1/auth/refresh-token", "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password").permitAll()
                         .pathMatchers("/api/v1/auth/send-otp", "/api/v1/auth/verify-otp").permitAll()
                         .pathMatchers("/api/v1/auth/validate-password").permitAll()

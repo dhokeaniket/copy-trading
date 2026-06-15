@@ -47,6 +47,13 @@ public class AdminController {
         return adminService.createChild(req);
     }
 
+    // 2.3b POST /admin/users/admin
+    @PostMapping(value = "/users/admin", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    public Mono<Map<String, Object>> createAdmin(@RequestBody CreateAdminRequest req) {
+        return adminService.createAdmin(req);
+    }
+
     // 2.4 GET /admin/users/:userId
     @GetMapping("/users/{userId}")
     public Mono<UserDto> getUser(@PathVariable UUID userId) {
@@ -104,5 +111,12 @@ public class AdminController {
             @RequestParam(required = false) UUID userId,
             @RequestParam(required = false) String status) {
         return adminService.getTradeLogs(userId, status);
+    }
+
+    // 2.13 GET /admin/master-child-map
+    @GetMapping("/master-child-map")
+    @Operation(summary = "Get all masters with their linked children (name, email, status, scalingFactor)")
+    public Mono<Map<String, Object>> getMasterChildMap() {
+        return adminService.getMasterChildMap();
     }
 }

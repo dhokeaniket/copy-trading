@@ -37,8 +37,18 @@ public class UserAccount {
     @Column("two_factor_secret")
     private String twoFactorSecret;
 
+    /** EMAIL or PHONE — how login OTP is delivered when two_factor_enabled is true. */
+    @Column("two_factor_channel")
+    private String twoFactorChannel;
+
     @Column("telegram_chat_id")
     private String telegramChatId;
+
+    @Column("google_id")
+    private String googleId;
+
+    @Column("avatar_url")
+    private String avatarUrl;
 
     @Column("created_at")
     private Instant createdAt;
@@ -74,8 +84,17 @@ public class UserAccount {
     public String getTwoFactorSecret() { return twoFactorSecret; }
     public void setTwoFactorSecret(String twoFactorSecret) { this.twoFactorSecret = twoFactorSecret; }
 
+    public String getTwoFactorChannel() { return twoFactorChannel; }
+    public void setTwoFactorChannel(String twoFactorChannel) { this.twoFactorChannel = twoFactorChannel; }
+
     public String getTelegramChatId() { return telegramChatId; }
     public void setTelegramChatId(String telegramChatId) { this.telegramChatId = telegramChatId; }
+
+    public String getGoogleId() { return googleId; }
+    public void setGoogleId(String googleId) { this.googleId = googleId; }
+
+    public String getAvatarUrl() { return avatarUrl; }
+    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

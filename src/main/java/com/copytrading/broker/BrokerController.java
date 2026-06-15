@@ -17,6 +17,78 @@ import java.util.UUID;
 @Tag(name = "2. Broker Accounts", description = "Link broker accounts, login, margin, positions, orders, holdings, dashboard")
 public class BrokerController {
 
+    // ── Singular /broker/ aliases (frontend uses singular, backend uses plural) ──
+    @GetMapping("/api/v1/broker/accounts")
+    public Mono<Map<String, Object>> listAccountsSingular(@AuthenticationPrincipal String userId) {
+        return service.listAccounts(UUID.fromString(userId));
+    }
+    @GetMapping("/api/v1/broker/accounts/{accountId}")
+    public Mono<BrokerAccountDto> getAccountSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.getAccount(accountId, UUID.fromString(userId));
+    }
+    @GetMapping("/api/v1/broker/accounts/{accountId}/dashboard")
+    public Mono<Map<String, Object>> getDashboardSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.getDashboard(accountId, UUID.fromString(userId));
+    }
+    @GetMapping("/api/v1/broker/accounts/{accountId}/positions")
+    public Mono<Map<String, Object>> getPositionsSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.getPositions(accountId, UUID.fromString(userId));
+    }
+    @GetMapping("/api/v1/broker/accounts/{accountId}/margin")
+    public Mono<Map<String, Object>> getMarginSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.getMargin(accountId, UUID.fromString(userId));
+    }
+    @GetMapping("/api/v1/broker/accounts/{accountId}/orders")
+    public Mono<Map<String, Object>> getOrdersSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.getOrders(accountId, UUID.fromString(userId));
+    }
+    @GetMapping("/api/v1/broker/accounts/{accountId}/trades")
+    public Mono<Map<String, Object>> getTradesSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.getTrades(accountId, UUID.fromString(userId));
+    }
+    @GetMapping("/api/v1/broker/accounts/{accountId}/holdings")
+    public Mono<Map<String, Object>> getHoldingsSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.getHoldings(accountId, UUID.fromString(userId));
+    }
+    @GetMapping("/api/v1/broker/accounts/{accountId}/status")
+    public Mono<Map<String, Object>> getStatusSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.getSessionStatus(accountId, UUID.fromString(userId));
+    }
+    @GetMapping("/api/v1/broker/accounts/{accountId}/profile")
+    public Mono<Map<String, Object>> getProfileSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return profileService.getProfile(accountId, UUID.fromString(userId), false);
+    }
+    @GetMapping("/api/v1/broker/accounts/{accountId}/signal")
+    public Mono<Map<String, Object>> getSignalSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.getConnectionSignal(accountId, UUID.fromString(userId));
+    }
+    @PostMapping(value = "/api/v1/broker/accounts/{accountId}/login", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> loginSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId, @RequestBody(required = false) BrokerLoginRequest req) {
+        return service.loginToBroker(accountId, UUID.fromString(userId), req);
+    }
+    @PutMapping(value = "/api/v1/broker/accounts/{accountId}", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, String>> updateAccountSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId, @RequestBody UpdateAccountRequest req) {
+        return service.updateAccount(accountId, UUID.fromString(userId), req);
+    }
+    @DeleteMapping("/api/v1/broker/accounts/{accountId}")
+    public Mono<Map<String, String>> deleteAccountSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.deleteAccount(accountId, UUID.fromString(userId));
+    }
+    @PostMapping(value = "/api/v1/broker/accounts", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    public Mono<Map<String, Object>> linkAccountSingular(@AuthenticationPrincipal String userId, @RequestBody LinkAccountRequest req) {
+        return service.linkAccount(UUID.fromString(userId), req);
+    }
+    @PostMapping("/api/v1/broker/accounts/{accountId}/disconnect")
+    public Mono<Map<String, Object>> disconnectSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId) {
+        return service.disconnectBroker(accountId, UUID.fromString(userId));
+    }
+    @PutMapping(value = "/api/v1/broker/accounts/{accountId}/token", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> setTokenSingular(@PathVariable UUID accountId, @AuthenticationPrincipal String userId, @RequestBody Map<String, String> body) {
+        return service.setAccessToken(accountId, UUID.fromString(userId), body.get("accessToken"));
+    }
+    // ── End singular aliases ──
+
     private final BrokerAccountService service;
     private final BalanceAlertService balanceAlertService;
     private final BrokerProfileService profileService;
@@ -70,11 +142,18 @@ public class BrokerController {
         return service.deleteAccount(accountId, UUID.fromString(userId));
     }
 
-    // Disconnect
+    @Operation(summary = "Disconnect broker session", description = "Clears session; returns full loginOptions (Groww: access token + API key/TOTP) for reconnect")
     @PostMapping("/api/v1/brokers/accounts/{accountId}/disconnect")
-    public Mono<Map<String, Object>> disconnectAccount(@PathVariable UUID accountId,
+    public Mono<Map<String, Object>> disconnectBroker(@PathVariable UUID accountId,
                                                        @AuthenticationPrincipal String userId) {
-        return service.disconnectAccount(accountId, UUID.fromString(userId));
+        return service.disconnectBroker(accountId, UUID.fromString(userId));
+    }
+
+    @Operation(summary = "Login options for reconnect", description = "Same loginOptions as GET /brokers — use after disconnect or when session expired")
+    @GetMapping("/api/v1/brokers/accounts/{accountId}/login-options")
+    public Mono<Map<String, Object>> getLoginOptions(@PathVariable UUID accountId,
+                                                      @AuthenticationPrincipal String userId) {
+        return service.getLoginOptions(accountId, UUID.fromString(userId));
     }
 
     @Operation(summary = "Login to broker", description = "Create broker session. Body varies by broker: Groww={}, Zerodha={requestToken}, Fyers/Upstox={authCode}, Dhan={authCode:tokenId}, AngelOne={totpCode}")

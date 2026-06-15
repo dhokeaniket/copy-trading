@@ -8,7 +8,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 import java.util.Map;
@@ -21,13 +20,15 @@ public class AuthController {
 
     private final AuthService authService;
     private final OtpService otpService;
+    private final GoogleAuthService googleAuthService;
 
-    public AuthController(AuthService authService, OtpService otpService) {
+    public AuthController(AuthService authService, OtpService otpService, GoogleAuthService googleAuthService) {
         this.authService = authService;
         this.otpService = otpService;
+        this.googleAuthService = googleAuthService;
     }
 
-    @Operation(summary = "Send OTP", description = "Send OTP to registered phone number for phone-based login")
+    @Operation(summary = "Send SMS OTP", description = "Send OTP to registered phone (Twilio)")
     @PostMapping(value = "/send-otp", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> sendOtp(@RequestBody SendOtpRequest req) {
         if (req.getPhone() == null || req.getPhone().isBlank()) {
@@ -43,7 +44,12 @@ public class AuthController {
         }
         return authService.findByPhone(req.getPhone())
                 .flatMap(user -> {
-                    otpService.generateAndStore(req.getPhone());
+                    if (!otpService.sendOtp(req.getPhone())) {
+                        return Mono.just(Map.<String, Object>of(
+                                "success", false,
+                                "error", "SMS_FAILED",
+                                "message", "Failed to send OTP. Check Twilio config or verify trial phone list."));
+                    }
                     Map<String, Object> r = new java.util.LinkedHashMap<>();
                     r.put("success", true);
                     r.put("data", Map.of("expiresIn", otpService.getExpirySeconds(), "retryAfter", otpService.getRetrySeconds()));
@@ -51,8 +57,6 @@ public class AuthController {
                     return Mono.just(r);
                 })
                 .switchIfEmpty(Mono.defer(() -> {
-                    // Don't leak whether phone exists — always show success-like response
-                    // but internally don't send OTP
                     Map<String, Object> r = new java.util.LinkedHashMap<>();
                     r.put("success", true);
                     r.put("data", Map.of("expiresIn", otpService.getExpirySeconds(), "retryAfter", otpService.getRetrySeconds()));
@@ -61,7 +65,7 @@ public class AuthController {
                 }));
     }
 
-    @Operation(summary = "Verify OTP", description = "Verify OTP and get access tokens")
+    @Operation(summary = "Verify SMS OTP", description = "Verify phone OTP and get access tokens")
     @PostMapping(value = "/verify-otp", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> verifyOtp(@RequestBody VerifyOtpRequest req) {
         if (req.getPhone() == null || req.getOtp() == null) {
@@ -79,6 +83,26 @@ public class AuthController {
         return authService.loginByPhone(req.getPhone());
     }
 
+    @Operation(summary = "Resend login OTP", description = "Resend code via user's 2FA channel (email or phone)")
+    @PostMapping(value = {"/send-login-otp", "/send-email-otp"}, consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> resendLoginOtp(@RequestBody SendEmailOtpRequest req) {
+        if (req.getEmail() == null || req.getEmail().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "email is required"));
+        }
+        return authService.resendLoginOtp(req.getEmail());
+    }
+
+    @Operation(summary = "Verify login OTP", description = "Complete login after password + OTP (email or SMS)")
+    @PostMapping(value = {"/verify-login-otp", "/verify-email-otp"}, consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<LoginResponse> verifyLoginOtp(
+            @RequestBody VerifyEmailOtpRequest req,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        if (req.getEmail() == null || req.getOtp() == null) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "email and otp are required"));
+        }
+        return authService.verifyLoginOtp(req.getEmail(), req.getOtp(), authorization);
+    }
+
     @Operation(summary = "Register", description = "Create a new user account (MASTER, CHILD, or ADMIN)")
     @PostMapping(value = "/register", consumes = MediaType.APPLICATION_JSON_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
@@ -86,13 +110,23 @@ public class AuthController {
         return authService.register(req);
     }
 
-    @Operation(summary = "Login", description = "Login with email and password. Returns JWT tokens.")
+    @Operation(summary = "Login", description = "Email + password. If 2FA enabled, OTP sent via email or phone.")
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<LoginResponse> login(@RequestBody LoginRequest req) {
         return authService.login(req);
     }
 
-    @Operation(summary = "Logout", description = "Revoke refresh token")
+    @Operation(summary = "Login with Google", description = "Send the Google ID token (credential) from frontend Sign-In. Auto-registers if new user.")
+    @PostMapping(value = "/google", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> googleLogin(@RequestBody Map<String, String> body) {
+        String idToken = body.get("idToken");
+        if (idToken == null || idToken.isBlank()) {
+            idToken = body.get("credential"); // Google's default field name
+        }
+        String role = body.getOrDefault("role", "CHILD");
+        return googleAuthService.loginWithGoogle(idToken, role);
+    }
+
     @PostMapping(value = "/logout", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> logout(@RequestBody LogoutRequest req) {
         if (req.getRefreshToken() == null || req.getRefreshToken().isBlank()) {
@@ -101,7 +135,6 @@ public class AuthController {
         return authService.logout(req.getRefreshToken());
     }
 
-    @Operation(summary = "Refresh token", description = "Exchange refresh token for new access + refresh tokens")
     @PostMapping(value = "/refresh-token", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, String>> refreshToken(@RequestBody RefreshTokenRequest req) {
         if (req.getRefreshToken() == null || req.getRefreshToken().isBlank()) {
@@ -110,22 +143,24 @@ public class AuthController {
         return authService.refreshToken(req.getRefreshToken());
     }
 
-    @Operation(summary = "Forgot password", description = "Request password reset link via email")
+    @Operation(summary = "Forgot password", description = "Sends 6-digit OTP to registered email (Gmail SMTP)")
     @PostMapping(value = "/forgot-password", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public Mono<Map<String, String>> forgotPassword(@RequestBody ForgotPasswordRequest req) {
+    public Mono<Map<String, Object>> forgotPassword(@RequestBody ForgotPasswordRequest req) {
         if (req.getEmail() == null || req.getEmail().isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "email is required"));
         }
         return authService.forgotPassword(req.getEmail());
     }
 
-    @Operation(summary = "Reset password", description = "Reset password using token from email")
+    @Operation(summary = "Reset password", description = "Use email + otp + newPassword (preferred) or token + newPassword")
     @PostMapping(value = "/reset-password", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, String>> resetPassword(@RequestBody ResetPasswordRequest req) {
-        return authService.resetPassword(req.getToken(), req.getNewPassword());
+        if (req.getNewPassword() == null || req.getNewPassword().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "newPassword is required"));
+        }
+        return authService.resetPassword(req);
     }
 
-    @Operation(summary = "Get my profile", description = "Get current user's profile")
     @GetMapping("/me")
     public Mono<UserDto> getProfile(@AuthenticationPrincipal String userId) {
         return authService.getProfile(UUID.fromString(userId));
@@ -137,17 +172,30 @@ public class AuthController {
         return authService.updateProfile(UUID.fromString(userId), req);
     }
 
-    @PostMapping("/2fa/enable")
-    public Mono<Map<String, String>> enable2FA(@AuthenticationPrincipal String userId) {
-        return authService.enable2FA(UUID.fromString(userId));
+    @Operation(summary = "2FA channel options", description = "EMAIL or PHONE — for enable screen")
+    @GetMapping("/2fa/options")
+    public Mono<Map<String, Object>> get2FAOptions(@AuthenticationPrincipal String userId) {
+        return authService.get2FAOptions(UUID.fromString(userId));
     }
 
+    @Operation(summary = "Enable 2FA", description = "Choose EMAIL or PHONE; sends OTP to that channel (no QR)")
+    @PostMapping(value = "/2fa/enable", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> enable2FA(@AuthenticationPrincipal String userId,
+                                              @RequestBody Enable2FARequest req) {
+        if (req.getChannel() == null || req.getChannel().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "channel is required: EMAIL or PHONE"));
+        }
+        return authService.enable2FA(UUID.fromString(userId), req.getChannel());
+    }
+
+    @Operation(summary = "Verify 2FA OTP", description = "Confirm code from email or SMS to enable 2FA")
     @PostMapping(value = "/2fa/verify", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> verify2FA(@AuthenticationPrincipal String userId,
                                                 @RequestBody Verify2FARequest req) {
         return authService.verify2FA(UUID.fromString(userId), req.getOtp());
     }
 
+    @Operation(summary = "Disable 2FA", description = "Requires password + OTP on current channel (email or phone)")
     @DeleteMapping(value = "/2fa/disable", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, String>> disable2FA(@AuthenticationPrincipal String userId,
                                                  @RequestBody Disable2FARequest req) {
@@ -155,7 +203,6 @@ public class AuthController {
     }
 
     @PostMapping(value = "/validate-password", consumes = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "Validate password strength", description = "Check password meets requirements without submitting registration")
     public Mono<Map<String, Object>> validatePassword(@RequestBody Map<String, String> body) {
         String password = body.getOrDefault("password", "");
         Map<String, Object> r = new java.util.LinkedHashMap<>();

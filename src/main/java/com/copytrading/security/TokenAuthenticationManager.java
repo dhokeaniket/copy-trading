@@ -26,6 +26,9 @@ public class TokenAuthenticationManager implements ReactiveAuthenticationManager
         String token = (String) authentication.getCredentials();
         try {
             Claims claims = jwtService.parse(token);
+            if (Boolean.TRUE.equals(claims.get("pending2fa", Boolean.class))) {
+                return Mono.error(new BadCredentialsException("Complete two-factor verification to access this resource"));
+            }
             String userId = claims.getSubject(); // UUID string
             String role = claims.get("role", String.class);
             var authority = new SimpleGrantedAuthority("ROLE_" + role);

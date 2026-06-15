@@ -29,17 +29,35 @@ public class AdminService {
     private final AuthService authService;
     private final SubscriptionRepository subscriptionRepo;
     private final TradeLogRepository tradeLogRepo;
+    private final com.copytrading.broker.BrokerAccountRepository brokerAccountRepo;
+    private final com.copytrading.trade.TradeRepository tradeRepo;
+    private final com.copytrading.notification.NotificationRepository notificationRepo;
+    private final com.copytrading.master.MasterActiveAccountRepository masterActiveRepo;
+    private final com.copytrading.logs.CopyLogRepository copyLogRepo;
+    private final org.springframework.r2dbc.core.DatabaseClient databaseClient;
 
     public AdminService(UserAccountRepository users,
                         RefreshTokenRepository refreshTokens,
                         AuthService authService,
                         SubscriptionRepository subscriptionRepo,
-                        TradeLogRepository tradeLogRepo) {
+                        TradeLogRepository tradeLogRepo,
+                        com.copytrading.broker.BrokerAccountRepository brokerAccountRepo,
+                        com.copytrading.trade.TradeRepository tradeRepo,
+                        com.copytrading.notification.NotificationRepository notificationRepo,
+                        com.copytrading.master.MasterActiveAccountRepository masterActiveRepo,
+                        com.copytrading.logs.CopyLogRepository copyLogRepo,
+                        org.springframework.r2dbc.core.DatabaseClient databaseClient) {
         this.users = users;
         this.refreshTokens = refreshTokens;
         this.authService = authService;
         this.subscriptionRepo = subscriptionRepo;
         this.tradeLogRepo = tradeLogRepo;
+        this.brokerAccountRepo = brokerAccountRepo;
+        this.tradeRepo = tradeRepo;
+        this.notificationRepo = notificationRepo;
+        this.masterActiveRepo = masterActiveRepo;
+        this.copyLogRepo = copyLogRepo;
+        this.databaseClient = databaseClient;
     }
 
     // 2.1 List users with optional filters
@@ -93,6 +111,18 @@ public class AdminService {
                 });
     }
 
+    // 2.3b Create Admin
+    public Mono<Map<String, Object>> createAdmin(CreateAdminRequest req) {
+        return authService.createUser(req.getName(), req.getEmail(), req.getPassword(), "ADMIN", req.getPhone())
+                .map(u -> {
+                    log.info("ADMIN_CREATE_ADMIN id={} email={}", u.getId(), u.getEmail());
+                    Map<String, Object> resp = new LinkedHashMap<>();
+                    resp.put("userId", u.getId());
+                    resp.put("message", "Admin account created");
+                    return resp;
+                });
+    }
+
     // 2.4 Get user by ID
     public Mono<UserDto> getUserById(UUID userId) {
         return users.findById(userId)
@@ -137,15 +167,33 @@ public class AdminService {
                 });
     }
 
-    // 2.8 Delete user
+    // 2.8 Delete user (cascade: removes all related data using raw SQL)
     public Mono<Map<String, String>> deleteUser(UUID userId) {
         return users.findById(userId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
                 .flatMap(u -> {
-                    log.warn("ADMIN_DELETE_USER id={} email={}", u.getId(), u.getEmail());
-                    return refreshTokens.revokeAllByUserId(userId)
-                            .then(users.deleteById(userId))
-                            .thenReturn(Map.of("message", "User permanently deleted"));
+                    if ("ADMIN".equals(u.getRole())) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot delete admin accounts"));
+                    }
+                    log.warn("ADMIN_DELETE_USER id={} email={} role={}", u.getId(), u.getEmail(), u.getRole());
+                    String uid = userId.toString();
+                    // Execute cascade delete as raw SQL statements
+                    return databaseClient.sql("DELETE FROM copy_logs WHERE master_id = :id OR child_id = :id").bind("id", userId).then()
+                            .then(databaseClient.sql("DELETE FROM trade_logs WHERE master_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM subscriptions WHERE master_id = :id OR child_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM master_active_accounts WHERE master_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM trades WHERE user_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM notifications WHERE user_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM broker_accounts WHERE user_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM refresh_tokens WHERE user_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM risk_rules WHERE user_id = :id").bind("id", userId).then())
+                            .then(databaseClient.sql("DELETE FROM users WHERE id = :id").bind("id", userId).then())
+                            .thenReturn(Map.of("message", "User and all related data permanently deleted"))
+                            .onErrorResume(e -> {
+                                log.error("ADMIN_DELETE_FAILED userId={} error={}", userId, e.getMessage());
+                                return Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                                        "Delete failed: " + e.getMessage()));
+                            });
                 });
     }
 
@@ -226,6 +274,43 @@ public class AdminService {
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("logs", filtered);
             return resp;
+        });
+    }
+
+    // 2.13 Master-child map (all masters with their linked children)
+    public Mono<Map<String, Object>> getMasterChildMap() {
+        return users.findByRole("MASTER").collectList().flatMap(masters -> {
+            return Flux.fromIterable(masters).flatMap(master ->
+                subscriptionRepo.findByMasterId(master.getId())
+                    .filter(s -> "ACTIVE".equals(s.getCopyingStatus())
+                            || "PAUSED".equals(s.getCopyingStatus())
+                            || "PENDING_APPROVAL".equals(s.getCopyingStatus()))
+                    .filter(s -> !s.getChildId().equals(master.getId()))
+                    .flatMap(s -> users.findById(s.getChildId())
+                        .map(child -> {
+                            Map<String, Object> c = new LinkedHashMap<>();
+                            c.put("childId", child.getId().toString());
+                            c.put("name", child.getName());
+                            c.put("email", child.getEmail());
+                            c.put("status", s.getCopyingStatus());
+                            c.put("scalingFactor", s.getScalingFactor());
+                            return c;
+                        }))
+                    .collectList()
+                    .map(children -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("masterId", master.getId().toString());
+                        m.put("masterName", master.getName());
+                        m.put("masterEmail", master.getEmail());
+                        m.put("children", children);
+                        return m;
+                    })
+            ).collectList().map(list -> {
+                Map<String, Object> resp = new LinkedHashMap<>();
+                resp.put("masters", list);
+                resp.put("total", list.size());
+                return resp;
+            });
         });
     }
 }

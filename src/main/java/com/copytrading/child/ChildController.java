@@ -6,6 +6,7 @@ import com.copytrading.child.dto.CopySettingsRequest;
 import com.copytrading.child.dto.MasterIdRequest;
 import com.copytrading.child.dto.SubscribeRequest;
 import com.copytrading.positions.PositionsService;
+import com.copytrading.trading.TradingDataService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
@@ -24,14 +25,19 @@ public class ChildController {
 
     private final ChildService service;
     private final PositionsService positionsService;
+    private final TradingDataService tradingDataService;
 
-    public ChildController(ChildService service, PositionsService positionsService) {
+    public ChildController(ChildService service, PositionsService positionsService,
+                           TradingDataService tradingDataService) {
         this.service = service;
         this.positionsService = positionsService;
+        this.tradingDataService = tradingDataService;
     }
 
     @GetMapping("/masters")
-    public Mono<Map<String, Object>> listMasters() { return service.listMasters(); }
+    public Mono<Map<String, Object>> listMasters(@AuthenticationPrincipal String userId) {
+        return service.listMasters(UUID.fromString(userId));
+    }
 
     @PostMapping(value = "/subscriptions", consumes = MediaType.APPLICATION_JSON_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
@@ -57,6 +63,12 @@ public class ChildController {
 
     @DeleteMapping("/subscriptions/{masterId}")
     public Mono<Map<String, String>> unsubscribe(@AuthenticationPrincipal String userId, @PathVariable UUID masterId) {
+        return service.unsubscribe(UUID.fromString(userId), masterId);
+    }
+
+    @Operation(summary = "Remove master (alias)", description = "Same as DELETE /subscriptions/{masterId}")
+    @DeleteMapping({"/masters/{masterId}", "/remove/{masterId}"})
+    public Mono<Map<String, String>> removeMaster(@AuthenticationPrincipal String userId, @PathVariable UUID masterId) {
         return service.unsubscribe(UUID.fromString(userId), masterId);
     }
 
@@ -88,7 +100,7 @@ public class ChildController {
     public Mono<Map<String, Object>> updateCopySettings(@AuthenticationPrincipal String userId,
                                                           @RequestBody CopySettingsRequest req) {
         return service.updateCopySettings(UUID.fromString(userId), req.getMasterId(),
-                req.getCopySides(), req.getAllowShortSelling());
+                req.getCopySides(), req.getAllowShortSelling(), req.getPriceTolerancePct());
     }
 
     @PostMapping(value = "/copying/pause", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -135,5 +147,28 @@ public class ChildController {
     @GetMapping("/positions")
     public Mono<Map<String, Object>> getPositions(@AuthenticationPrincipal String userId) {
         return positionsService.getChildPositions(UUID.fromString(userId));
+    }
+
+    @GetMapping("/open-book")
+    public Mono<Map<String, Object>> openBook(@AuthenticationPrincipal String userId) {
+        return tradingDataService.getOpenBook(UUID.fromString(userId), false);
+    }
+
+    @GetMapping("/open-options")
+    public Mono<Map<String, Object>> openOptions(@AuthenticationPrincipal String userId) {
+        return tradingDataService.getOpenOptions(UUID.fromString(userId), false);
+    }
+
+    @GetMapping("/option-status")
+    public Mono<Map<String, Object>> optionStatus(@AuthenticationPrincipal String userId,
+                                                   @RequestParam(required = false) String from,
+                                                   @RequestParam(required = false) String to) {
+        return tradingDataService.getOptionStatus(UUID.fromString(userId), false, from, to);
+    }
+
+    @Operation(summary = "Child P&L dashboard", description = "Alias for /analytics with live P&L")
+    @GetMapping("/pnl-dashboard")
+    public Mono<Map<String, Object>> pnlDashboard(@AuthenticationPrincipal String userId) {
+        return service.getAnalytics(UUID.fromString(userId));
     }
 }

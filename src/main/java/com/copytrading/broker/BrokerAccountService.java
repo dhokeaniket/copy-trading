@@ -4,10 +4,17 @@ import com.copytrading.broker.dhan.DhanApiClient;
 import com.copytrading.broker.dto.*;
 import com.copytrading.broker.fyers.FyersApiClient;
 import com.copytrading.broker.groww.GrowwApiClient;
+import com.copytrading.broker.proxy.ProxyHttpClient;
 import com.copytrading.broker.upstox.UpstoxApiClient;
 import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import com.copytrading.broker.angelone.AngelOneApiClient;
+import com.copytrading.engine.BrokerFieldTranslator;
+import com.copytrading.engine.InstrumentCache;
+import com.copytrading.engine.SymbolMapper;
+import com.copytrading.master.MasterActiveAccountRepository;
+import com.copytrading.notification.NotificationService;
 import com.copytrading.security.BrokerCredentials;
+import com.copytrading.subscription.SubscriptionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -24,6 +31,9 @@ public class BrokerAccountService {
     private static final Logger log = LoggerFactory.getLogger(BrokerAccountService.class);
     private static final Set<String> SUPPORTED = Set.of("GROWW", "ZERODHA", "ANGELONE", "UPSTOX", "DHAN", "FYERS");
 
+    /** Prevent frontend from retrying the same auth code (single-use, expires in 2 min). */
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> usedAuthCodes = new java.util.concurrent.ConcurrentHashMap<>();
+
     private final BrokerAccountRepository repo;
     private final GrowwApiClient growwClient;
     private final ZerodhaApiClient zerodhaClient;
@@ -33,13 +43,27 @@ public class BrokerAccountService {
     private final AngelOneApiClient angelOneClient;
     private final PlatformBrokerConfig platformConfig;
     private final BrokerCredentials credentials;
+    private final NotificationService notifications;
+    private final SymbolMapper symbolMapper;
+    private final InstrumentCache instruments;
+    private final SubscriptionRepository subscriptionRepo;
+    private final MasterActiveAccountRepository masterActiveAccountRepo;
+    private final com.copytrading.broker.groww.GrowwProxyRouter proxyRouter;
+    private final ProxyHttpClient proxyHttpClient;
 
     public BrokerAccountService(BrokerAccountRepository repo, GrowwApiClient growwClient,
                                 ZerodhaApiClient zerodhaClient, FyersApiClient fyersClient,
                                 UpstoxApiClient upstoxClient, DhanApiClient dhanClient,
                                 AngelOneApiClient angelOneClient,
                                 PlatformBrokerConfig platformConfig,
-                                BrokerCredentials credentials) {
+                                BrokerCredentials credentials,
+                                NotificationService notifications,
+                                SymbolMapper symbolMapper,
+                                InstrumentCache instruments,
+                                SubscriptionRepository subscriptionRepo,
+                                MasterActiveAccountRepository masterActiveAccountRepo,
+                                com.copytrading.broker.groww.GrowwProxyRouter proxyRouter,
+                                ProxyHttpClient proxyHttpClient) {
         this.repo = repo;
         this.growwClient = growwClient;
         this.zerodhaClient = zerodhaClient;
@@ -49,10 +73,24 @@ public class BrokerAccountService {
         this.angelOneClient = angelOneClient;
         this.platformConfig = platformConfig;
         this.credentials = credentials;
+        this.notifications = notifications;
+        this.symbolMapper = symbolMapper;
+        this.instruments = instruments;
+        this.subscriptionRepo = subscriptionRepo;
+        this.masterActiveAccountRepo = masterActiveAccountRepo;
+        this.proxyRouter = proxyRouter;
+        this.proxyHttpClient = proxyHttpClient;
     }
 
     private String sessionToken(BrokerAccount a) {
         return credentials.accessToken(a);
+    }
+
+    /** Get Zerodha API key for a specific account (per-user credentials, fallback to platform). */
+    private String zerodhaApiKey(BrokerAccount a) {
+        if (a.getApiKey() != null && !a.getApiKey().isBlank()) return a.getApiKey();
+        var creds = platformConfig.getZerodha();
+        return creds != null ? creds.getApiKey() : null;
     }
 
     // 3.1 List supported brokers
@@ -65,21 +103,17 @@ public class BrokerAccountService {
             brokerInfo("ANGELONE", "Angel One", true, List.of(), "totp", "totpCode"),
             dhanBrokerInfo()
         );
-        return Mono.just(Map.of("brokers", brokers));
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("brokers", brokers);
+        if (platformConfig.getServerEgressIp() != null) {
+            resp.put("platformServerIp", platformConfig.getServerEgressIp());
+            resp.put("ipWhitelistNote", "Whitelist platformServerIp in Groww API dashboard (required for API access)");
+        }
+        return Mono.just(resp);
     }
 
     private Map<String, Object> dhanBrokerInfo() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("brokerId", "DHAN");
-        m.put("name", "Dhan");
-        m.put("isActive", true);
-        m.put("loginMethod", "oauth");
-        m.put("loginField", "tokenId");
-        m.put("loginOptions", List.of(
-            Map.of("method", "accessToken", "description", "Paste access token from Dhan Web (Profile → DhanHQ Trading APIs)", "requiredFields", List.of("accessToken")),
-            Map.of("method", "oauth", "description", "Login via Dhan (platform handles everything, user just clicks Connect)", "requiredFields", List.of())
-        ));
-        return m;
+        return loginConfigForBroker("DHAN");
     }
 
     // 3.2 Link account
@@ -95,6 +129,12 @@ public class BrokerAccountService {
         a.setNickname(req.getAccountNickname());
         a.setSessionActive(false);
         a.setLinkedAt(Instant.now());
+
+        // Per-user proxy settings (optional)
+        if (req.getProxyHost() != null) a.setProxyHost(req.getProxyHost());
+        if (req.getProxyPort() != null) a.setProxyPort(req.getProxyPort());
+        if (req.getProxyUser() != null) a.setProxyUser(req.getProxyUser());
+        if (req.getProxyPass() != null) a.setProxyPass(req.getProxyPass());
 
         // For OAuth brokers, use platform-level keys; for Groww, also fall back to platform keys
         PlatformBrokerConfig.BrokerCreds platformCreds = platformConfig.getFor(broker);
@@ -121,6 +161,31 @@ public class BrokerAccountService {
             a.setStatus("AUTH_REQUIRED");
         }
         credentials.encryptSensitiveFields(a);
+
+        // Auto-assign ip_slot for Groww (each Groww user needs a unique IP)
+        if ("GROWW".equals(broker)) {
+            return repo.findMaxGrowwIpSlot()
+                    .defaultIfEmpty(-1)
+                    .flatMap(maxSlot -> {
+                        int nextSlot = maxSlot + 1;
+                        a.setIpSlot(nextSlot);
+                        return repo.save(a).map(saved -> {
+                            String assignedIp = proxyRouter.getPublicIp(nextSlot);
+                            log.info("BROKER_LINKED id={} user={} broker=GROWW ipSlot={} assignedIp={}",
+                                    saved.getId(), userId, nextSlot, assignedIp);
+                            Map<String, Object> r = new LinkedHashMap<>();
+                            r.put("accountId", saved.getId());
+                            r.put("brokerId", saved.getBrokerId());
+                            r.put("status", saved.getStatus());
+                            r.put("ipSlot", nextSlot);
+                            r.put("assignedIp", assignedIp);
+                            r.put("whitelistIp", assignedIp);
+                            r.put("message", "Whitelist IP " + assignedIp + " in your Groww API dashboard before connecting.");
+                            return r;
+                        });
+                    });
+        }
+
         return repo.save(a).map(saved -> {
             log.info("BROKER_LINKED id={} user={} broker={}", saved.getId(), userId, broker);
             Map<String, Object> r = new LinkedHashMap<>();
@@ -131,10 +196,30 @@ public class BrokerAccountService {
         });
     }
 
-    // 3.3 List user's accounts
+    // 3.3 List user's accounts (enriched with live margin/pnl/positions)
     public Mono<Map<String, Object>> listAccounts(UUID userId) {
         return repo.findByUserId(userId)
-                .map(BrokerAccountDto::from)
+                .flatMap(a -> {
+                    BrokerAccountDto dto = BrokerAccountDto.from(a);
+                    if (!a.isSessionActive() || a.getAccessToken() == null) {
+                        return Mono.just(dto);
+                    }
+                    // Enrich with live margin data
+                    return getMargin(a.getId(), userId)
+                            .map(margin -> {
+                                double avail = toDouble(margin.get("availableMargin"));
+                                double used = toDouble(margin.get("usedMargin"));
+                                double total = toDouble(margin.get("totalFunds"));
+                                dto.setMargin(avail);
+                                dto.setAvailableMargin(avail);
+                                dto.setUsedMargin(used);
+                                dto.setTotalFunds(total > 0 ? total : avail + used);
+                                dto.setPnl(toDouble(margin.get("totalPnl")));
+                                return dto;
+                            })
+                            .onErrorReturn(dto)
+                            .defaultIfEmpty(dto);
+                }, 2)
                 .collectList()
                 .map(list -> Map.<String, Object>of("accounts", list));
     }
@@ -157,7 +242,57 @@ public class BrokerAccountService {
                     if (req.getApiSecret() != null) a.setApiSecret(req.getApiSecret());
                     if (req.getAccountNickname() != null) a.setNickname(req.getAccountNickname());
                     if (req.getClientId() != null) a.setClientId(req.getClientId());
+                    // Proxy settings
+                    boolean proxyChanged = false;
+                    if (req.getProxyHost() != null) { a.setProxyHost(req.getProxyHost()); proxyChanged = true; }
+                    if (req.getProxyPort() != null) { a.setProxyPort(req.getProxyPort()); proxyChanged = true; }
+                    if (req.getProxyUser() != null) { a.setProxyUser(req.getProxyUser()); proxyChanged = true; }
+                    if (req.getProxyPass() != null) { a.setProxyPass(req.getProxyPass()); proxyChanged = true; }
+                    if (proxyChanged) {
+                        proxyHttpClient.evict(accountId);
+                        log.info("PROXY_UPDATED accountId={} host={} port={}", accountId, a.getProxyHost(), a.getProxyPort());
+                    }
+                    credentials.encryptSensitiveFields(a);
                     return repo.save(a).thenReturn(Map.of("message", "Account updated"));
+                });
+    }
+
+    /** Login UI config for reconnect — same options as GET /api/v1/brokers (e.g. Groww accessToken + apiKeyWithTotp). */
+    public Mono<Map<String, Object>> getLoginOptions(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
+                .map(a -> {
+                    Map<String, Object> config = loginConfigForAccount(a, null);
+                    logLoginOptions(accountId, userId, a, config, "GET_LOGIN_OPTIONS");
+                    return config;
+                });
+    }
+
+    /** End session but keep account; returns full login options for reconnect; pushes notification. */
+    public Mono<Map<String, Object>> disconnectBroker(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
+                .flatMap(a -> {
+                    clearBrokerSession(a);
+                    clearStoredCredentialsOnDisconnect(a);
+                    // After clearing session (accessToken=null), only encrypt fields that were
+                    // freshly set to plaintext. For Groww, apiSecret stays encrypted in DB — don't touch it.
+                    // clearStoredCredentials sets apiKey/apiSecret to "" for non-Groww brokers, safe to encrypt.
+                    if (!"GROWW".equals(a.getBrokerId())) {
+                        credentials.encryptSensitiveFields(a);
+                    }
+                    // For Groww, nothing needs encryption here — accessToken is null, apiSecret already encrypted
+                    return repo.save(a)
+                            .flatMap(saved -> notifyBrokerReconnect(userId, saved, "BROKER_DISCONNECTED",
+                                    "Broker disconnected",
+                                    "Your " + BrokerAccountDto.from(saved).getBrokerName()
+                                            + " account was disconnected. Tap Reconnect to sign in again.")
+                                    .thenReturn(buildDisconnectResponse(saved)))
+                            .doOnNext(r -> log.info(
+                                    "BROKER_DISCONNECTED accountId={} userId={} broker={} reason=USER_DISCONNECT options={}",
+                                    accountId, userId, a.getBrokerId(), r.get("loginOptionMethods")));
                 });
     }
 
@@ -174,12 +309,16 @@ public class BrokerAccountService {
                     a.setSessionActive(true);
                     a.setStatus("ACTIVE");
                     a.setSessionExpires(java.time.Instant.now().plusSeconds(86400));
+                    credentials.encryptAccessTokenOnly(a);
                     return repo.save(a).map(saved -> {
                         Map<String, Object> r = new java.util.LinkedHashMap<>();
                         r.put("status", "SESSION_ACTIVE");
                         r.put("message", "Access token saved. Session active until " + saved.getSessionExpires());
                         r.put("broker", saved.getBrokerId());
                         r.put("accountId", saved.getId().toString());
+                        r.put("loginMethod", "accessToken");
+                        log.info("BROKER_LOGIN_SUCCESS accountId={} userId={} broker={} method=accessToken",
+                                accountId, userId, saved.getBrokerId());
                         return r;
                     });
                 });
@@ -190,16 +329,18 @@ public class BrokerAccountService {
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
-                .flatMap(a -> repo.delete(a)
-                        .thenReturn(Map.of("message", "Account unlinked"))
-                        .onErrorResume(e -> {
-                            // FK constraint from subscriptions — deactivate instead of delete
-                            a.setSessionActive(false);
-                            a.setStatus("INACTIVE");
-                            a.setAccessToken(null);
-                            return repo.save(a).thenReturn(Map.of(
-                                    "message", "Account deactivated. Unsubscribe from masters first to fully remove."));
-                        }));
+                .flatMap(a -> {
+                    log.info("BROKER_DELETE_START accountId={} userId={} broker={}", accountId, userId, a.getBrokerId());
+                    // Clear FK references before deleting:
+                    // 1. Null out broker_account_id on any subscriptions using this account
+                    // 2. Remove master_active_accounts row if it references this account
+                    return subscriptionRepo.clearBrokerAccountId(accountId)
+                            .then(masterActiveAccountRepo.deleteById(userId).onErrorResume(e -> Mono.empty()))
+                            .then(repo.delete(a))
+                            .thenReturn(Map.of("message", "Account unlinked"))
+                            .doOnSuccess(r -> log.info("BROKER_DELETE_OK accountId={} userId={} broker={}",
+                                    accountId, userId, a.getBrokerId()));
+                });
     }
 
     // 3.7 Login to broker (create session)
@@ -208,6 +349,9 @@ public class BrokerAccountService {
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
                 .flatMap(a -> {
+                    String loginMethod = detectLoginMethod(a, req);
+                    log.info("BROKER_LOGIN_START accountId={} userId={} broker={} method={}",
+                            accountId, userId, a.getBrokerId(), loginMethod);
                     switch (a.getBrokerId()) {
                         case "GROWW":    return loginGroww(a, req);
                         case "ZERODHA":  return loginZerodha(a, req);
@@ -228,13 +372,14 @@ public class BrokerAccountService {
 
     // --- GROWW LOGIN ---
     private Mono<Map<String, Object>> loginGroww(BrokerAccount a, BrokerLoginRequest req) {
-        // Resolve API key: prefer per-user key, fall back to platform-level key
         String apiKey = a.getApiKey();
-        String apiSecret = a.getApiSecret();
+        String apiSecret = credentials.apiSecret(a);
         var platformCreds = platformConfig.getGroww();
         if ((apiKey == null || apiKey.isBlank()) && platformCreds != null && platformCreds.getApiKey() != null && !platformCreds.getApiKey().isBlank()) {
             apiKey = platformCreds.getApiKey();
-            apiSecret = platformCreds.getApiSecret();
+            if (apiSecret == null || apiSecret.isBlank()) {
+                apiSecret = platformCreds.getApiSecret();
+            }
         }
         if (apiKey == null || apiKey.isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -244,8 +389,11 @@ public class BrokerAccountService {
         Mono<Map> tokenMono;
         if (req != null && req.getTotpCode() != null && !req.getTotpCode().isBlank()) {
             tokenMono = growwClient.generateToken(apiKey, req.getTotpCode());
-        } else {
+        } else if (apiSecret != null && !apiSecret.isBlank()) {
             tokenMono = growwClient.generateTokenWithSecret(apiKey, apiSecret);
+        } else {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "totpCode required for Groww login. After disconnect, use API key + TOTP: POST .../login { \"totpCode\": \"123456\" }"));
         }
         return tokenMono.flatMap(resp -> extractAndSaveSession(a, resp, "Groww",
                 r -> {
@@ -254,17 +402,33 @@ public class BrokerAccountService {
                 }))
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
-                    log.error("GROWW_LOGIN_FAILED error={}", e.getMessage(), e);
+                    String msg = e.getMessage() != null ? e.getMessage() : "unknown";
+                    log.error("GROWW_LOGIN_FAILED error={}", msg, e);
+                    if (msg.toLowerCase().contains("ip") || msg.toLowerCase().contains("whitelist")
+                            || msg.toLowerCase().contains("forbidden")) {
+                        String ip = platformConfig.getServerEgressIp();
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                                "Groww IP whitelist error. Add platform IP " + (ip != null ? ip : "(see GET /api/v1/brokers)")
+                                        + " in your Groww API dashboard, then retry with totpCode. Detail: " + msg));
+                    }
                     return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                            "Groww API error: " + e.getMessage()));
+                            "Groww API error: " + msg));
                 });
     }
 
     // --- ZERODHA LOGIN ---
     private Mono<Map<String, Object>> loginZerodha(BrokerAccount a, BrokerLoginRequest req) {
-        var creds = platformConfig.getZerodha();
-        String apiKey = creds.getApiKey();
-        String apiSecret = creds.getApiSecret();
+        // Per-user Zerodha: each user has their own api_key + api_secret from their Kite Connect app
+        String apiKey = a.getApiKey();
+        String apiSecret = credentials.apiSecret(a); // decrypt stored secret
+        // Fallback to platform-level if user hasn't set their own
+        if (apiKey == null || apiKey.isBlank()) apiKey = platformConfig.getZerodha().getApiKey();
+        if (apiSecret == null || apiSecret.isBlank()) apiSecret = platformConfig.getZerodha().getApiSecret();
+        
+        if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Zerodha API key and secret are required. Go to developers.kite.trade, create an app, and update your broker account with apiKey + apiSecret."));
+        }
         if (req == null || req.getRequestToken() == null || req.getRequestToken().isBlank()) {
             String loginUrl = "https://kite.zerodha.com/connect/login?v=3&api_key=" + apiKey;
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -292,7 +456,14 @@ public class BrokerAccountService {
         }
         return fyersClient.generateToken(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Fyers",
-                        r -> (String) r.get("access_token")))
+                        r -> {
+                            if (r.get("data") instanceof Map<?, ?> d) {
+                                Object t = d.get("access_token");
+                                if (t != null) return t.toString();
+                            }
+                            Object t = r.get("access_token");
+                            return t != null ? t.toString() : null;
+                        }))
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("FYERS_LOGIN_FAILED error={}", e.getMessage(), e);
@@ -302,19 +473,41 @@ public class BrokerAccountService {
 
     // --- UPSTOX LOGIN ---
     private Mono<Map<String, Object>> loginUpstox(BrokerAccount a, BrokerLoginRequest req) {
-        var creds = platformConfig.getUpstox();
+        // Per-user Upstox: support user's own api_key/api_secret, fallback to platform
+        String apiKey = a.getApiKey();
+        String apiSecret = credentials.apiSecret(a);
+        var platformCreds = platformConfig.getUpstox();
+        if (apiKey == null || apiKey.isBlank()) apiKey = platformCreds.getApiKey();
+        if (apiSecret == null || apiSecret.isBlank()) apiSecret = platformCreds.getApiSecret();
+
         if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
-            String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + creds.getApiKey() + "&redirect_uri=" + platformConfig.getCallbackUrl();
+            String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + apiKey + "&redirect_uri=" + platformConfig.getCallbackUrl();
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "authCode required. Open this URL to login: " + loginUrl));
         }
-        return upstoxClient.generateToken(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode(), platformConfig.getCallbackUrl())
+        // Dedup: reject reused auth codes (Upstox codes are single-use)
+        String codeKey = "UPSTOX:" + req.getAuthCode().substring(0, Math.min(10, req.getAuthCode().length()));
+        Long prev = usedAuthCodes.putIfAbsent(codeKey, System.currentTimeMillis());
+        if (prev != null) {
+            log.warn("UPSTOX_DUPLICATE_AUTH_CODE accountId={} — rejecting reused code", a.getId());
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "This auth code was already used. Please get a fresh one by opening the Upstox login page again."));
+        }
+        // Clean old entries (> 2 min)
+        usedAuthCodes.entrySet().removeIf(e -> System.currentTimeMillis() - e.getValue() > 120_000);
+
+        return upstoxClient.generateToken(apiKey, apiSecret, req.getAuthCode(), platformConfig.getCallbackUrl())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
                         r -> (String) r.get("access_token")))
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("UPSTOX_LOGIN_FAILED error={}", e.getMessage(), e);
-                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Upstox API error: " + e.getMessage()));
+                    String msg = e.getMessage() != null ? e.getMessage() : "unknown";
+                    if (msg.contains("401") || msg.contains("Invalid Credentials") || msg.contains("UDAPI100016")) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Upstox auth code expired or already used. Please open the Upstox login page again to get a fresh code."));
+                    }
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Upstox API error: " + msg));
                 });
     }
 
@@ -431,64 +624,36 @@ public class BrokerAccountService {
         a.setSessionActive(true);
         a.setStatus("ACTIVE");
         a.setSessionExpires(Instant.now().plusSeconds(86400));
-        credentials.encryptSensitiveFields(a);
-        return repo.save(a).map(s -> {
+        // Only encrypt the new access token — apiSecret/proxyPass are already encrypted in DB
+        credentials.encryptAccessTokenOnly(a);
+        return repo.save(a).flatMap(s -> {
+            // Auto-migrate subscriptions: if user has other inactive accounts of same broker type,
+            // move all subscriptions to this newly active account
+            return subscriptionRepo.migrateToActiveAccount(s.getUserId(), s.getBrokerId(), s.getId())
+                    .doOnNext(count -> {
+                        if (count > 0) log.info("SUBSCRIPTION_MIGRATED userId={} broker={} toAccount={} count={}",
+                                s.getUserId(), s.getBrokerId(), s.getId(), count);
+                    })
+                    .onErrorResume(e -> { log.warn("SUBSCRIPTION_MIGRATE_FAILED: {}", e.getMessage()); return Mono.just(0); })
+                    .thenReturn(s);
+        }).map(s -> {
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("status", "SESSION_ACTIVE");
             r.put("broker", brokerName);
             r.put("expiresAt", s.getSessionExpires().toString());
+            log.info("BROKER_LOGIN_SUCCESS accountId={} userId={} broker={} method=oauth_or_totp",
+                    s.getId(), s.getUserId(), s.getBrokerId());
             return r;
         });
     }
 
-    // 3.7b Get OAuth URL for browser-based login
+    // 3.7b Get OAuth URL + full loginOptions for browser-based login (all brokers)
     public Mono<Map<String, Object>> getOAuthUrl(UUID accountId, UUID userId, String redirectUri) {
         String redirect = (redirectUri != null && !redirectUri.isBlank()) ? redirectUri : platformConfig.getCallbackUrl();
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
-                .map(a -> {
-                    Map<String, Object> r = new LinkedHashMap<>();
-                    r.put("broker", a.getBrokerId());
-                    switch (a.getBrokerId()) {
-                        case "GROWW":
-                            r.put("loginMethod", "secret");
-                            r.put("message", "No OAuth needed. Call login with empty body {}");
-                            break;
-                        case "ZERODHA":
-                            r.put("loginMethod", "oauth");
-                            r.put("loginField", "requestToken");
-                            r.put("oauthUrl", "https://kite.zerodha.com/connect/login?v=3&api_key=" + platformConfig.getZerodha().getApiKey());
-                            r.put("message", "Open oauthUrl in browser. After login, the callback will receive the requestToken automatically.");
-                            break;
-                        case "FYERS":
-                            r.put("loginMethod", "oauth");
-                            r.put("loginField", "authCode");
-                            r.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id=" + platformConfig.getFyers().getApiKey() + "&redirect_uri=" + redirect + "&response_type=code&state=ok");
-                            r.put("message", "Open oauthUrl in browser. After login, the callback will receive the authCode automatically.");
-                            break;
-                        case "UPSTOX":
-                            r.put("loginMethod", "oauth");
-                            r.put("loginField", "authCode");
-                            r.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + platformConfig.getUpstox().getApiKey() + "&redirect_uri=" + redirect);
-                            r.put("message", "Open oauthUrl in browser. After login, the callback will receive the authCode automatically.");
-                            break;
-                        case "DHAN":
-                            r.put("loginMethod", "oauth");
-                            r.put("loginField", "tokenId");
-                            r.put("message", "Call POST /login with empty body first to get loginUrl. Open it in browser. After login, Dhan redirects with tokenId. Call login again with {\"authCode\": \"tokenId\"}");
-                            break;
-                        case "ANGELONE":
-                            r.put("loginMethod", "totp");
-                            r.put("loginField", "totpCode");
-                            r.put("message", "Set clientId (Angel One client code) and apiSecret (password) on the account. Then call login with {\"totpCode\": \"123456\"}");
-                            break;
-                        default:
-                            r.put("loginMethod", "mock");
-                            r.put("message", "Mock broker. Call login with empty body {}");
-                    }
-                    return r;
-                });
+                .map(a -> loginConfigForAccount(a, redirect));
     }
 
     // 3.8 Check session status (DB + live broker ping when session looks active)
@@ -500,18 +665,34 @@ public class BrokerAccountService {
                     Map<String, Object> r = buildSessionStatusMap(a);
                     boolean active = Boolean.TRUE.equals(r.get("sessionActive"));
                     if (!active || sessionToken(a) == null) {
+                        r.putAll(loginConfigForAccount(a, null));
+                        r.put("reason", describeInactiveReason(a));
+                        logSessionStatus(accountId, userId, r);
                         return Mono.just(r);
                     }
                     return getMargin(accountId, userId)
                             .map(margin -> {
                                 applyLiveHealth(r, margin);
+                                if (marginResponseHasError(margin) || !Boolean.TRUE.equals(r.get("sessionActive"))) {
+                                    r.putAll(loginConfigForAccount(a, null));
+                                    if (r.get("reason") == null) {
+                                        r.put("reason", margin.getOrDefault("error", "Live broker check failed"));
+                                    }
+                                }
                                 r.put("lastSyncedAt", Instant.now().toString());
+                                logSessionStatus(accountId, userId, r);
                                 return r;
                             })
                             .onErrorResume(e -> {
                                 r.put("connectionHealth", "degraded");
                                 r.put("liveCheckError", e.getMessage());
                                 r.put("action", "RE_LOGIN");
+                                r.put("errorCode", "SESSION_EXPIRED");
+                                r.put("reason", e.getMessage());
+                                r.putAll(loginConfigForAccount(a, null));
+                                log.warn("BROKER_SESSION_LIVE_CHECK_FAILED accountId={} userId={} broker={} reason={}",
+                                        accountId, userId, a.getBrokerId(), e.getMessage());
+                                logSessionStatus(accountId, userId, r);
                                 return Mono.just(r);
                             });
                 });
@@ -531,6 +712,10 @@ public class BrokerAccountService {
         r.put("connectionHealth", health);
         r.put("lastSyncedAt", a.getLinkedAt() != null ? a.getLinkedAt().toString() : null);
         r.put("expiresAt", a.getSessionExpires() != null ? a.getSessionExpires().toString() : null);
+        if (!active) {
+            r.put("reason", describeInactiveReason(a));
+            r.put("action", "RE_LOGIN");
+        }
         return r;
     }
 
@@ -539,8 +724,12 @@ public class BrokerAccountService {
             status.put("connectionHealth", "degraded");
             status.put("sessionActive", false);
             status.put("error", margin.get("error"));
+            status.put("reason", margin.get("error"));
             status.put("errorCode", margin.getOrDefault("errorCode", "SESSION_EXPIRED"));
             status.put("action", margin.getOrDefault("action", "RE_LOGIN"));
+            log.warn("BROKER_SESSION_DEGRADED accountId={} broker={} errorCode={} reason={}",
+                    status.get("accountId"), status.get("broker"),
+                    status.get("errorCode"), status.get("reason"));
         } else {
             status.put("connectionHealth", "good");
             status.put("availableMargin", margin.getOrDefault("availableMargin", 0));
@@ -606,7 +795,7 @@ public class BrokerAccountService {
                 case "GROWW":
                     result = growwClient.getMargin(sessionToken(a)).map(resp -> parseGrowwMargin(resp)); break;
                 case "ZERODHA":
-                    result = zerodhaClient.getMargins(platformConfig.getZerodha().getApiKey(), sessionToken(a)).map(resp -> parseZerodhaMargin(resp)); break;
+                    result = zerodhaClient.getMargins(zerodhaApiKey(a), sessionToken(a)).map(resp -> parseZerodhaMargin(resp)); break;
                 case "FYERS":
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     result = fyersClient.getFunds(fyersAuth).map(resp -> parseFyersMargin(resp)); break;
@@ -620,14 +809,28 @@ public class BrokerAccountService {
                     result = Mono.just(mockMargin()); break;
             }
             return result.onErrorResume(e -> {
-                log.error("{}_MARGIN_ERROR: {}", a.getBrokerId(), e.getMessage());
+                log.error("{}_MARGIN_ERROR accountId={} reason={}", a.getBrokerId(), accountId, e.getMessage());
                 Map<String, Object> fallback = new LinkedHashMap<>();
                 fallback.put("availableMargin", 0); fallback.put("usedMargin", 0);
                 fallback.put("totalFunds", 0); fallback.put("collateral", 0);
-                fallback.put("error", friendlyBrokerError(a.getBrokerId(), e.getMessage()));
+                String friendly = friendlyBrokerError(a.getBrokerId(), e.getMessage());
+                fallback.put("error", friendly);
+                fallback.put("reason", friendly);
                 fallback.put("errorCode", "SESSION_EXPIRED");
                 fallback.put("action", "RE_LOGIN");
                 if (isAuthError(e)) {
+                    // Grace period: don't nuke session if it was activated less than 2 minutes ago
+                    // (prevents race condition where status check kills a freshly logged-in session)
+                    boolean withinGrace = a.getSessionExpires() != null
+                            && a.getSessionExpires().minusSeconds(86400 - 120).isAfter(Instant.now());
+                    if (withinGrace) {
+                        log.warn("AUTH_ERROR_WITHIN_GRACE_PERIOD accountId={} broker={} — skipping session nuke",
+                                accountId, a.getBrokerId());
+                        fallback.remove("action");
+                        fallback.put("errorCode", "TRANSIENT_ERROR");
+                        fallback.put("action", "RETRY");
+                        return Mono.just(fallback);
+                    }
                     a.setSessionActive(false);
                     a.setStatus("AUTH_REQUIRED");
                     a.setAccessToken(null);
@@ -654,7 +857,7 @@ public class BrokerAccountService {
                                 return Map.<String, Object>of("positions", payload != null ? payload : List.of());
                             });
                 case "ZERODHA":
-                    return zerodhaClient.getPositions(platformConfig.getZerodha().getApiKey(), sessionToken(a))
+                    return zerodhaClient.getPositions(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> {
                                 Object data = resp.get("data");
                                 return Map.<String, Object>of("positions", data != null ? data : List.of());
@@ -674,7 +877,8 @@ public class BrokerAccountService {
                             });
                 case "DHAN":
                     return dhanClient.getPositions(sessionToken(a))
-                            .map(resp -> Map.<String, Object>of("positions", resp));
+                            .map(resp -> Map.<String, Object>of(
+                                    "positions", resp.getOrDefault("positions", List.of())));
                 case "ANGELONE":
                     return angelOneClient.getPositions(platformConfig.getAngelone().getApiKey(), sessionToken(a))
                             .map(resp -> {
@@ -727,7 +931,7 @@ public class BrokerAccountService {
                     return growwClient.listOrders(sessionToken(a), null)
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("payload", resp)));
                 case "ZERODHA":
-                    return zerodhaClient.getOrders(platformConfig.getZerodha().getApiKey(), sessionToken(a))
+                    return zerodhaClient.getOrders(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
                 case "FYERS":
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
@@ -760,7 +964,7 @@ public class BrokerAccountService {
                     return growwClient.listTrades(sessionToken(a), null)
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("payload", resp)));
                 case "ZERODHA":
-                    return zerodhaClient.getTrades(platformConfig.getZerodha().getApiKey(), sessionToken(a))
+                    return zerodhaClient.getTrades(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
                 case "FYERS":
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
@@ -793,7 +997,7 @@ public class BrokerAccountService {
                     return growwClient.getHoldings(sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("payload", resp)));
                 case "ZERODHA":
-                    return zerodhaClient.getHoldings(platformConfig.getZerodha().getApiKey(), sessionToken(a))
+                    return zerodhaClient.getHoldings(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
                 case "FYERS":
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
@@ -818,51 +1022,105 @@ public class BrokerAccountService {
     // --- Close Position (place market order to close) ---
     public Mono<Map<String, Object>> closePosition(UUID accountId, UUID userId, Map<String, Object> body) {
         return getActiveAccount(accountId, userId).flatMap(a -> {
-            String symbol = (String) body.get("symbol");
-            Object qtyObj = body.get("qty");
-            int qty = qtyObj instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(qtyObj));
-            String type = (String) body.getOrDefault("type", "SELL");
-            String product = (String) body.getOrDefault("product", "MIS");
+            String symbol = bodyField(body, "symbol");
+            if (symbol == null || symbol.isBlank()) {
+                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "symbol is required"));
+            }
+            int qty = bodyInt(body, "qty", "quantity");
+            if (qty <= 0) {
+                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "qty must be > 0"));
+            }
+            String type = bodyField(body, "type", "side", "transaction_type");
+            if (type == null || type.isBlank()) type = "SELL";
+            String product = bodyField(body, "product", "productType");
+            if (product == null || product.isBlank()) product = "MIS";
+            String exchange = bodyField(body, "exchange");
+            if (exchange == null || exchange.isBlank()) exchange = "NSE";
+            boolean isFnO = symbolMapper.isFnO(symbol)
+                    || Boolean.TRUE.equals(body.get("isFnO"))
+                    || "FNO".equalsIgnoreCase(String.valueOf(body.getOrDefault("segment", "")));
 
             switch (a.getBrokerId()) {
-                case "GROWW":
-                    return growwClient.placeOrder(sessionToken(a), Map.of(
-                            "symbol", symbol, "qty", qty, "type", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL",
-                            "product", product, "order_type", "MARKET", "price", 0
-                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                case "GROWW": {
+                    Map<String, Object> order = new LinkedHashMap<>();
+                    order.put("trading_symbol", symbol);
+                    order.put("quantity", qty);
+                    order.put("transaction_type", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
+                    order.put("order_type", "MARKET");
+                    order.put("price", 0);
+                    order.put("trigger_price", 0);
+                    order.put("exchange", BrokerFieldTranslator.exchangeSegment(exchange, "GROWW", isFnO));
+                    order.put("segment", isFnO ? "FNO" : "CASH");
+                    order.put("product", BrokerFieldTranslator.product(product, "GROWW", isFnO));
+                    order.put(BrokerFieldTranslator.validityFieldName("GROWW"), BrokerFieldTranslator.validityValue("GROWW"));
+                    return growwClient.placeOrder(sessionToken(a), order)
+                            .map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                }
                 case "ZERODHA":
-                    return zerodhaClient.placeOrder(platformConfig.getZerodha().getApiKey(), sessionToken(a), Map.of(
+                    return zerodhaClient.placeOrder(zerodhaApiKey(a), sessionToken(a), Map.of(
                             "tradingsymbol", symbol, "quantity", qty, "transaction_type", type,
-                            "product", product, "order_type", "MARKET", "exchange", "NSE"
+                            "product", BrokerFieldTranslator.product(product, "ZERODHA", isFnO),
+                            "order_type", "MARKET",
+                            "exchange", BrokerFieldTranslator.exchangeSegment(exchange, "ZERODHA", isFnO)
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 case "FYERS": {
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
                     int side = type.equalsIgnoreCase("BUY") ? 1 : -1;
+                    String fyersSym = symbol.contains(":") ? symbol : ("NSE:" + symbol + (isFnO ? "" : "-EQ"));
                     return fyersClient.placeOrder(fyersAuth, Map.of(
-                            "symbol", symbol, "qty", qty, "side", side,
-                            "productType", product, "type", 2, "limitPrice", 0, "stopPrice", 0
+                            "symbol", fyersSym, "qty", qty, "side", side,
+                            "productType", BrokerFieldTranslator.product(product, "FYERS", isFnO),
+                            "type", 2, "limitPrice", 0, "stopPrice", 0
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 }
-                case "UPSTOX":
-                    return upstoxClient.placeOrder(sessionToken(a), Map.of(
-                            "instrument_token", symbol, "quantity", qty, "transaction_type", type,
-                            "product", product, "order_type", "MARKET", "price", 0
-                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
-                case "DHAN":
-                    return dhanClient.placeOrder(sessionToken(a), Map.of(
-                            "tradingSymbol", symbol, "quantity", qty, "transactionType", type,
-                            "productType", product, "orderType", "MARKET", "exchangeSegment", "NSE_EQ"
-                    )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                case "UPSTOX": {
+                    String instrumentToken = bodyField(body, "instrument_token", "instrumentToken");
+                    if (instrumentToken == null || instrumentToken.isBlank()) {
+                        instrumentToken = instruments.getUpstoxInstrumentKey(symbol, isFnO);
+                    }
+                    if (instrumentToken == null) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Upstox instrument not found for " + symbol + ". Ensure F&O symbol is correct."));
+                    }
+                    Map<String, Object> upOrder = new LinkedHashMap<>();
+                    upOrder.put("instrument_token", instrumentToken);
+                    upOrder.put("quantity", qty);
+                    upOrder.put("transaction_type", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
+                    upOrder.put("product", BrokerFieldTranslator.product(product, "UPSTOX", isFnO));
+                    upOrder.put("order_type", "MARKET");
+                    upOrder.put("price", 0);
+                    upOrder.put("market_protection", -1);
+                    return upstoxClient.placeOrder(sessionToken(a), upOrder)
+                            .map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                }
+                case "DHAN": {
+                    String seg = BrokerFieldTranslator.exchangeSegment(exchange, "DHAN", isFnO);
+                    String secId = instruments.getDhanSecurityId(symbol, isFnO);
+                    Map<String, Object> dhanOrder = new LinkedHashMap<>();
+                    dhanOrder.put("dhanClientId", a.getClientId() != null ? a.getClientId() : "");
+                    dhanOrder.put("transactionType", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
+                    dhanOrder.put("exchangeSegment", seg);
+                    dhanOrder.put("productType", BrokerFieldTranslator.product(product, "DHAN", isFnO));
+                    dhanOrder.put("orderType", "MARKET");
+                    dhanOrder.put("quantity", qty);
+                    dhanOrder.put("price", 0);
+                    if (secId != null) dhanOrder.put("securityId", secId);
+                    else dhanOrder.put("tradingSymbol", symbol);
+                    return dhanClient.placeOrder(sessionToken(a), dhanOrder)
+                            .map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
+                }
                 case "ANGELONE": {
                     String apiKey = platformConfig.getAngelone().getApiKey();
+                    String angelSym = isFnO ? symbol : symbol + "-EQ";
+                    String angelToken = instruments.getAngelToken(angelSym, isFnO);
                     Map<String, Object> angelBody = new LinkedHashMap<>();
                     angelBody.put("variety", "NORMAL");
-                    angelBody.put("tradingsymbol", symbol + "-EQ");
-                    angelBody.put("symboltoken", "");
+                    angelBody.put("tradingsymbol", angelSym);
+                    angelBody.put("symboltoken", angelToken != null ? angelToken : "");
                     angelBody.put("transactiontype", type.equalsIgnoreCase("BUY") ? "BUY" : "SELL");
-                    angelBody.put("exchange", "NSE");
+                    angelBody.put("exchange", BrokerFieldTranslator.exchangeSegment(exchange, "ANGELONE", isFnO));
                     angelBody.put("ordertype", "MARKET");
-                    angelBody.put("producttype", product.equalsIgnoreCase("CNC") ? "DELIVERY" : "INTRADAY");
+                    angelBody.put("producttype", BrokerFieldTranslator.product(product, "ANGELONE", isFnO));
                     angelBody.put("duration", "DAY");
                     angelBody.put("price", "0");
                     angelBody.put("squareoff", "0");
@@ -878,6 +1136,25 @@ public class BrokerAccountService {
         });
     }
 
+    private static String bodyField(Map<String, Object> body, String... keys) {
+        for (String key : keys) {
+            Object v = body.get(key);
+            if (v != null && !String.valueOf(v).isBlank()) return String.valueOf(v).trim();
+        }
+        return null;
+    }
+
+    private static int bodyInt(Map<String, Object> body, String... keys) {
+        for (String key : keys) {
+            Object v = body.get(key);
+            if (v instanceof Number n) return n.intValue();
+            if (v != null) {
+                try { return Integer.parseInt(String.valueOf(v)); } catch (Exception ignored) { /* try next */ }
+            }
+        }
+        return 0;
+    }
+
     // --- Cancel Order ---
     public Mono<Map<String, Object>> cancelOrder(UUID accountId, UUID userId, String orderId) {
         return getActiveAccount(accountId, userId).flatMap(a -> {
@@ -886,7 +1163,7 @@ public class BrokerAccountService {
                     return growwClient.cancelOrder(sessionToken(a), orderId, "EQ")
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "ZERODHA":
-                    return zerodhaClient.cancelOrder(platformConfig.getZerodha().getApiKey(), sessionToken(a), orderId)
+                    return zerodhaClient.cancelOrder(zerodhaApiKey(a), sessionToken(a), orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "FYERS": {
                     String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
@@ -1183,7 +1460,7 @@ public class BrokerAccountService {
                             return p;
                         });
             case "ZERODHA":
-                return zerodhaClient.getProfile(platformConfig.getZerodha().getApiKey(), sessionToken(a))
+                return zerodhaClient.getProfile(zerodhaApiKey(a), sessionToken(a))
                         .map(resp -> {
                             Map<String, Object> p = new LinkedHashMap<>();
                             Object data = resp.get("data");
@@ -1286,7 +1563,9 @@ public class BrokerAccountService {
 
     private Map<String, Object> sessionRequiredResponse(BrokerAccount a) {
         Map<String, Object> r = new LinkedHashMap<>();
+        String reason = describeInactiveReason(a);
         r.put("error", "Session expired. Please re-login to " + BrokerAccountDto.from(a).getBrokerName() + " to continue.");
+        r.put("reason", reason);
         r.put("errorCode", "SESSION_EXPIRED");
         r.put("action", "RE_LOGIN");
         r.put("accountId", a.getId().toString());
@@ -1294,6 +1573,7 @@ public class BrokerAccountService {
         r.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
         r.put("status", a.getStatus());
         r.put("sessionActive", false);
+        log.info("BROKER_SESSION_REQUIRED accountId={} broker={} reason={}", a.getId(), a.getBrokerId(), reason);
         return r;
     }
 
@@ -1314,27 +1594,307 @@ public class BrokerAccountService {
     }
 
     private Map<String, Object> growwBrokerInfo() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("brokerId", "GROWW");
-        m.put("name", "Groww");
-        m.put("isActive", true);
-        m.put("loginMethod", "token");
-        m.put("loginOptions", List.of(
-            Map.of("method", "accessToken", "description", "Paste access token from Groww settings (no API key needed)", "requiredFields", List.of("accessToken")),
-            Map.of("method", "apiKeyWithTotp", "description", "API key + TOTP code from authenticator app", "requiredFields", List.of("apiKey", "totpCode"))
-        ));
-        m.put("note", "Groww requires per-user credentials. Each user generates their own from Groww settings.");
-        return m;
+        return loginConfigForBroker("GROWW");
     }
 
-    private Map<String, Object> brokerInfo(String id, String name, boolean active, List<String> fields, String loginMethod, String loginField) {
+    /** Shared login UI config — used by GET /brokers and reconnect after disconnect (all brokers). */
+    private Map<String, Object> loginConfigForBroker(String brokerId) {
+        String b = brokerId != null ? brokerId.toUpperCase() : "";
+        return switch (b) {
+            case "GROWW" -> {
+                Map<String, Object> m = brokerShell("GROWW", "Groww", "token", null);
+                m.put("requiresIpWhitelist", true);
+                if (platformConfig.getServerEgressIp() != null) {
+                    m.put("platformServerIp", platformConfig.getServerEgressIp());
+                }
+                m.put("loginOptions", List.of(
+                        loginOption("accessToken",
+                                "Paste access token from Groww settings (no API key needed)",
+                                List.of("accessToken"),
+                                "PUT /api/v1/brokers/accounts/{accountId}/token"),
+                        loginOption("apiKeyWithTotp",
+                                "API key + TOTP code from authenticator app (recommended after disconnect)",
+                                List.of("apiKey", "totpCode"),
+                                "POST /api/v1/brokers/accounts/{accountId}/login { totpCode }")));
+                m.put("note", "Groww requires whitelisting platformServerIp in your Groww API dashboard.");
+                yield m;
+            }
+            case "DHAN" -> {
+                Map<String, Object> m = brokerShell("DHAN", "Dhan", "oauth", "tokenId");
+                m.put("optionalFields", List.of(
+                        Map.of("field", "clientId", "label", "Dhan Client ID",
+                                "hint", "Your Dhan client ID (saved from first login, only needed if changed)")));
+                m.put("loginOptions", List.of(
+                        loginOption("accessToken",
+                                "Paste access token from Dhan Web (Profile → DhanHQ Trading APIs)",
+                                List.of("accessToken"),
+                                "PUT /api/v1/brokers/accounts/{accountId}/token"),
+                        loginOption("oauth",
+                                "Login via Dhan in browser (Connect button)",
+                                List.of("clientId"),
+                                "POST /api/v1/brokers/accounts/{accountId}/login { clientId } then again with authCode")));
+                yield m;
+            }
+            case "ZERODHA" -> {
+                Map<String, Object> m = brokerShell("ZERODHA", "Zerodha", "oauth", "requestToken");
+                m.put("loginOptions", List.of(
+                        loginOption("oauth",
+                                "Login with Zerodha Kite in browser (requires your own API key from developers.kite.trade)",
+                                List.of(),
+                                "GET .../oauth-url → open popup → POST .../login { requestToken }")));
+                m.put("requiresUserCredentials", true);
+                m.put("credentialFields", List.of("apiKey", "apiSecret"));
+                m.put("credentialNote", "Each user needs their own Kite Connect app. Go to developers.kite.trade → create app → set redirect URL to: " + (platformConfig.getCallbackUrl() != null ? platformConfig.getCallbackUrl() : "https://api.ascentracapital.com/api/v1/brokers/callback"));
+                yield m;
+            }
+            case "FYERS" -> {
+                Map<String, Object> m = brokerShell("FYERS", "Fyers", "oauth", "authCode");
+                m.put("loginOptions", List.of(
+                        loginOption("oauth",
+                                "Login with Fyers in browser",
+                                List.of(),
+                                "GET .../oauth-url → open popup → POST .../login { authCode }")));
+                yield m;
+            }
+            case "UPSTOX" -> {
+                Map<String, Object> m = brokerShell("UPSTOX", "Upstox", "oauth", "authCode");
+                m.put("loginOptions", List.of(
+                        loginOption("oauth",
+                                "Login with Upstox in browser",
+                                List.of(),
+                                "GET .../oauth-url → open popup → POST .../login { authCode }")));
+                yield m;
+            }
+            case "ANGELONE" -> {
+                Map<String, Object> m = brokerShell("ANGELONE", "Angel One", "totp", "totpCode");
+                m.put("loginOptions", List.of(
+                        loginOption("totp",
+                                "Angel One client code + password + TOTP from authenticator",
+                                List.of("clientId", "apiSecret", "totpCode"),
+                                "PUT /api/v1/brokers/accounts/{accountId} then POST .../login { totpCode }")));
+                yield m;
+            }
+            default -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("brokerId", b);
+                m.put("loginMethod", "mock");
+                m.put("loginOptions", List.of());
+                yield m;
+            }
+        };
+    }
+
+    private Map<String, Object> loginConfigForAccount(BrokerAccount a, String redirectUri) {
+        Map<String, Object> config = new LinkedHashMap<>(loginConfigForBroker(a.getBrokerId()));
+        config.put("accountId", a.getId().toString());
+        config.put("status", a.getStatus());
+        config.put("sessionActive", a.isSessionActive());
+        config.put("requiresReconnect", !a.isSessionActive() || sessionToken(a) == null);
+        config.put("loginOptionsUrl", "/api/v1/brokers/accounts/" + a.getId() + "/login-options");
+        if ("GROWW".equals(a.getBrokerId())) {
+            config.put("hasStoredApiKey", a.getApiKey() != null && !a.getApiKey().isBlank());
+            // Always show both login methods for Groww reconnect
+            config.put("availableLoginMethods", List.of("accessToken", "apiKeyWithTotp"));
+            // If user has an API key stored, recommend TOTP login; otherwise recommend access token
+            if (a.getApiKey() != null && !a.getApiKey().isBlank()) {
+                config.put("recommendedLoginMethod", "apiKeyWithTotp");
+            } else {
+                config.put("recommendedLoginMethod", "accessToken");
+            }
+            // Ensure loginOptions always includes BOTH methods regardless of stored credentials
+            config.put("loginOptions", List.of(
+                    loginOption("accessToken",
+                            "Paste access token from Groww settings (no API key needed)",
+                            List.of("accessToken"),
+                            "PUT /api/v1/brokers/accounts/" + a.getId() + "/token"),
+                    loginOption("apiKeyWithTotp",
+                            "API key + TOTP code from authenticator app",
+                            List.of("apiKey", "totpCode"),
+                            "POST /api/v1/brokers/accounts/" + a.getId() + "/login { totpCode }")));
+        }
+        List<String> methods = extractLoginOptionMethods(config.get("loginOptions"));
+        config.put("loginOptionMethods", methods);
+        // Dhan: include saved clientId so frontend can pre-fill on reconnect
+        if ("DHAN".equals(a.getBrokerId()) && a.getClientId() != null && !a.getClientId().isBlank()) {
+            config.put("savedClientId", a.getClientId());
+        }
+        enrichOAuthUrls(a, config, redirectUri);
+        return config;
+    }
+
+    private Map<String, Object> buildDisconnectResponse(BrokerAccount a) {
+        Map<String, Object> r = loginConfigForAccount(a, null);
+        r.put("message", "Broker disconnected. Choose a login method to reconnect.");
+        r.put("notificationType", "BROKER_DISCONNECTED");
+        r.put("reason", "USER_DISCONNECT");
+        return r;
+    }
+
+    private void clearBrokerSession(BrokerAccount a) {
+        a.setSessionActive(false);
+        a.setAccessToken(null);
+        a.setSessionExpires(null);
+        a.setStatus("AUTH_REQUIRED");
+    }
+
+    /** Disconnect: keep Groww API key so reconnect can use TOTP-only login. */
+    private void clearStoredCredentialsOnDisconnect(BrokerAccount a) {
+        if (!"GROWW".equals(a.getBrokerId())) {
+            clearStoredCredentials(a);
+        }
+    }
+
+    private void clearStoredCredentials(BrokerAccount a) {
+        String b = a.getBrokerId();
+        if ("GROWW".equals(b) || "ANGELONE".equals(b) || "DHAN".equals(b)) {
+            a.setApiKey("");
+            a.setApiSecret("");
+        }
+        if ("ANGELONE".equals(b)) {
+            a.setClientId("");
+        }
+        // Dhan: keep clientId — it's needed for reconnect and order placement
+    }
+
+    private Mono<Void> notifyBrokerReconnect(UUID userId, BrokerAccount a, String type, String title, String message) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("accountId", a.getId().toString());
+        data.put("brokerId", a.getBrokerId());
+        data.put("brokerName", BrokerAccountDto.from(a).getBrokerName());
+        data.put("action", "RECONNECT");
+        data.put("loginOptionsUrl", "/api/v1/brokers/accounts/" + a.getId() + "/login-options");
+        return notifications.push(userId, title, message, type, data)
+                .doOnSuccess(n -> log.info("BROKER_NOTIFICATION type={} accountId={} userId={} broker={}",
+                        type, a.getId(), userId, a.getBrokerId()))
+                .then();
+    }
+
+    private void logLoginOptions(UUID accountId, UUID userId, BrokerAccount a, Map<String, Object> config, String source) {
+        log.info("BROKER_LOGIN_OPTIONS source={} accountId={} userId={} broker={} sessionActive={} requiresReconnect={} options={}",
+                source, accountId, userId, a.getBrokerId(), a.isSessionActive(),
+                config.get("requiresReconnect"), config.get("loginOptionMethods"));
+    }
+
+    private void logSessionStatus(UUID accountId, UUID userId, Map<String, Object> status) {
+        log.info("BROKER_SESSION_STATUS accountId={} userId={} broker={} sessionActive={} health={} errorCode={} reason={} action={} options={}",
+                accountId, userId, status.get("broker"), status.get("sessionActive"),
+                status.get("connectionHealth"), status.getOrDefault("errorCode", "-"),
+                status.getOrDefault("reason", "-"), status.getOrDefault("action", "-"),
+                status.get("loginOptionMethods"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> extractLoginOptionMethods(Object loginOptions) {
+        if (!(loginOptions instanceof List<?> list)) {
+            return List.of();
+        }
+        List<String> methods = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> m && m.get("method") != null) {
+                methods.add(String.valueOf(m.get("method")));
+            }
+        }
+        return methods;
+    }
+
+    private static String describeInactiveReason(BrokerAccount a) {
+        if (!a.isSessionActive()) {
+            return "SESSION_INACTIVE";
+        }
+        if (a.getSessionExpires() != null && a.getSessionExpires().isBefore(Instant.now())) {
+            return "TOKEN_EXPIRED";
+        }
+        return "NO_ACCESS_TOKEN";
+    }
+
+    private static String detectLoginMethod(BrokerAccount a, BrokerLoginRequest req) {
+        if (req == null) {
+            return "DHAN".equals(a.getBrokerId()) ? "oauth_consent" : "default";
+        }
+        if (req.getTotpCode() != null && !req.getTotpCode().isBlank()) {
+            return "apiKeyWithTotp";
+        }
+        if (req.getRequestToken() != null && !req.getRequestToken().isBlank()) {
+            return "oauth";
+        }
+        if (req.getAuthCode() != null && !req.getAuthCode().isBlank()) {
+            return "DHAN".equals(a.getBrokerId()) ? "oauth" : "oauth";
+        }
+        return "default";
+    }
+
+    private void enrichOAuthUrls(BrokerAccount a, Map<String, Object> config, String redirectUri) {
+        String redirect = (redirectUri != null && !redirectUri.isBlank())
+                ? redirectUri
+                : platformConfig.getCallbackUrl();
+        switch (a.getBrokerId()) {
+            case "ZERODHA" -> {
+                // Per-user Zerodha: use account's api_key, fallback to platform
+                String zApiKey = (a.getApiKey() != null && !a.getApiKey().isBlank())
+                        ? a.getApiKey() : (platformConfig.getZerodha() != null ? platformConfig.getZerodha().getApiKey() : null);
+                if (zApiKey != null) {
+                    config.put("oauthUrl", "https://kite.zerodha.com/connect/login?v=3&api_key=" + zApiKey);
+                }
+                if (a.getApiKey() == null || a.getApiKey().isBlank()) {
+                    config.put("message", "Set your Zerodha API key+secret first (from developers.kite.trade), then open oauthUrl.");
+                    config.put("needsCredentials", true);
+                    config.put("requiredFields", List.of("apiKey", "apiSecret"));
+                } else {
+                    config.put("message", "Open oauthUrl in browser, then POST login with requestToken from callback.");
+                }
+            }
+            case "FYERS" -> {
+                var creds = platformConfig.getFyers();
+                if (creds != null && creds.getApiKey() != null) {
+                    config.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id="
+                            + creds.getApiKey() + "&redirect_uri=" + redirect + "&response_type=code&state=ok");
+                }
+                config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
+            }
+            case "UPSTOX" -> {
+                var creds = platformConfig.getUpstox();
+                if (creds != null && creds.getApiKey() != null) {
+                    config.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id="
+                            + creds.getApiKey() + "&redirect_uri=" + redirect);
+                }
+                config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
+            }
+            case "DHAN" ->
+                    config.put("message", "Option 1: PUT token. Option 2: POST login {} for loginUrl, then login with authCode (tokenId).");
+            case "GROWW" ->
+                    config.put("message", "Choose access token or API key + TOTP from loginOptions.");
+            case "ANGELONE" ->
+                    config.put("message", "Set clientId and apiSecret (password) on account, then POST login with totpCode.");
+            default -> { }
+        }
+    }
+
+    private static Map<String, Object> brokerShell(String id, String name, String loginMethod, String loginField) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("brokerId", id);
         m.put("name", name);
+        m.put("isActive", true);
+        m.put("loginMethod", loginMethod);
+        m.put("requiredFields", List.of());
+        if (loginField != null) {
+            m.put("loginField", loginField);
+        }
+        return m;
+    }
+
+    private static Map<String, Object> loginOption(String method, String description, List<String> requiredFields, String api) {
+        Map<String, Object> o = new LinkedHashMap<>();
+        o.put("method", method);
+        o.put("description", description);
+        o.put("requiredFields", requiredFields);
+        o.put("api", api);
+        return o;
+    }
+
+    private Map<String, Object> brokerInfo(String id, String name, boolean active, List<String> fields, String loginMethod, String loginField) {
+        Map<String, Object> m = brokerShell(id, name, loginMethod, loginField);
         m.put("requiredFields", fields);
         m.put("isActive", active);
-        m.put("loginMethod", loginMethod);  // "secret" = just api key+secret, "oauth" = needs browser redirect
-        if (loginField != null) m.put("loginField", loginField);  // field name to send in login request
         return m;
     }
 
@@ -1345,8 +1905,15 @@ public class BrokerAccountService {
 
     private static boolean isAuthError(Throwable e) {
         String msg = e != null ? e.getMessage() : null;
-        return msg != null && (msg.contains("401") || msg.contains("403")
-                || msg.contains("Unauthorized") || msg.contains("Invalid"));
+        if (msg == null) return false;
+        // 401 = definitely auth failure
+        if (msg.contains("401") || msg.contains("Unauthorized")) return true;
+        // 403 alone is NOT auth failure — Upstox/Groww use 403 for IP blocks and rate limits.
+        // Only treat 403 as auth if combined with explicit token/session messages:
+        if (msg.contains("403") && (msg.contains("token") || msg.contains("session") || msg.contains("login"))) return true;
+        // "Invalid" only if clearly about auth (not "Invalid quantity" etc.)
+        if (msg.contains("Invalid") && (msg.contains("token") || msg.contains("session") || msg.contains("key"))) return true;
+        return false;
     }
 
     private static String friendlyBrokerError(String broker, String rawError) {

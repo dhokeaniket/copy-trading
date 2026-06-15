@@ -4,6 +4,7 @@ import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.broker.BrokerAccountService;
 import com.copytrading.engine.CopyEngineService;
 import com.copytrading.engine.CopyTradeRequest;
+import com.copytrading.engine.OrderPollingService;
 import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.notification.NotificationService;
 import com.copytrading.subscription.SubscriptionRepository;
@@ -30,12 +31,14 @@ public class TradeEngineService {
     private final SubscriptionRepository subs;
     private final NotificationService notifications;
     private final TradeUpdatesHub hub;
+    private final OrderPollingService orderPollingService;
 
     public TradeEngineService(TradeRepository trades, BrokerAccountRepository brokerRepo,
                               BrokerAccountService brokerService,
                               CopyEngineService copyEngine, CopyLogRepository copyLogs,
                               SubscriptionRepository subs, NotificationService notifications,
-                              TradeUpdatesHub hub) {
+                              TradeUpdatesHub hub,
+                              OrderPollingService orderPollingService) {
         this.trades = trades;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -44,6 +47,7 @@ public class TradeEngineService {
         this.subs = subs;
         this.notifications = notifications;
         this.hub = hub;
+        this.orderPollingService = orderPollingService;
     }
 
     /** 6.1 POST /trades/execute — Place order + auto-replicate to children if master */
@@ -88,8 +92,19 @@ public class TradeEngineService {
                         hub.publish("{\"event\":\"TRADE_EXECUTED\",\"tradeId\":\"" + saved.getId() +
                                 "\",\"instrument\":\"" + instrument + "\",\"status\":\"EXECUTED\"}");
 
-                        // If MASTER, auto-replicate to children
+                        // If MASTER, auto-replicate to children only while engine auto-copy is on
                         if ("MASTER".equals(role)) {
+                            if (!orderPollingService.isPollingEnabled()) {
+                                log.info("TRADE_EXECUTE_COPY_SKIPPED user={} — engine auto-copy paused (polling off)", userId);
+                                Map<String, Object> r = new LinkedHashMap<>();
+                                r.put("tradeId", saved.getId());
+                                r.put("brokerOrderId", saved.getBrokerOrderId());
+                                r.put("status", "EXECUTED");
+                                r.put("replicationsTriggered", 0);
+                                r.put("replicationDetails", Map.of());
+                                r.put("message", "Copy trading paused — trade not replicated to followers");
+                                return Mono.just(r);
+                            }
                             CopyTradeRequest req = new CopyTradeRequest();
                             req.setSymbol(instrument);
                             req.setQty(qty);

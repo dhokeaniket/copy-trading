@@ -3,6 +3,7 @@ package com.copytrading.replication;
 import com.copytrading.broker.BrokerAdapter;
 import com.copytrading.broker.BrokerRegistry;
 import com.copytrading.broker.OrderRequest;
+import com.copytrading.engine.Money;
 import com.copytrading.logs.TradeLog;
 import com.copytrading.logs.TradeLogService;
 import com.copytrading.risk.RiskEngine;
@@ -79,7 +80,8 @@ public class TradeReplicationService {
         r.setSide(req.getSide());
         r.setOrderType(req.getOrderType());
         r.setPrice(req.getPrice());
-        r.setQuantity((int) Math.max(1, Math.round(req.getQuantity() * scale)));
+        // Use Money.scaleQty for consistent precision with CopyEngineService
+        r.setQuantity(Money.scaleQty(req.getQuantity(), scale));
         return r;
     }
 }

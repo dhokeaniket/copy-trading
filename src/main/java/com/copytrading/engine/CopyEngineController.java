@@ -173,7 +173,7 @@ public class CopyEngineController {
         ));
         m.put("notificationTypes", List.of(
                 "TRADE_COPIED", "TRADE_FAILED", "MARKET_CLOSED", "SESSION_EXPIRED",
-                "SESSION_EXPIRING", "SESSION_REMINDER"
+                "SESSION_EXPIRING", "SESSION_REMINDER", "BROKER_DISCONNECTED", "BROKER_RECONNECT_REQUIRED"
         ));
         return Mono.just(m);
     }

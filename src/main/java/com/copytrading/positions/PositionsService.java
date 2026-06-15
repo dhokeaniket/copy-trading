@@ -10,6 +10,9 @@ import com.copytrading.broker.upstox.UpstoxApiClient;
 import com.copytrading.broker.zerodha.ZerodhaApiClient;
 import com.copytrading.broker.angelone.AngelOneApiClient;
 import com.copytrading.master.MasterActiveAccountRepository;
+import com.copytrading.security.BrokerCredentials;
+import com.copytrading.trade.Trade;
+import com.copytrading.trade.TradeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -36,6 +39,8 @@ public class PositionsService {
     private final DhanApiClient dhanClient;
     private final AngelOneApiClient angelOneClient;
     private final PlatformBrokerConfig platformConfig;
+    private final BrokerCredentials credentials;
+    private final TradeRepository tradeRepo;
 
     public PositionsService(BrokerAccountRepository brokerRepo,
                             MasterActiveAccountRepository activeAccountRepo,
@@ -45,7 +50,9 @@ public class PositionsService {
                             UpstoxApiClient upstoxClient,
                             DhanApiClient dhanClient,
                             AngelOneApiClient angelOneClient,
-                            PlatformBrokerConfig platformConfig) {
+                            PlatformBrokerConfig platformConfig,
+                            BrokerCredentials credentials,
+                            TradeRepository tradeRepo) {
         this.brokerRepo = brokerRepo;
         this.activeAccountRepo = activeAccountRepo;
         this.growwClient = growwClient;
@@ -55,32 +62,38 @@ public class PositionsService {
         this.dhanClient = dhanClient;
         this.angelOneClient = angelOneClient;
         this.platformConfig = platformConfig;
+        this.credentials = credentials;
+        this.tradeRepo = tradeRepo;
     }
 
     /**
      * Get positions for a master user using their active broker account.
+     * Falls back to trades table if broker session unavailable.
      */
     public Mono<Map<String, Object>> getMasterPositions(UUID masterId) {
         return activeAccountRepo.findById(masterId)
                 .flatMap(active -> brokerRepo.findById(active.getBrokerAccountId()))
+                .filter(a -> a.getAccessToken() != null)
                 .switchIfEmpty(
-                    // Fallback: find first active session broker account for this user
                     brokerRepo.findByUserId(masterId)
-                            .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                            .filter(a -> a.getAccessToken() != null)
                             .next()
                 )
                 .flatMap(this::fetchAndNormalizePositions)
+                .switchIfEmpty(Mono.defer(() -> fallbackFromTrades(masterId)))
                 .defaultIfEmpty(noAccountResponse());
     }
 
     /**
      * Get positions for a child user using their first active broker account.
+     * Falls back to trades table if broker session unavailable.
      */
     public Mono<Map<String, Object>> getChildPositions(UUID childId) {
         return brokerRepo.findByUserId(childId)
-                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                .filter(a -> a.getAccessToken() != null)
                 .next()
                 .flatMap(this::fetchAndNormalizePositions)
+                .switchIfEmpty(Mono.defer(() -> fallbackFromTrades(childId)))
                 .defaultIfEmpty(noAccountResponse());
     }
 
@@ -89,7 +102,7 @@ public class PositionsService {
      */
     public Mono<List<PositionDto>> getPositionsForAccount(UUID brokerAccountId) {
         return brokerRepo.findById(brokerAccountId)
-                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                .filter(a -> a.getAccessToken() != null)
                 .flatMap(this::fetchRawAndNormalize)
                 .defaultIfEmpty(List.of());
     }
@@ -99,7 +112,7 @@ public class PositionsService {
      */
     public Mono<List<PositionDto>> getPositionsForUser(UUID userId) {
         return brokerRepo.findByUserId(userId)
-                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                .filter(a -> a.getAccessToken() != null)
                 .next()
                 .flatMap(this::fetchRawAndNormalize)
                 .defaultIfEmpty(List.of());
@@ -119,21 +132,17 @@ public class PositionsService {
                 })
                 .onErrorResume(e -> {
                     log.error("POSITIONS_FETCH_ERROR broker={} error={}", account.getBrokerId(), e.getMessage());
-                    Map<String, Object> fallback = new LinkedHashMap<>();
-                    fallback.put("positions", List.of());
-                    fallback.put("totalPnl", 0);
-                    fallback.put("count", 0);
-                    fallback.put("error", "Failed to fetch positions: " + e.getMessage());
-                    fallback.put("errorCode", "SESSION_EXPIRED");
-                    fallback.put("action", "RE_LOGIN");
-                    return Mono.just(fallback);
+                    return Mono.empty(); // fall through to DB fallback
                 });
     }
 
     @SuppressWarnings("unchecked")
     private Mono<List<PositionDto>> fetchRawAndNormalize(BrokerAccount account) {
         String broker = account.getBrokerId();
-        String token = account.getAccessToken();
+        String token = credentials.accessToken(account);
+        if (token == null || token.isBlank()) {
+            return Mono.error(new IllegalStateException("Broker session token missing"));
+        }
 
         Mono<Map> rawMono;
         switch (broker) {
@@ -216,12 +225,15 @@ public class PositionsService {
                 return List.of();
             }
             case "DHAN": {
-                // Dhan may return raw JSON string or list
+                Object positions = raw.get("positions");
+                if (positions instanceof List<?> list) {
+                    return list.stream().filter(Map.class::isInstance).map(m -> (Map<String, Object>) m).toList();
+                }
                 Object rawData = raw.get("raw");
-                if (rawData instanceof List) return (List<Map<String, Object>>) rawData;
-                // If it's the map itself with positions
+                if (rawData instanceof List<?> list) {
+                    return list.stream().filter(Map.class::isInstance).map(m -> (Map<String, Object>) m).toList();
+                }
                 if (raw.containsKey("dhanClientId")) {
-                    // Single position object, wrap
                     return List.of((Map<String, Object>) raw);
                 }
                 return List.of();
@@ -265,9 +277,13 @@ public class PositionsService {
         int qty = getInt(p, "netQty", getInt(p, "quantity", 0));
         double avgPrice = getDouble(p, "averagePrice", getDouble(p, "buyAvgPrice", 0));
         double ltp = getDouble(p, "ltp", getDouble(p, "lastPrice", 0));
+        double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealisedPnl", getDouble(p, "realizedPnl", Double.NaN)));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
         String product = getString(p, "product", "CNC");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
@@ -276,44 +292,81 @@ public class PositionsService {
         int qty = getInt(p, "quantity", 0);
         double avgPrice = getDouble(p, "average_price", 0);
         double ltp = getDouble(p, "last_price", 0);
+        double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised", Double.NaN));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
         String product = getString(p, "product", "CNC");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
     private PositionDto mapFyersPosition(Map<String, Object> p) {
         String symbol = getString(p, "symbol", "UNKNOWN");
-        // Fyers symbol format: NSE:RELIANCE-EQ, extract just the name
         if (symbol.contains(":")) symbol = symbol.substring(symbol.indexOf(":") + 1);
         int qty = getInt(p, "netQty", getInt(p, "qty", 0));
         double avgPrice = getDouble(p, "avgPrice", getDouble(p, "buyAvg", 0));
         double ltp = getDouble(p, "ltp", 0);
+        double brokerPnl = getDouble(p, "pl", getDouble(p, "unrealized_profit", Double.NaN));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
         String product = getString(p, "productType", "CNC");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
     private PositionDto mapUpstoxPosition(Map<String, Object> p) {
-        String symbol = getString(p, "trading_symbol", getString(p, "tradingsymbol", "UNKNOWN"));
-        int qty = getInt(p, "quantity", getInt(p, "net_quantity", 0));
+        String symbol = getString(p, "trading_symbol", getString(p, "tradingsymbol",
+                getString(p, "symbol", "UNKNOWN")));
+        // Upstox v2: quantity = net qty (positive=long, negative=short)
+        // Also try buy_quantity - sell_quantity for net calculation
+        int qty = getInt(p, "quantity", 0);
+        if (qty == 0) {
+            int buyQty = getInt(p, "buy_quantity", getInt(p, "day_buy_quantity", 0));
+            int sellQty = getInt(p, "sell_quantity", getInt(p, "day_sell_quantity", 0));
+            qty = buyQty - sellQty;
+        }
+        // Upstox: average_price may be 0; fall back to buy_price or sell_price
         double avgPrice = getDouble(p, "average_price", 0);
-        double ltp = getDouble(p, "last_price", getDouble(p, "ltp", 0));
+        if (avgPrice == 0) {
+            avgPrice = getDouble(p, "buy_price", getDouble(p, "buy_avg",
+                    getDouble(p, "day_buy_price", 0)));
+        }
+        if (avgPrice == 0) {
+            avgPrice = getDouble(p, "sell_price", getDouble(p, "sell_avg",
+                    getDouble(p, "day_sell_price", 0)));
+        }
+        double ltp = getDouble(p, "last_price", getDouble(p, "ltp",
+                getDouble(p, "close_price", 0)));
+        double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised",
+                getDouble(p, "realised", Double.NaN)));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
+        // Upstox product: I=intraday, D=delivery, CO=cover, OCO=bracket
         String product = getString(p, "product", "D");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
     private PositionDto mapDhanPosition(Map<String, Object> p) {
-        String symbol = getString(p, "tradingSymbol", getString(p, "securityId", "UNKNOWN"));
-        int qty = getInt(p, "netQty", getInt(p, "quantity", 0));
+        String symbol = getString(p, "tradingSymbol", getString(p, "trading_symbol",
+                getString(p, "symbol", getString(p, "securityId", "UNKNOWN"))));
+        int qty = getInt(p, "netQty", getInt(p, "net_qty", getInt(p, "quantity", getInt(p, "netQuantity", 0))));
         double avgPrice = getDouble(p, "averagePrice", getDouble(p, "costPrice", 0));
         double ltp = getDouble(p, "ltp", getDouble(p, "currentPrice", 0));
+        double brokerPnl = getDouble(p, "unrealizedProfit", getDouble(p, "realizedProfit",
+                getDouble(p, "dayPnl", Double.NaN)));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchangeSegment", "NSE_EQ");
         String product = getString(p, "productType", "CNC");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
@@ -322,9 +375,13 @@ public class PositionsService {
         int qty = getInt(p, "netqty", getInt(p, "quantity", 0));
         double avgPrice = getDouble(p, "averageprice", getDouble(p, "buyavgprice", 0));
         double ltp = getDouble(p, "ltp", 0);
+        double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised", Double.NaN));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
         String product = getString(p, "producttype", "DELIVERY");
+        if (!Double.isNaN(brokerPnl)) {
+            return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
+        }
         return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product);
     }
 
@@ -347,6 +404,55 @@ public class PositionsService {
         if (v == null) return defaultVal;
         if (v instanceof Number) return ((Number) v).doubleValue();
         try { return Double.parseDouble(v.toString()); } catch (Exception e) { return defaultVal; }
+    }
+
+    /**
+     * Fallback: build positions-like data from the trades table when broker is offline.
+     * Shows executed trades grouped by instrument with realized P&L from DB.
+     */
+    private Mono<Map<String, Object>> fallbackFromTrades(UUID userId) {
+        return tradeRepo.findByUserIdOrderByPlacedAtDesc(userId)
+                .filter(t -> "EXECUTED".equalsIgnoreCase(t.getStatus()) || "COMPLETE".equalsIgnoreCase(t.getStatus()))
+                .collectList()
+                .map(trades -> {
+                    if (trades.isEmpty()) return noAccountResponse();
+                    // Group by instrument, net out qty (BUY adds, SELL subtracts)
+                    Map<String, int[]> netQty = new LinkedHashMap<>(); // instrument -> [qty, totalBuyValue, totalSellValue]
+                    Map<String, double[]> prices = new LinkedHashMap<>(); // instrument -> [avgBuyPrice, lastPrice, realized]
+                    for (Trade t : trades) {
+                        String inst = t.getInstrument() != null ? t.getInstrument() : "UNKNOWN";
+                        netQty.putIfAbsent(inst, new int[]{0});
+                        prices.putIfAbsent(inst, new double[]{0, 0, 0});
+                        int qty = t.getQuantity();
+                        if ("BUY".equalsIgnoreCase(t.getTransactionType())) {
+                            netQty.get(inst)[0] += qty;
+                            if (t.getPrice() > 0) prices.get(inst)[0] = t.getPrice(); // last known buy price
+                        } else {
+                            netQty.get(inst)[0] -= qty;
+                            if (t.getPrice() > 0) prices.get(inst)[1] = t.getPrice(); // last known sell price
+                        }
+                    }
+                    List<PositionDto> positions = new ArrayList<>();
+                    double totalPnl = 0;
+                    for (Map.Entry<String, int[]> e : netQty.entrySet()) {
+                        int qty = e.getValue()[0];
+                        if (qty == 0) continue; // closed position
+                        double[] p = prices.get(e.getKey());
+                        double avgPrice = p[0] > 0 ? p[0] : p[1];
+                        double ltp = p[1] > 0 ? p[1] : avgPrice; // use sell price as last known or same as buy
+                        String side = qty > 0 ? "BUY" : "SELL";
+                        PositionDto dto = new PositionDto(e.getKey(), Math.abs(qty), avgPrice, ltp, side, "NSE", "MIS");
+                        totalPnl += dto.getPnl();
+                        positions.add(dto);
+                    }
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("positions", positions);
+                    result.put("totalPnl", totalPnl);
+                    result.put("count", positions.size());
+                    result.put("source", "DB_FALLBACK");
+                    result.put("note", "Live broker data unavailable. Showing positions from trade history.");
+                    return result;
+                });
     }
 
     private Map<String, Object> noAccountResponse() {

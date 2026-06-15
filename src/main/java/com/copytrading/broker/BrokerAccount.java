@@ -43,8 +43,26 @@ public class BrokerAccount {
     @Column("session_expires")
     private Instant sessionExpires;
 
+    @Column("proxy_host")
+    private String proxyHost;
+
+    @Column("proxy_port")
+    private Integer proxyPort;
+
+    @Column("proxy_user")
+    private String proxyUser;
+
+    @Column("proxy_pass")
+    private String proxyPass;
+
+    @Column("totp_secret")
+    private String totpSecret;
+
     @Column("linked_at")
     private Instant linkedAt;
+
+    @Column("ip_slot")
+    private int ipSlot;
 
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
@@ -70,4 +88,21 @@ public class BrokerAccount {
     public void setSessionExpires(Instant sessionExpires) { this.sessionExpires = sessionExpires; }
     public Instant getLinkedAt() { return linkedAt; }
     public void setLinkedAt(Instant linkedAt) { this.linkedAt = linkedAt; }
+    public int getIpSlot() { return ipSlot; }
+    public void setIpSlot(int ipSlot) { this.ipSlot = ipSlot; }
+    public String getProxyHost() { return proxyHost; }
+    public void setProxyHost(String proxyHost) { this.proxyHost = proxyHost; }
+    public Integer getProxyPort() { return proxyPort; }
+    public void setProxyPort(Integer proxyPort) { this.proxyPort = proxyPort; }
+    public String getProxyUser() { return proxyUser; }
+    public void setProxyUser(String proxyUser) { this.proxyUser = proxyUser; }
+    public String getProxyPass() { return proxyPass; }
+    public void setProxyPass(String proxyPass) { this.proxyPass = proxyPass; }
+    public String getTotpSecret() { return totpSecret; }
+    public void setTotpSecret(String totpSecret) { this.totpSecret = totpSecret; }
+
+    /** Returns true if this account has a per-user proxy configured. */
+    public boolean hasProxy() {
+        return proxyHost != null && !proxyHost.isBlank() && proxyPort != null && proxyPort > 0;
+    }
 }
