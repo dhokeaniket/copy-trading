@@ -70,6 +70,13 @@ public class BrokerController {
         return service.deleteAccount(accountId, UUID.fromString(userId));
     }
 
+    // Disconnect
+    @PostMapping("/api/v1/brokers/accounts/{accountId}/disconnect")
+    public Mono<Map<String, Object>> disconnectAccount(@PathVariable UUID accountId,
+                                                       @AuthenticationPrincipal String userId) {
+        return service.disconnectAccount(accountId, UUID.fromString(userId));
+    }
+
     @Operation(summary = "Login to broker", description = "Create broker session. Body varies by broker: Groww={}, Zerodha={requestToken}, Fyers/Upstox={authCode}, Dhan={authCode:tokenId}, AngelOne={totpCode}")
     @PostMapping(value = "/api/v1/brokers/accounts/{accountId}/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> loginToBroker(@PathVariable UUID accountId,

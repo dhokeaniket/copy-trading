@@ -1369,4 +1369,16 @@ public class BrokerAccountService {
         }
         return name + " error. Please re-login and try again.";
     }
+
+    public Mono<Map<String, Object>> disconnectAccount(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new IllegalArgumentException("Account not found")))
+                .flatMap(account -> {
+                    account.setAccessToken(null);
+                    account.setSessionActive(false);
+                    return repo.save(account);
+                })
+                .map(saved -> Map.of("message", "Account disconnected successfully"));
+    }
 }
