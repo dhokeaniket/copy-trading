@@ -18,6 +18,8 @@ public interface CopyLogRepository extends ReactiveCrudRepository<CopyLog, Long>
 
     Flux<CopyLog> findByCopyGroupId(String copyGroupId);
 
+    Mono<CopyLog> findByChildBrokerOrderId(String childBrokerOrderId);
+
     Flux<CopyLog> findByMasterTradeId(String masterTradeId);
 
     Flux<CopyLog> findByMasterIdAndChildStatus(UUID masterId, String childStatus);
