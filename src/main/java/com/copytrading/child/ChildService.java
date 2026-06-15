@@ -524,24 +524,39 @@ public class ChildService {
             var copyLogList = t.getT1();
             Map<String, Object> pos = t.getT2();
             long activeMasters = t.getT3();
-            long copied = copyLogList.stream().filter(l -> "SUCCESS".equals(l.getChildStatus())).count();
+            long copied = copyLogList.stream().filter(l -> "SUCCESS".equals(l.getChildStatus()) && l.getMasterId() != null).count();
+            long personal = copyLogList.stream().filter(l -> "SUCCESS".equals(l.getChildStatus()) && l.getMasterId() == null).count();
             long failed = copyLogList.stream().filter(l -> "FAILED".equals(l.getChildStatus())).count();
             long skipped = copyLogList.stream().filter(l -> "SKIPPED".equals(l.getChildStatus())).count();
+            long total = copied + personal + failed;
+            double winRate = total > 0 ? Math.round((copied + personal) * 100.0 / total) : 0;
+
+            List<PositionDto> livePositions = new ArrayList<>();
+            Object posListObj = pos.get("positions");
+            if (posListObj instanceof List<?> list) {
+                for (Object item : list) {
+                    if (item instanceof PositionDto p) livePositions.add(p);
+                }
+            }
             double unrealized = toDouble(pos.get("totalPnl"));
-            long total = copied + failed;
-            double winRate = total > 0 ? Math.round(copied * 100.0 / total) : 0;
+
+            double[] metrics = calculateGlobalMetrics(copyLogList, livePositions);
+            double globalTotal = metrics[0];
+            double copiedPnl = metrics[1];
+            double personalPnl = metrics[2];
+            double realizedPnl = Math.round((globalTotal - unrealized) * 100.0) / 100.0;
 
             Map<String, Object> r = new LinkedHashMap<>();
-            r.put("totalPnl", unrealized);
-            r.put("totalPnL", unrealized);
-            r.put("personalPnL", unrealized);
-            r.put("copiedPnL", unrealized);
+            r.put("totalPnl", globalTotal);
+            r.put("totalPnL", globalTotal);
+            r.put("personalPnL", personalPnl);
+            r.put("copiedPnL", copiedPnl);
             r.put("masterPnL", 0);
             r.put("unrealizedPnl", unrealized);
             r.put("totalUnrealizedPnl", unrealized);
-            r.put("realizedPnl", 0);
-            r.put("combinedPnl", unrealized);
-            r.put("personalTrades", 0);
+            r.put("realizedPnl", realizedPnl);
+            r.put("combinedPnl", globalTotal);
+            r.put("personalTrades", personal);
             r.put("copiedTrades", copied);
             r.put("skippedCopies", skipped);
             r.put("failedReplications", failed);
@@ -554,12 +569,12 @@ public class ChildService {
                     Map.of("time", java.time.LocalDate.now().minusDays(3).toString(), "personal", 0, "copied", 0),
                     Map.of("time", java.time.LocalDate.now().minusDays(2).toString(), "personal", 0, "copied", 0),
                     Map.of("time", java.time.LocalDate.now().minusDays(1).toString(), "personal", 0, "copied", copied),
-                    Map.of("time", java.time.LocalDate.now().toString(), "personal", 0, "copied", copied)
+                    Map.of("time", java.time.LocalDate.now().toString(), "personal", personal, "copied", copied)
             ));
             r.put("personalTradesList", List.of());
             r.put("masterPnlComparison", Map.of(
                     "masterPnl", 0,
-                    "childPnl", unrealized,
+                    "childPnl", globalTotal,
                     "replicationAccuracy", winRate));
             return r;
         });
@@ -619,5 +634,59 @@ public class ChildService {
         }
         
         return new double[]{Math.round(totalMasterPnl * 100.0) / 100.0, Math.round(totalAllocation * 100.0) / 100.0};
+    }
+
+    private double[] calculateGlobalMetrics(List<com.copytrading.logs.CopyLog> logs, List<PositionDto> livePositions) {
+        Map<String, Double> ltpMap = livePositions.stream()
+                .collect(Collectors.toMap(p -> p.getSymbol().toUpperCase(), PositionDto::getLtp, (a, b) -> a));
+
+        Map<String, List<com.copytrading.logs.CopyLog>> bySymbol = logs.stream()
+                .filter(l -> "SUCCESS".equals(l.getChildStatus()) && l.getSymbol() != null)
+                .collect(Collectors.groupingBy(l -> l.getSymbol().toUpperCase()));
+
+        double globalTotal = 0.0;
+        double copiedPnl = 0.0;
+        double personalPnl = 0.0;
+
+        for (Map.Entry<String, List<com.copytrading.logs.CopyLog>> entry : bySymbol.entrySet()) {
+            String sym = entry.getKey();
+            double buyValue = 0, sellValue = 0;
+            double copiedBuy = 0, copiedSell = 0;
+            double personalBuy = 0, personalSell = 0;
+            int netQty = 0, copiedNet = 0, personalNet = 0;
+            double lastPriceInLog = 0;
+
+            for (com.copytrading.logs.CopyLog l : entry.getValue()) {
+                double price = l.getPrice() != null ? l.getPrice() : 0.0;
+                int qty = l.getChildQty() != null ? l.getChildQty() : (l.getQty() != null ? l.getQty() : 0);
+                if (price > 0) lastPriceInLog = price;
+
+                boolean isCopied = l.getMasterId() != null;
+
+                if ("BUY".equalsIgnoreCase(l.getTradeType())) {
+                    buyValue += (price * qty);
+                    netQty += qty;
+                    if (isCopied) { copiedBuy += (price * qty); copiedNet += qty; }
+                    else { personalBuy += (price * qty); personalNet += qty; }
+                } else if ("SELL".equalsIgnoreCase(l.getTradeType())) {
+                    sellValue += (price * qty);
+                    netQty -= qty;
+                    if (isCopied) { copiedSell += (price * qty); copiedNet -= qty; }
+                    else { personalSell += (price * qty); personalNet -= qty; }
+                }
+            }
+
+            double ltp = ltpMap.getOrDefault(sym, lastPriceInLog);
+            
+            globalTotal += (sellValue - buyValue + (netQty * ltp));
+            copiedPnl += (copiedSell - copiedBuy + (copiedNet * ltp));
+            personalPnl += (personalSell - personalBuy + (personalNet * ltp));
+        }
+
+        return new double[]{
+            Math.round(globalTotal * 100.0) / 100.0,
+            Math.round(copiedPnl * 100.0) / 100.0,
+            Math.round(personalPnl * 100.0) / 100.0
+        };
     }
 }
