@@ -173,7 +173,31 @@ public class MasterController {
     @PostMapping(value = "/active-account", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> setActiveAccount(@AuthenticationPrincipal String userId,
                                                        @RequestBody com.copytrading.master.dto.ActiveAccountRequest body) {
-        return service.setActiveAccount(UUID.fromString(userId), UUID.fromString(body.getBrokerAccountId()));
+        if (body == null || body.getBrokerAccountId() == null || body.getBrokerAccountId().isBlank()) {
+            return Mono.just(Map.of("error", "brokerAccountId is required"));
+        }
+        try {
+            return service.setActiveAccount(UUID.fromString(userId), UUID.fromString(body.getBrokerAccountId()));
+        } catch (IllegalArgumentException e) {
+            return Mono.just(Map.of("error", "Invalid UUID format"));
+        }
+    }
+
+    // Bulk Active accounts
+    @PostMapping(value = "/active-accounts", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> setActiveAccounts(@AuthenticationPrincipal String userId,
+                                                       @RequestBody com.copytrading.master.dto.ActiveAccountsRequest body) {
+        if (body == null || body.getBrokerAccountIds() == null) {
+            return Mono.just(Map.of("error", "brokerAccountIds is required"));
+        }
+        try {
+            java.util.List<UUID> brokerIds = body.getBrokerAccountIds().stream()
+                    .map(UUID::fromString)
+                    .toList();
+            return service.setActiveAccounts(UUID.fromString(userId), brokerIds);
+        } catch (IllegalArgumentException e) {
+            return Mono.just(Map.of("error", "Invalid UUID format in list"));
+        }
     }
 
     @GetMapping("/active-account")

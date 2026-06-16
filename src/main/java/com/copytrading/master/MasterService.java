@@ -107,6 +107,26 @@ public class MasterService {
                 });
     }
 
+    public Mono<Map<String, Object>> setActiveAccounts(UUID masterId, java.util.List<UUID> brokerAccountIds) {
+        return clearActiveAccount(masterId)
+                .then(reactor.core.publisher.Flux.fromIterable(brokerAccountIds)
+                        .flatMap(bid -> db.sql("INSERT INTO master_active_accounts (master_id, broker_account_id, activated_at) " +
+                                "VALUES (:mid, :bid, now()) " +
+                                "ON CONFLICT (broker_account_id) DO NOTHING")
+                                .bind("mid", masterId)
+                                .bind("bid", bid)
+                                .then())
+                        .then())
+                .then(orderPollingService.snapshotSingleMasterOrders(masterId))
+                .thenReturn(Map.<String, Object>of(
+                        "message", "Active accounts synced successfully"))
+                .onErrorResume(e -> {
+                    Map<String, Object> fallback = new LinkedHashMap<>();
+                    fallback.put("error", "Could not sync active accounts: " + e.getMessage());
+                    return Mono.just(fallback);
+                });
+    }
+
     public Mono<Map<String, Object>> getActiveAccount(UUID masterId) {
         return activeAccountRepo.findByMasterId(masterId).collectList()
                 .flatMap(activeList -> {
