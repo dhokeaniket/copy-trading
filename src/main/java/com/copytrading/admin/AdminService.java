@@ -72,18 +72,27 @@ public class AdminService {
         } else {
             flux = users.findAll();
         }
-        return flux.collectList().map(all -> {
+        return flux.collectList().flatMap(all -> {
             int total = all.size();
             int start = (page - 1) * limit;
             int end = Math.min(start + limit, total);
             List<UserDto> pageData = start < total
                     ? all.subList(start, end).stream().map(UserDto::from).toList()
                     : List.of();
-            Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("users", pageData);
-            resp.put("total", total);
-            resp.put("page", page);
-            return resp;
+            return reactor.core.publisher.Flux.fromIterable(pageData)
+                    .flatMap(dto -> brokerAccountRepo.findByUserId(dto.getUserId()).collectList()
+                            .map(brokers -> {
+                                dto.setBrokerAccounts(new java.util.ArrayList<>(brokers));
+                                return dto;
+                            }))
+                    .collectList()
+                    .map(enrichedPageData -> {
+                        Map<String, Object> resp = new LinkedHashMap<>();
+                        resp.put("users", enrichedPageData);
+                        resp.put("total", total);
+                        resp.put("page", page);
+                        return resp;
+                    });
         });
     }
 
@@ -206,10 +215,9 @@ public class AdminService {
                 subscriptionRepo.findAll().collectList(),
                 tradeLogRepo.findAll().collectList()
         ).map(tuple -> {
-            Map<String, Object> totalUsers = new LinkedHashMap<>();
-            totalUsers.put("admin", tuple.getT1());
-            totalUsers.put("master", tuple.getT2());
-            totalUsers.put("child", tuple.getT3());
+            long admins = tuple.getT1();
+            long masters = tuple.getT2();
+            long children = tuple.getT3();
 
             var subs = tuple.getT4();
             var logs = tuple.getT5();
@@ -218,11 +226,17 @@ public class AdminService {
             long totalReplications = logs.stream().filter(l -> "REPLICATED".equals(l.getType())).count();
 
             Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("totalUsers", totalUsers);
+            resp.put("totalUsers", admins + masters + children);
+            resp.put("totalAdmins", admins);
+            resp.put("totalMasters", masters);
+            resp.put("activeMasters", masters);
+            resp.put("totalChildren", children);
             resp.put("totalTrades", totalTrades);
             resp.put("totalReplications", totalReplications);
+            resp.put("volumeToday", 0);
             resp.put("tradeVolume", 0);
             resp.put("activeSubscriptions", activeSubs);
+            resp.put("revenueMtd", 0);
             return resp;
         });
     }

@@ -48,13 +48,25 @@ public class MasterController {
     @PostMapping(value = "/children/bulk-link", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> bulkLinkChildren(@AuthenticationPrincipal String userId,
                                                        @RequestBody BulkLinkRequest req) {
-        var children = req.getChildren().stream().map(c -> {
-            Map<String, Object> m = new java.util.LinkedHashMap<>();
-            m.put("childId", c.getChildId().toString());
-            if (c.getScalingFactor() != null) m.put("scalingFactor", c.getScalingFactor());
-            return m;
-        }).toList();
-        return service.bulkLinkChildren(UUID.fromString(userId), children);
+        if (req == null || req.getChildren() == null) {
+            return Mono.just(Map.of("error", "children list is required"));
+        }
+        try {
+            var children = req.getChildren().stream().map(c -> {
+                Map<String, Object> m = new java.util.LinkedHashMap<>();
+                if (c.getChildId() == null) {
+                    throw new IllegalArgumentException("childId cannot be null");
+                }
+                m.put("childId", c.getChildId().toString());
+                if (c.getScalingFactor() != null) m.put("scalingFactor", c.getScalingFactor());
+                return m;
+            }).toList();
+            return service.bulkLinkChildren(UUID.fromString(userId), children);
+        } catch (IllegalArgumentException e) {
+            return Mono.just(Map.of("error", e.getMessage() != null ? e.getMessage() : "Invalid input format"));
+        } catch (Exception e) {
+            return Mono.just(Map.of("error", "Internal server error during bulk link: " + e.getMessage()));
+        }
     }
 
     @PostMapping(value = "/subscribe/{childId}", consumes = MediaType.APPLICATION_JSON_VALUE)
