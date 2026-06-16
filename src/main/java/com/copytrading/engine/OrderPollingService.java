@@ -229,8 +229,8 @@ public class OrderPollingService {
             return Mono.empty();
         }
 
-        // Poll every linked broker account that has a token (not only the designated active one)
-        return brokerRepo.findByUserId(masterId)
+        // Poll ONLY the designated active broker account
+        return brokerRepo.findById(active.getBrokerAccountId())
                 .filter(a -> a.getAccessToken() != null)
                 .flatMap(account -> brokerService.getOrders(account.getId(), masterId)
                         .map(resp -> {

@@ -2,6 +2,7 @@ package com.copytrading.engine;
 
 import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.broker.PlatformBrokerConfig;
+import com.copytrading.master.MasterActiveAccountRepository;
 import com.copytrading.trade.TradeRepository;
 import com.copytrading.ws.TradeUpdatesHub;
 import org.slf4j.Logger;
@@ -36,12 +37,14 @@ public class BrokerPostbackController {
     private final CanonicalOrderMapper canonicalMapper;
     private final PlatformBrokerConfig platformConfig;
     private final OrderPollingService orderPollingService;
+    private final MasterActiveAccountRepository activeAccountRepo;
 
     public BrokerPostbackController(CopyEngineService copyEngine, BrokerAccountRepository brokerRepo,
                                      TradeRepository tradeRepo, TradeUpdatesHub hub,
                                      CanonicalOrderMapper canonicalMapper,
                                      PlatformBrokerConfig platformConfig,
-                                     OrderPollingService orderPollingService) {
+                                     OrderPollingService orderPollingService,
+                                     MasterActiveAccountRepository activeAccountRepo) {
         this.copyEngine = copyEngine;
         this.brokerRepo = brokerRepo;
         this.tradeRepo = tradeRepo;
@@ -49,6 +52,7 @@ public class BrokerPostbackController {
         this.canonicalMapper = canonicalMapper;
         this.platformConfig = platformConfig;
         this.orderPollingService = orderPollingService;
+        this.activeAccountRepo = activeAccountRepo;
     }
 
     /**
@@ -95,6 +99,9 @@ public class BrokerPostbackController {
         return brokerRepo.findByBrokerId("ZERODHA")
                 .filter(a -> a.getClientId() != null && a.getClientId().equals(userId))
                 .next()
+                .flatMap(account -> activeAccountRepo.findById(account.getUserId())
+                    .filter(active -> active.getBrokerAccountId().equals(account.getId()))
+                    .map(active -> account))
                 .flatMap(account -> {
                     UUID masterId = account.getUserId();
                     canonical.setSourceBrokerId(account.getBrokerId());
