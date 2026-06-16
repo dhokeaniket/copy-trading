@@ -6,6 +6,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 @Component
@@ -25,9 +27,9 @@ public class UpstoxApiClient {
      * Direct login using api_key + api_secret (client_credentials grant).
      */
     public Mono<Map> generateTokenWithSecret(String apiKey, String apiSecret) {
-        String body = "client_id=" + apiKey
-                + "&client_secret=" + apiSecret
-                + "&redirect_uri=https://localhost"
+        String body = "client_id=" + URLEncoder.encode(apiKey, StandardCharsets.UTF_8)
+                + "&client_secret=" + URLEncoder.encode(apiSecret, StandardCharsets.UTF_8)
+                + "&redirect_uri=" + URLEncoder.encode("https://localhost", StandardCharsets.UTF_8)
                 + "&grant_type=client_credentials";
         log.info("UPSTOX_SECRET_LOGIN apiKey={}...", apiKey.substring(0, Math.min(8, apiKey.length())));
         return client.post()
@@ -45,10 +47,11 @@ public class UpstoxApiClient {
      * Exchange auth_code for access_token via OAuth.
      */
     public Mono<Map> generateToken(String apiKey, String apiSecret, String authCode, String redirectUri) {
-        String body = "code=" + authCode
-                + "&client_id=" + apiKey
-                + "&client_secret=" + apiSecret
-                + "&redirect_uri=" + (redirectUri != null ? redirectUri : "https://localhost")
+        String safeRedirect = redirectUri != null ? redirectUri : "https://localhost";
+        String body = "code=" + URLEncoder.encode(authCode, StandardCharsets.UTF_8)
+                + "&client_id=" + URLEncoder.encode(apiKey, StandardCharsets.UTF_8)
+                + "&client_secret=" + URLEncoder.encode(apiSecret, StandardCharsets.UTF_8)
+                + "&redirect_uri=" + URLEncoder.encode(safeRedirect, StandardCharsets.UTF_8)
                 + "&grant_type=authorization_code";
         log.info("UPSTOX_TOKEN_REQ apiKey={}...", apiKey.substring(0, Math.min(8, apiKey.length())));
         return client.post()
