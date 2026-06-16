@@ -198,7 +198,8 @@ public class TradingDataService {
                     .filter(a -> a.getUserId().equals(userId) && a.getAccessToken() != null);
         }
         if (master) {
-            return activeAccountRepo.findById(userId)
+            return activeAccountRepo.findByMasterId(userId)
+                    .next()
                     .flatMap(aa -> brokerRepo.findById(aa.getBrokerAccountId()))
                     .filter(a -> a.getAccessToken() != null)
                     .switchIfEmpty(brokerRepo.findByUserId(userId)

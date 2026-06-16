@@ -71,7 +71,8 @@ public class PositionsService {
      * Falls back to trades table if broker session unavailable.
      */
     public Mono<Map<String, Object>> getMasterPositions(UUID masterId) {
-        return activeAccountRepo.findById(masterId)
+        return activeAccountRepo.findByMasterId(masterId)
+                .next()
                 .flatMap(active -> brokerRepo.findById(active.getBrokerAccountId()))
                 .filter(a -> a.getAccessToken() != null)
                 .switchIfEmpty(

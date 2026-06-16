@@ -10,10 +10,10 @@ import java.util.UUID;
 @Table("master_active_accounts")
 public class MasterActiveAccount {
 
-    @Id
     @Column("master_id")
     private UUID masterId;
 
+    @Id
     @Column("broker_account_id")
     private UUID brokerAccountId;
 

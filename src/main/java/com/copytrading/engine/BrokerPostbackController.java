@@ -99,8 +99,9 @@ public class BrokerPostbackController {
         return brokerRepo.findByBrokerId("ZERODHA")
                 .filter(a -> a.getClientId() != null && a.getClientId().equals(userId))
                 .next()
-                .flatMap(account -> activeAccountRepo.findById(account.getUserId())
+                .flatMap(account -> activeAccountRepo.findByMasterId(account.getUserId())
                     .filter(active -> active.getBrokerAccountId().equals(account.getId()))
+                    .next()
                     .map(active -> account))
                 .flatMap(account -> {
                     UUID masterId = account.getUserId();
