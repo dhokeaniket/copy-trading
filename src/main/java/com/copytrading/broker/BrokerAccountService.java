@@ -585,9 +585,9 @@ public class BrokerAccountService {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "totpCode required for Angel One login. Also set clientId (your Angel One client code) and password via account update."));
         }
-        // clientId = Angel One client code, apiSecret = password (stored on account)
+        // clientId = Angel One client code, apiSecret = password (stored on account — must decrypt)
         String clientCode = a.getClientId();
-        String password = a.getApiSecret();
+        String password = credentials.apiSecret(a);  // decrypt stored password
         if (clientCode == null || clientCode.isBlank() || password == null || password.isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Angel One requires clientId (client code) and apiSecret (password) set on the broker account."));
@@ -1846,8 +1846,14 @@ public class BrokerAccountService {
             case "FYERS" -> {
                 var creds = platformConfig.getFyers();
                 if (creds != null && creds.getApiKey() != null) {
+                    String encodedRedirect;
+                    try {
+                        encodedRedirect = java.net.URLEncoder.encode(redirect, java.nio.charset.StandardCharsets.UTF_8);
+                    } catch (Exception ex) {
+                        encodedRedirect = redirect;
+                    }
                     config.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id="
-                            + creds.getApiKey() + "&redirect_uri=" + redirect + "&response_type=code&state=ok");
+                            + creds.getApiKey() + "&redirect_uri=" + encodedRedirect + "&response_type=code&state=ok");
                 }
                 config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
             }
