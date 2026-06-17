@@ -73,6 +73,11 @@ public class AdminService {
             flux = users.findAll();
         }
         return flux.collectList().flatMap(all -> {
+            all.sort((u1, u2) -> {
+                Instant t1 = u1.getCreatedAt() != null ? u1.getCreatedAt() : Instant.EPOCH;
+                Instant t2 = u2.getCreatedAt() != null ? u2.getCreatedAt() : Instant.EPOCH;
+                return t2.compareTo(t1);
+            });
             int total = all.size();
             int start = (page - 1) * limit;
             int end = Math.min(start + limit, total);
@@ -80,7 +85,7 @@ public class AdminService {
                     ? all.subList(start, end).stream().map(UserDto::from).toList()
                     : List.of();
             return reactor.core.publisher.Flux.fromIterable(pageData)
-                    .flatMap(dto -> brokerAccountRepo.findByUserId(dto.getUserId()).collectList()
+                    .concatMap(dto -> brokerAccountRepo.findByUserId(dto.getUserId()).collectList()
                             .map(brokers -> {
                                 dto.setBrokerAccounts(new java.util.ArrayList<>(brokers));
                                 return dto;
