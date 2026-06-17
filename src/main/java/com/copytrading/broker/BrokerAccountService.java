@@ -421,9 +421,19 @@ public class BrokerAccountService {
         // Per-user Zerodha: each user has their own api_key + api_secret from their Kite Connect app
         String apiKey = a.getApiKey();
         String apiSecret = credentials.apiSecret(a); // decrypt stored secret
-        // Fallback to platform-level if user hasn't set their own
-        if (apiKey == null || apiKey.isBlank()) apiKey = platformConfig.getZerodha().getApiKey();
-        if (apiSecret == null || apiSecret.isBlank()) apiSecret = platformConfig.getZerodha().getApiSecret();
+        var platformCreds = platformConfig.getZerodha();
+        
+        boolean usingPlatformKey = false;
+        if (apiKey == null || apiKey.isBlank()) {
+            apiKey = platformCreds != null ? platformCreds.getApiKey() : null;
+            usingPlatformKey = true;
+        }
+        
+        if (usingPlatformKey) {
+            apiSecret = platformCreds != null ? platformCreds.getApiSecret() : null;
+        } else if (apiSecret == null || apiSecret.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "API Secret is missing. Please configure both API Key and API Secret in your Broker settings."));
+        }
         
         if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -477,9 +487,18 @@ public class BrokerAccountService {
         String apiKey = a.getApiKey();
         String apiSecret = credentials.apiSecret(a);
         var platformCreds = platformConfig.getUpstox();
-        if (apiKey == null || apiKey.isBlank()) apiKey = platformCreds.getApiKey();
-        if (apiSecret == null || apiSecret.isBlank()) apiSecret = platformCreds.getApiSecret();
 
+        boolean usingPlatformKey = false;
+        if (apiKey == null || apiKey.isBlank()) {
+            apiKey = platformCreds != null ? platformCreds.getApiKey() : null;
+            usingPlatformKey = true;
+        }
+
+        if (usingPlatformKey) {
+            apiSecret = platformCreds != null ? platformCreds.getApiSecret() : null;
+        } else if (apiSecret == null || apiSecret.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "API Secret is missing. Please configure both API Key and API Secret in your Broker settings."));
+        }
         if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
             String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + apiKey + "&redirect_uri=" + platformConfig.getCallbackUrl();
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,

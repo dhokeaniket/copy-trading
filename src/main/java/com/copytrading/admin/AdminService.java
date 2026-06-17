@@ -152,6 +152,20 @@ public class AdminService {
                 });
     }
 
+    public Mono<Map<String, Object>> updateUserStatus(UUID userId, String status) {
+        if (status == null || (!status.equals("ACTIVE") && !status.equals("INACTIVE"))) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid status. Must be ACTIVE or INACTIVE"));
+        }
+        return users.findById(userId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
+                .flatMap(u -> {
+                    u.setStatus(status);
+                    u.setUpdatedAt(Instant.now());
+                    return users.save(u);
+                })
+                .map(u -> Map.of("message", "User status updated", "userId", u.getId(), "status", u.getStatus()));
+    }
+
     // 2.6 Activate user
     public Mono<Map<String, String>> activateUser(UUID userId) {
         return users.findById(userId)
