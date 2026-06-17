@@ -1845,7 +1845,8 @@ public class BrokerAccountService {
             }
             case "FYERS" -> {
                 var creds = platformConfig.getFyers();
-                if (creds != null && creds.getApiKey() != null) {
+                String clientId = (a.getApiKey() != null && !a.getApiKey().isBlank()) ? a.getApiKey() : (creds != null ? creds.getApiKey() : null);
+                if (clientId != null) {
                     String encodedRedirect;
                     try {
                         encodedRedirect = java.net.URLEncoder.encode(redirect, java.nio.charset.StandardCharsets.UTF_8);
@@ -1853,15 +1854,22 @@ public class BrokerAccountService {
                         encodedRedirect = redirect;
                     }
                     config.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id="
-                            + creds.getApiKey() + "&redirect_uri=" + encodedRedirect + "&response_type=code&state=ok");
+                            + clientId + "&redirect_uri=" + encodedRedirect + "&response_type=code&state=ok");
                 }
                 config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
             }
             case "UPSTOX" -> {
                 var creds = platformConfig.getUpstox();
-                if (creds != null && creds.getApiKey() != null) {
+                String clientId = (a.getApiKey() != null && !a.getApiKey().isBlank()) ? a.getApiKey() : (creds != null ? creds.getApiKey() : null);
+                if (clientId != null) {
+                    String encodedRedirect;
+                    try {
+                        encodedRedirect = java.net.URLEncoder.encode(redirect, java.nio.charset.StandardCharsets.UTF_8);
+                    } catch (Exception ex) {
+                        encodedRedirect = redirect;
+                    }
                     config.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id="
-                            + creds.getApiKey() + "&redirect_uri=" + redirect);
+                            + clientId + "&redirect_uri=" + encodedRedirect);
                 }
                 config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
             }
