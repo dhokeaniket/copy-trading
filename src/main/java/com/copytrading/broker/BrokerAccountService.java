@@ -506,6 +506,11 @@ public class BrokerAccountService {
         }
         // Upstox auth codes are single-use at the broker API level — no need for backend dedup.
         // Removed local dedup to allow retries after failed attempts (network errors, etc.).
+        log.info("UPSTOX_DEBUG apiKey='{}' hasSecret={} redirectUri='{}'",
+            apiKey,
+            (apiSecret != null && !apiSecret.isBlank()),
+            platformConfig.getCallbackUrl()
+        );
         return upstoxClient.generateToken(apiKey, apiSecret, req.getAuthCode(), platformConfig.getCallbackUrl())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
                         r -> (String) r.get("access_token")))
