@@ -16,7 +16,7 @@ import java.util.Map;
  * Auth: Bearer jwtToken + api_key header
  *
  * Login: POST /rest/auth/angelbroking/user/v1/loginByPassword
- *   Body: { clientcode, password, totp }
+ *   Body: { clientcode, password (SmartAPI PIN, often 4-digit MPIN), totp }
  *   Response: { data: { jwtToken, refreshToken, feedToken } }
  *
  * Place Order: POST /rest/secure/angelbroking/order/v1/placeOrder

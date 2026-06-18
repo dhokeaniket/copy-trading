@@ -2,7 +2,11 @@ package com.copytrading.broker.upstox;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
@@ -25,15 +29,16 @@ public class UpstoxApiClient {
      * Direct login using api_key + api_secret (client_credentials grant).
      */
     public Mono<Map> generateTokenWithSecret(String apiKey, String apiSecret) {
-        String body = "client_id=" + apiKey
-                + "&client_secret=" + apiSecret
-                + "&redirect_uri=https://localhost"
-                + "&grant_type=client_credentials";
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("client_id", apiKey);
+        form.add("client_secret", apiSecret);
+        form.add("redirect_uri", "https://localhost");
+        form.add("grant_type", "client_credentials");
         log.info("UPSTOX_SECRET_LOGIN apiKey={}...", apiKey.substring(0, Math.min(8, apiKey.length())));
         return client.post()
                 .uri("/v2/login/authorization/token")
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .bodyValue(body)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(BodyInserters.fromFormData(form))
                 .retrieve()
                 .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
                         .flatMap(e -> Mono.error(new RuntimeException("Upstox secret login " + r.statusCode() + ": " + e))))
@@ -45,16 +50,18 @@ public class UpstoxApiClient {
      * Exchange auth_code for access_token via OAuth.
      */
     public Mono<Map> generateToken(String apiKey, String apiSecret, String authCode, String redirectUri) {
-        String body = "code=" + authCode
-                + "&client_id=" + apiKey
-                + "&client_secret=" + apiSecret
-                + "&redirect_uri=" + (redirectUri != null ? redirectUri : "https://localhost")
-                + "&grant_type=authorization_code";
-        log.info("UPSTOX_TOKEN_REQ apiKey={}...", apiKey.substring(0, Math.min(8, apiKey.length())));
+        String redirect = redirectUri != null && !redirectUri.isBlank() ? redirectUri : "https://localhost";
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("code", authCode);
+        form.add("client_id", apiKey);
+        form.add("client_secret", apiSecret);
+        form.add("redirect_uri", redirect);
+        form.add("grant_type", "authorization_code");
+        log.info("UPSTOX_TOKEN_REQ apiKey={} redirectLen={}", apiKey.substring(0, Math.min(8, apiKey.length())), redirect.length());
         return client.post()
                 .uri("/v2/login/authorization/token")
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .bodyValue(body)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(BodyInserters.fromFormData(form))
                 .retrieve()
                 .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
                         .flatMap(e -> Mono.error(new RuntimeException("Upstox " + r.statusCode() + ": " + e))))

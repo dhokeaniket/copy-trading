@@ -20,8 +20,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.util.UriUtils;
 import reactor.core.publisher.Mono;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
 
@@ -447,14 +449,57 @@ public class BrokerAccountService {
                 });
     }
 
+    /**
+     * Upstox: use per-account apiKey+apiSecret only when both are set; otherwise platform pair — never mix.
+     * @return two-element array {@code [apiKey, apiSecret]}, or {@code null} if neither pair is complete
+     */
+    private String[] resolveUpstoxApiPair(BrokerAccount a) {
+        var platformCreds = platformConfig.getUpstox();
+        String accKey = a.getApiKey() != null ? a.getApiKey().trim() : "";
+        String accSecret = credentials.apiSecret(a);
+        if (accSecret != null) accSecret = accSecret.trim();
+        if (!accKey.isBlank() && accSecret != null && !accSecret.isBlank()) {
+            return new String[] { accKey, accSecret };
+        }
+        if (platformCreds != null
+                && platformCreds.getApiKey() != null && !platformCreds.getApiKey().isBlank()
+                && platformCreds.getApiSecret() != null && !platformCreds.getApiSecret().isBlank()) {
+            return new String[] { platformCreds.getApiKey().trim(), platformCreds.getApiSecret().trim() };
+        }
+        return null;
+    }
+
+    /**
+     * Fyers: same pairing rule as Upstox — auth code must be issued for the same app_id as appIdHash uses.
+     */
+    private String[] resolveFyersApiPair(BrokerAccount a) {
+        var platformCreds = platformConfig.getFyers();
+        String accKey = a.getApiKey() != null ? a.getApiKey().trim() : "";
+        String accSecret = credentials.apiSecret(a);
+        if (accSecret != null) accSecret = accSecret.trim();
+        if (!accKey.isBlank() && accSecret != null && !accSecret.isBlank()) {
+            return new String[] { accKey, accSecret };
+        }
+        if (platformCreds != null
+                && platformCreds.getApiKey() != null && !platformCreds.getApiKey().isBlank()
+                && platformCreds.getApiSecret() != null && !platformCreds.getApiSecret().isBlank()) {
+            return new String[] { platformCreds.getApiKey().trim(), platformCreds.getApiSecret().trim() };
+        }
+        return null;
+    }
+
     // --- FYERS LOGIN ---
     private Mono<Map<String, Object>> loginFyers(BrokerAccount a, BrokerLoginRequest req) {
-        var creds = platformConfig.getFyers();
+        String[] fy = resolveFyersApiPair(a);
+        if (fy == null) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Fyers API key and secret required: set brokers.fyers on the server, or save both apiKey and apiSecret on this broker account."));
+        }
         if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "authCode required. Complete Fyers OAuth flow with app_id=" + creds.getApiKey()));
+                    "authCode required. Complete Fyers OAuth flow with app_id=" + fy[0]));
         }
-        return fyersClient.generateToken(creds.getApiKey(), creds.getApiSecret(), req.getAuthCode())
+        return fyersClient.generateToken(fy[0], fy[1], req.getAuthCode())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Fyers",
                         r -> {
                             if (r.get("data") instanceof Map<?, ?> d) {
@@ -473,15 +518,20 @@ public class BrokerAccountService {
 
     // --- UPSTOX LOGIN ---
     private Mono<Map<String, Object>> loginUpstox(BrokerAccount a, BrokerLoginRequest req) {
-        // Per-user Upstox: support user's own api_key/api_secret, fallback to platform
-        String apiKey = a.getApiKey();
-        String apiSecret = credentials.apiSecret(a);
-        var platformCreds = platformConfig.getUpstox();
-        if (apiKey == null || apiKey.isBlank()) apiKey = platformCreds.getApiKey();
-        if (apiSecret == null || apiSecret.isBlank()) apiSecret = platformCreds.getApiSecret();
+        String[] ux = resolveUpstoxApiPair(a);
+        if (ux == null) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Upstox API key and secret required: set brokers.upstox on the server, or save both apiKey and apiSecret on this broker account."));
+        }
+        final String apiKey = ux[0];
+        final String apiSecret = ux[1];
 
         if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
-            String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + apiKey + "&redirect_uri=" + platformConfig.getCallbackUrl();
+            String redirectBase = oauthRedirectOrDefault(req != null ? req.getRedirectUri() : null);
+            String redirectForUrl = UriUtils.encodeQueryParam(redirectBase, StandardCharsets.UTF_8);
+            String encClient = UriUtils.encodeQueryParam(apiKey, StandardCharsets.UTF_8);
+            String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id="
+                    + encClient + "&redirect_uri=" + redirectForUrl;
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "authCode required. Open this URL to login: " + loginUrl));
         }
@@ -496,7 +546,7 @@ public class BrokerAccountService {
         // Clean old entries (> 2 min)
         usedAuthCodes.entrySet().removeIf(e -> System.currentTimeMillis() - e.getValue() > 120_000);
 
-        return upstoxClient.generateToken(apiKey, apiSecret, req.getAuthCode(), platformConfig.getCallbackUrl())
+        return upstoxClient.generateToken(apiKey, apiSecret, req.getAuthCode(), effectiveOAuthRedirectForLogin(req))
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
                         r -> (String) r.get("access_token")))
                 .onErrorResume(e -> {
@@ -505,7 +555,10 @@ public class BrokerAccountService {
                     String msg = e.getMessage() != null ? e.getMessage() : "unknown";
                     if (msg.contains("401") || msg.contains("Invalid Credentials") || msg.contains("UDAPI100016")) {
                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                                "Upstox auth code expired or already used. Please open the Upstox login page again to get a fresh code."));
+                                "Upstox rejected the token request (401). Usually: auth code expired/reused, "
+                                        + "redirect_uri does not match the Upstox app + oauth-url, or api key/secret mismatch. "
+                                        + "Confirm UPSTOX_API_SECRET on EC2 matches this client_id in the Upstox developer console, "
+                                        + "and that the app redirect URL exactly matches brokers.callbackUrl / login redirectUri."));
                     }
                     return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Upstox API error: " + msg));
                 });
@@ -585,21 +638,43 @@ public class BrokerAccountService {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "totpCode required for Angel One login. Also set clientId (your Angel One client code) and password via account update."));
         }
-        // clientId = Angel One client code, apiSecret = password (stored on account)
+        // clientId = Angel One client code, apiSecret = password (stored encrypted on account)
         String clientCode = a.getClientId();
-        String password = a.getApiSecret();
+        String password = credentials.apiSecret(a);
         if (clientCode == null || clientCode.isBlank() || password == null || password.isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Angel One requires clientId (client code) and apiSecret (password) set on the broker account."));
+                    "Angel One requires clientId (client code) and apiSecret (SmartAPI login PIN / MPIN) set on the broker account."));
         }
         return angelOneClient.login(apiKey, clientCode, password, req.getTotpCode())
-                .flatMap(resp -> extractAndSaveSession(a, resp, "AngelOne",
-                        r -> {
-                            if (r.containsKey("data") && r.get("data") instanceof Map d) {
-                                return (String) d.get("jwtToken");
-                            }
-                            return (String) r.get("jwtToken");
-                        }))
+                .flatMap(resp -> {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> r = (Map<String, Object>) resp;
+                    Object data = r.get("data");
+                    String jwt = null;
+                    if (data instanceof Map<?, ?> d) {
+                        Object t = d.get("jwtToken");
+                        if (t != null) jwt = t.toString();
+                    }
+                    if (jwt == null || jwt.isBlank()) {
+                        Object t2 = r.get("jwtToken");
+                        if (t2 != null) jwt = t2.toString();
+                    }
+                    if (jwt == null || jwt.isBlank()) {
+                        Object msg = r.get("message");
+                        Object ec = r.get("errorcode");
+                        String detail = (msg != null ? msg.toString().trim() : "")
+                                + (ec != null && !ec.toString().isBlank() && !"0".equals(ec.toString())
+                                ? " (code " + ec + ")" : "");
+                        String userMsg = detail.isBlank()
+                                ? "Check client code, SmartAPI PIN in apiSecret (often 4-digit MPIN), TOTP, and platform Angel One API key."
+                                : detail;
+                        log.warn("ANGELONE_LOGIN_REJECTED accountId={} detail={}", a.getId(), userMsg);
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Angel One: " + userMsg));
+                    }
+                    final String jwtToSave = jwt;
+                    return extractAndSaveSession(a, r, "AngelOne", ignored -> jwtToSave);
+                })
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("ANGELONE_LOGIN_FAILED error={}", e.getMessage(), e);
@@ -649,7 +724,7 @@ public class BrokerAccountService {
 
     // 3.7b Get OAuth URL + full loginOptions for browser-based login (all brokers)
     public Mono<Map<String, Object>> getOAuthUrl(UUID accountId, UUID userId, String redirectUri) {
-        String redirect = (redirectUri != null && !redirectUri.isBlank()) ? redirectUri : platformConfig.getCallbackUrl();
+        String redirect = oauthRedirectOrDefault(redirectUri);
         return repo.findById(accountId)
                 .filter(a -> a.getUserId().equals(userId))
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
@@ -1823,10 +1898,29 @@ public class BrokerAccountService {
         return "default";
     }
 
+    /**
+     * OAuth token exchange must use the same redirect_uri as the authorize step
+     * ({@code GET .../oauth-url?redirectUri=...}). Frontend should pass it back on {@code POST .../login}.
+     */
+    private String effectiveOAuthRedirectForLogin(BrokerLoginRequest req) {
+        return oauthRedirectOrDefault(req != null ? req.getRedirectUri() : null);
+    }
+
+    /**
+     * OAuth authorize and token steps need a concrete redirect_uri. If the request and
+     * {@code brokers.callbackUrl} are both unset, use localhost so URL encoding never NPEs (that
+     * surfaced as HTTP 500 when opening Fyers/Upstox login from the API).
+     */
+    private String oauthRedirectOrDefault(String redirectUri) {
+        if (redirectUri != null && !redirectUri.isBlank()) {
+            return redirectUri.trim();
+        }
+        String fallback = platformConfig.getCallbackUrl();
+        return fallback != null && !fallback.isBlank() ? fallback.trim() : "https://localhost";
+    }
+
     private void enrichOAuthUrls(BrokerAccount a, Map<String, Object> config, String redirectUri) {
-        String redirect = (redirectUri != null && !redirectUri.isBlank())
-                ? redirectUri
-                : platformConfig.getCallbackUrl();
+        String redirect = oauthRedirectOrDefault(redirectUri);
         switch (a.getBrokerId()) {
             case "ZERODHA" -> {
                 // Per-user Zerodha: use account's api_key, fallback to platform
@@ -1844,27 +1938,31 @@ public class BrokerAccountService {
                 }
             }
             case "FYERS" -> {
-                var creds = platformConfig.getFyers();
-                if (creds != null && creds.getApiKey() != null) {
+                String[] fy = resolveFyersApiPair(a);
+                if (fy != null && fy[0] != null && !fy[0].isBlank()) {
+                    String encRedirect = UriUtils.encodeQueryParam(redirect, StandardCharsets.UTF_8);
+                    String encClient = UriUtils.encodeQueryParam(fy[0], StandardCharsets.UTF_8);
                     config.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id="
-                            + creds.getApiKey() + "&redirect_uri=" + redirect + "&response_type=code&state=ok");
+                            + encClient + "&redirect_uri=" + encRedirect + "&response_type=code&state=ok");
                 }
-                config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
+                config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback (and optional redirectUri matching this flow).");
             }
             case "UPSTOX" -> {
-                var creds = platformConfig.getUpstox();
-                if (creds != null && creds.getApiKey() != null) {
+                String[] ux = resolveUpstoxApiPair(a);
+                if (ux != null && ux[0] != null && !ux[0].isBlank()) {
+                    String encRedirect = UriUtils.encodeQueryParam(redirect, StandardCharsets.UTF_8);
+                    String encClient = UriUtils.encodeQueryParam(ux[0], StandardCharsets.UTF_8);
                     config.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id="
-                            + creds.getApiKey() + "&redirect_uri=" + redirect);
+                            + encClient + "&redirect_uri=" + encRedirect);
                 }
-                config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
+                config.put("message", "Open oauthUrl in browser, then POST login with { authCode, redirectUri } — redirectUri must match the oauth-url redirect exactly.");
             }
             case "DHAN" ->
                     config.put("message", "Option 1: PUT token. Option 2: POST login {} for loginUrl, then login with authCode (tokenId).");
             case "GROWW" ->
                     config.put("message", "Choose access token or API key + TOTP from loginOptions.");
             case "ANGELONE" ->
-                    config.put("message", "Set clientId and apiSecret (password) on account, then POST login with totpCode.");
+                    config.put("message", "Set clientId and apiSecret (SmartAPI login PIN — often 4-digit MPIN) on account, then POST login with totpCode from your authenticator.");
             default -> { }
         }
     }

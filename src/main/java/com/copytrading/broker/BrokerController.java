@@ -156,7 +156,7 @@ public class BrokerController {
         return service.getLoginOptions(accountId, UUID.fromString(userId));
     }
 
-    @Operation(summary = "Login to broker", description = "Create broker session. Body varies by broker: Groww={}, Zerodha={requestToken}, Fyers/Upstox={authCode}, Dhan={authCode:tokenId}, AngelOne={totpCode}")
+    @Operation(summary = "Login to broker", description = "Create broker session. Body varies: Groww={}, Zerodha={requestToken}, Fyers/Upstox={authCode, redirectUri?}, Dhan={authCode:tokenId}, AngelOne={totpCode}. For Upstox/Fyers OAuth, redirectUri must match GET .../oauth-url redirect exactly.")
     @PostMapping(value = "/api/v1/brokers/accounts/{accountId}/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> loginToBroker(@PathVariable UUID accountId,
                                                     @AuthenticationPrincipal String userId,
