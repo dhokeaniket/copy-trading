@@ -1878,7 +1878,13 @@ public class BrokerAccountService {
                     config.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id="
                             + clientId + "&redirect_uri=" + encodedRedirect + "&response_type=code&state=ok");
                 }
-                config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
+                if (a.getApiKey() == null || a.getApiKey().isBlank()) {
+                    config.put("message", "Set your Fyers API key+secret first, then open oauthUrl.");
+                    config.put("needsCredentials", true);
+                    config.put("requiredFields", List.of("apiKey", "apiSecret"));
+                } else {
+                    config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
+                }
             }
             case "UPSTOX" -> {
                 var creds = platformConfig.getUpstox();
@@ -1893,7 +1899,13 @@ public class BrokerAccountService {
                     config.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id="
                             + clientId + "&redirect_uri=" + encodedRedirect + "&state=" + a.getId());
                 }
-                config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
+                if (a.getApiKey() == null || a.getApiKey().isBlank()) {
+                    config.put("message", "Set your Upstox API key+secret first, then open oauthUrl.");
+                    config.put("needsCredentials", true);
+                    config.put("requiredFields", List.of("apiKey", "apiSecret"));
+                } else {
+                    config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
+                }
             }
             case "DHAN" ->
                     config.put("message", "Option 1: PUT token. Option 2: POST login {} for loginUrl, then login with authCode (tokenId).");
