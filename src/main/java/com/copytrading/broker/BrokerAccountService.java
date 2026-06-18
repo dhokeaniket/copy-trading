@@ -1886,7 +1886,7 @@ public class BrokerAccountService {
                         encodedRedirect = redirect;
                     }
                     config.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id="
-                            + clientId + "&redirect_uri=" + encodedRedirect);
+                            + clientId + "&redirect_uri=" + encodedRedirect + "&state=" + a.getId());
                 }
                 config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback.");
             }
