@@ -485,17 +485,8 @@ public class BrokerAccountService {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "authCode required. Open this URL to login: " + loginUrl));
         }
-        // Dedup: reject reused auth codes (Upstox codes are single-use)
-        String codeKey = "UPSTOX:" + req.getAuthCode().substring(0, Math.min(10, req.getAuthCode().length()));
-        Long prev = usedAuthCodes.putIfAbsent(codeKey, System.currentTimeMillis());
-        if (prev != null) {
-            log.warn("UPSTOX_DUPLICATE_AUTH_CODE accountId={} — rejecting reused code", a.getId());
-            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "This auth code was already used. Please get a fresh one by opening the Upstox login page again."));
-        }
-        // Clean old entries (> 2 min)
-        usedAuthCodes.entrySet().removeIf(e -> System.currentTimeMillis() - e.getValue() > 120_000);
-
+        // Upstox auth codes are single-use at the broker API level — no need for backend dedup.
+        // Removed local dedup to allow retries after failed attempts (network errors, etc.).
         return upstoxClient.generateToken(apiKey, apiSecret, req.getAuthCode(), platformConfig.getCallbackUrl())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
                         r -> (String) r.get("access_token")))
@@ -1650,6 +1641,10 @@ public class BrokerAccountService {
             case "FYERS" -> {
                 Map<String, Object> m = brokerShell("FYERS", "Fyers", "oauth", "authCode");
                 m.put("loginOptions", List.of(
+                        loginOption("accessToken",
+                                "Paste access token from Fyers API dashboard",
+                                List.of("accessToken"),
+                                "PUT /api/v1/brokers/accounts/{accountId}/token"),
                         loginOption("oauth",
                                 "Login with Fyers in browser",
                                 List.of(),
@@ -1667,11 +1662,14 @@ public class BrokerAccountService {
             }
             case "ANGELONE" -> {
                 Map<String, Object> m = brokerShell("ANGELONE", "Angel One", "totp", "totpCode");
+                m.put("requiresUserCredentials", true);
+                m.put("credentialFields", List.of("clientId", "apiSecret"));
+                m.put("credentialNote", "First set your Angel One client code (clientId) and password (apiSecret) via Update Account, then login with TOTP code.");
                 m.put("loginOptions", List.of(
                         loginOption("totp",
-                                "Angel One client code + password + TOTP from authenticator",
-                                List.of("clientId", "apiSecret", "totpCode"),
-                                "PUT /api/v1/brokers/accounts/{accountId} then POST .../login { totpCode }")));
+                                "TOTP from authenticator app (requires client code + password set first via Update Account)",
+                                List.of("totpCode"),
+                                "PUT /api/v1/brokers/accounts/{accountId} (set clientId + apiSecret) → POST .../login { totpCode }")));
                 yield m;
             }
             default -> {
