@@ -58,6 +58,9 @@ public class OrderPollingService {
     // Temporarily pause polling during cache reset to prevent race conditions
     private volatile boolean resetInProgress = false;
 
+    // Temporarily pause polling for specific masters during snapshot
+    private final Set<UUID> snapshotInProgressMasters = ConcurrentHashMap.newKeySet();
+
     // Track last reset time
     private volatile Instant lastResetAt = Instant.now();
 
@@ -123,42 +126,6 @@ public class OrderPollingService {
                 .then();
     }
 
-    private Mono<Void> snapshotSingleMasterOrders(UUID masterId) {
-        return brokerRepo.findByUserId(masterId)
-                .filter(a -> a.getAccessToken() != null)
-                .flatMap(account -> brokerService.getOrders(account.getId(), masterId)
-                        .map(resp -> {
-                            List<?> ordersList = extractOrdersList(resp.get("orders"));
-                            if (ordersList != null && !ordersList.isEmpty()) {
-                                Set<String> known = knownOrders.computeIfAbsent(masterId, k -> ConcurrentHashMap.newKeySet());
-                                int marked = 0;
-                                for (Object orderObj : ordersList) {
-                                    if (orderObj instanceof Map<?, ?> order) {
-                                        String orderId = OrderNormalizer.extractOrderId(toStringKeyMap(order));
-                                        if (orderId != null && !orderId.isBlank()) {
-                                            known.add(orderId);
-                                            pollingCache.markOrderKnown(masterId, orderId).subscribe();
-                                            marked++;
-                                        }
-                                    }
-                                }
-                                log.info("POLLING_SNAPSHOT master={} broker={} ordersMarkedKnown={}",
-                                        masterId, account.getBrokerId(), marked);
-                            }
-                            return 0;
-                        })
-                        .onErrorResume(e -> {
-                            log.warn("POLLING_SNAPSHOT_FAIL master={} broker={} err={}",
-                                    masterId, account.getBrokerId(), e.getMessage());
-                            return Mono.just(0);
-                        }))
-                .then();
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> toStringKeyMap(Map<?, ?> raw) {
-        return (Map<String, Object>) raw;
-    }
 
     public Instant getLastResetAt() { return lastResetAt; }
 
@@ -215,11 +182,55 @@ public class OrderPollingService {
                 .subscribe();
     }
 
+    public Mono<Void> snapshotSingleMasterOrders(UUID masterId) {
+        return Mono.defer(() -> {
+            snapshotInProgressMasters.add(masterId);
+            return brokerRepo.findByUserId(masterId)
+                    .filter(a -> a.getAccessToken() != null)
+                    .flatMap(account -> brokerService.getOrders(account.getId(), masterId)
+                            .map(resp -> {
+                                List<?> ordersList = extractOrdersList(resp.get("orders"));
+                                if (ordersList != null && !ordersList.isEmpty()) {
+                                    Set<String> known = knownOrders.computeIfAbsent(masterId, k -> ConcurrentHashMap.newKeySet());
+                                    int marked = 0;
+                                    for (Object orderObj : ordersList) {
+                                        if (orderObj instanceof Map<?, ?> order) {
+                                            String orderId = OrderNormalizer.extractOrderId(toStringKeyMap(order));
+                                            if (orderId != null && !orderId.isBlank()) {
+                                                known.add(orderId);
+                                                pollingCache.markOrderKnown(masterId, orderId).subscribe();
+                                                marked++;
+                                            }
+                                        }
+                                    }
+                                    log.info("POLLING_SNAPSHOT master={} broker={} ordersMarkedKnown={}",
+                                            masterId, account.getBrokerId(), marked);
+                                }
+                                return 0;
+                            })
+                            .onErrorResume(e -> {
+                                log.warn("POLLING_SNAPSHOT_FAIL master={} broker={} err={}",
+                                        masterId, account.getBrokerId(), e.getMessage());
+                                return Mono.just(0);
+                            }))
+                    .then()
+                    .doFinally(signal -> snapshotInProgressMasters.remove(masterId));
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> toStringKeyMap(Map<?, ?> raw) {
+        return (Map<String, Object>) raw;
+    }
+
     private Mono<Void> pollSingleMaster(MasterActiveAccount active) {
         UUID masterId = active.getMasterId();
+        if (snapshotInProgressMasters.contains(masterId)) {
+            return Mono.empty();
+        }
 
-        // Poll every linked broker account that has a token (not only the designated active one)
-        return brokerRepo.findByUserId(masterId)
+        // Poll ONLY the designated active broker account
+        return brokerRepo.findById(active.getBrokerAccountId())
                 .filter(a -> a.getAccessToken() != null)
                 .flatMap(account -> brokerService.getOrders(account.getId(), masterId)
                         .map(resp -> {

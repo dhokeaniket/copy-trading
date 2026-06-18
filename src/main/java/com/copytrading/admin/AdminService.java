@@ -72,18 +72,32 @@ public class AdminService {
         } else {
             flux = users.findAll();
         }
-        return flux.collectList().map(all -> {
+        return flux.collectList().flatMap(all -> {
+            all.sort((u1, u2) -> {
+                Instant t1 = u1.getCreatedAt() != null ? u1.getCreatedAt() : Instant.EPOCH;
+                Instant t2 = u2.getCreatedAt() != null ? u2.getCreatedAt() : Instant.EPOCH;
+                return t2.compareTo(t1);
+            });
             int total = all.size();
             int start = (page - 1) * limit;
             int end = Math.min(start + limit, total);
             List<UserDto> pageData = start < total
                     ? all.subList(start, end).stream().map(UserDto::from).toList()
                     : List.of();
-            Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("users", pageData);
-            resp.put("total", total);
-            resp.put("page", page);
-            return resp;
+            return reactor.core.publisher.Flux.fromIterable(pageData)
+                    .concatMap(dto -> brokerAccountRepo.findByUserId(dto.getUserId()).collectList()
+                            .map(brokers -> {
+                                dto.setBrokerAccounts(new java.util.ArrayList<>(brokers));
+                                return dto;
+                            }))
+                    .collectList()
+                    .map(enrichedPageData -> {
+                        Map<String, Object> resp = new LinkedHashMap<>();
+                        resp.put("users", enrichedPageData);
+                        resp.put("total", total);
+                        resp.put("page", page);
+                        return resp;
+                    });
         });
     }
 
@@ -141,6 +155,20 @@ public class AdminService {
                     u.setUpdatedAt(Instant.now());
                     return users.save(u).map(UserDto::from);
                 });
+    }
+
+    public Mono<Map<String, Object>> updateUserStatus(UUID userId, String status) {
+        if (status == null || (!status.equals("ACTIVE") && !status.equals("INACTIVE"))) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid status. Must be ACTIVE or INACTIVE"));
+        }
+        return users.findById(userId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
+                .flatMap(u -> {
+                    u.setStatus(status);
+                    u.setUpdatedAt(Instant.now());
+                    return users.save(u);
+                })
+                .map(u -> Map.of("message", "User status updated", "userId", u.getId(), "status", u.getStatus()));
     }
 
     // 2.6 Activate user
@@ -206,10 +234,9 @@ public class AdminService {
                 subscriptionRepo.findAll().collectList(),
                 tradeLogRepo.findAll().collectList()
         ).map(tuple -> {
-            Map<String, Object> totalUsers = new LinkedHashMap<>();
-            totalUsers.put("admin", tuple.getT1());
-            totalUsers.put("master", tuple.getT2());
-            totalUsers.put("child", tuple.getT3());
+            long admins = tuple.getT1();
+            long masters = tuple.getT2();
+            long children = tuple.getT3();
 
             var subs = tuple.getT4();
             var logs = tuple.getT5();
@@ -218,11 +245,17 @@ public class AdminService {
             long totalReplications = logs.stream().filter(l -> "REPLICATED".equals(l.getType())).count();
 
             Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("totalUsers", totalUsers);
+            resp.put("totalUsers", admins + masters + children);
+            resp.put("totalAdmins", admins);
+            resp.put("totalMasters", masters);
+            resp.put("activeMasters", masters);
+            resp.put("totalChildren", children);
             resp.put("totalTrades", totalTrades);
             resp.put("totalReplications", totalReplications);
+            resp.put("volumeToday", 0);
             resp.put("tradeVolume", 0);
             resp.put("activeSubscriptions", activeSubs);
+            resp.put("revenueMtd", 0);
             return resp;
         });
     }

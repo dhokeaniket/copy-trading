@@ -75,7 +75,8 @@ public class MasterService {
         Mono<List<CopyLog>> logsMono = copyLogs.findByMasterId(masterId).collectList();
         Mono<Map<String, Object>> posMono = positionsService.getMasterPositions(masterId)
                 .onErrorReturn(Map.of("totalPnl", 0));
-        Mono<Map<String, Object>> marginMono = activeAccountRepo.findById(masterId)
+        Mono<Map<String, Object>> marginMono = activeAccountRepo.findByMasterId(masterId)
+                .next()
                 .flatMap(aa -> brokerService.getMargin(aa.getBrokerAccountId(), masterId))
                 .onErrorReturn(Map.of())
                 .defaultIfEmpty(Map.of());
@@ -91,10 +92,11 @@ public class MasterService {
     public Mono<Map<String, Object>> setActiveAccount(UUID masterId, UUID brokerAccountId) {
         return db.sql("INSERT INTO master_active_accounts (master_id, broker_account_id, activated_at) " +
                        "VALUES (:mid, :bid, now()) " +
-                       "ON CONFLICT (master_id) DO UPDATE SET broker_account_id = :bid, activated_at = now()")
+                       "ON CONFLICT (broker_account_id) DO NOTHING")
                 .bind("mid", masterId)
                 .bind("bid", brokerAccountId)
                 .then()
+                .then(orderPollingService.snapshotSingleMasterOrders(masterId))
                 .thenReturn(Map.<String, Object>of(
                         "brokerAccountId", brokerAccountId.toString(),
                         "message", "Active account set"))
@@ -105,9 +107,43 @@ public class MasterService {
                 });
     }
 
+    public Mono<Map<String, Object>> setActiveAccounts(UUID masterId, java.util.List<UUID> brokerAccountIds) {
+        return clearActiveAccount(masterId)
+                .then(reactor.core.publisher.Flux.fromIterable(brokerAccountIds)
+                        .flatMap(bid -> db.sql("INSERT INTO master_active_accounts (master_id, broker_account_id, activated_at) " +
+                                "VALUES (:mid, :bid, now()) " +
+                                "ON CONFLICT (broker_account_id) DO NOTHING")
+                                .bind("mid", masterId)
+                                .bind("bid", bid)
+                                .then())
+                        .then())
+                .then(orderPollingService.snapshotSingleMasterOrders(masterId))
+                .thenReturn(Map.<String, Object>of(
+                        "message", "Active accounts synced successfully"))
+                .onErrorResume(e -> {
+                    Map<String, Object> fallback = new LinkedHashMap<>();
+                    fallback.put("error", "Could not sync active accounts: " + e.getMessage());
+                    return Mono.just(fallback);
+                });
+    }
+
     public Mono<Map<String, Object>> getActiveAccount(UUID masterId) {
-        return activeAccountRepo.findById(masterId)
-                .flatMap(a -> enrichActiveAccount(masterId, a.getBrokerAccountId()))
+        return activeAccountRepo.findByMasterId(masterId).collectList()
+                .flatMap(activeList -> {
+                    if (activeList.isEmpty()) {
+                        return Mono.empty();
+                    }
+                    // Fetch all profiles
+                    return reactor.core.publisher.Flux.fromIterable(activeList)
+                            .flatMap(a -> enrichActiveAccount(masterId, a.getBrokerAccountId()))
+                            .collectList()
+                            .map(enrichedList -> {
+                                if (enrichedList.isEmpty()) return new LinkedHashMap<String, Object>();
+                                Map<String, Object> primary = new LinkedHashMap<>(enrichedList.get(0));
+                                primary.put("activeAccounts", enrichedList);
+                                return primary;
+                            });
+                })
                 .switchIfEmpty(Mono.fromCallable(() -> {
                     Map<String, Object> r = new LinkedHashMap<>();
                     r.put("brokerAccountId", "");
@@ -153,7 +189,7 @@ public class MasterService {
     }
 
     public Mono<Map<String, String>> clearActiveAccount(UUID masterId) {
-        return activeAccountRepo.deleteById(masterId)
+        return activeAccountRepo.deleteByMasterId(masterId)
                 .thenReturn(Map.of("message", "Active account cleared"))
                 .onErrorResume(e -> Mono.just(Map.of("message", "Active account cleared")));
     }

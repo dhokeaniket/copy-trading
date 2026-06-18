@@ -423,9 +423,19 @@ public class BrokerAccountService {
         // Per-user Zerodha: each user has their own api_key + api_secret from their Kite Connect app
         String apiKey = a.getApiKey();
         String apiSecret = credentials.apiSecret(a); // decrypt stored secret
-        // Fallback to platform-level if user hasn't set their own
-        if (apiKey == null || apiKey.isBlank()) apiKey = platformConfig.getZerodha().getApiKey();
-        if (apiSecret == null || apiSecret.isBlank()) apiSecret = platformConfig.getZerodha().getApiSecret();
+        var platformCreds = platformConfig.getZerodha();
+        
+        boolean usingPlatformKey = false;
+        if (apiKey == null || apiKey.isBlank()) {
+            apiKey = platformCreds != null ? platformCreds.getApiKey() : null;
+            usingPlatformKey = true;
+        }
+        
+        if (usingPlatformKey) {
+            apiSecret = platformCreds != null ? platformCreds.getApiSecret() : null;
+        } else if (apiSecret == null || apiSecret.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "API Secret is missing. Please configure both API Key and API Secret in your Broker settings."));
+        }
         
         if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -638,7 +648,7 @@ public class BrokerAccountService {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "totpCode required for Angel One login. Also set clientId (your Angel One client code) and password via account update."));
         }
-        // clientId = Angel One client code, apiSecret = password (stored encrypted on account)
+        // clientId = Angel One client code; apiSecret = SmartAPI PIN (stored encrypted — decrypt for login)
         String clientCode = a.getClientId();
         String password = credentials.apiSecret(a);
         if (clientCode == null || clientCode.isBlank() || password == null || password.isBlank()) {
@@ -1280,14 +1290,14 @@ public class BrokerAccountService {
         if (data instanceof Map d) {
             Object equity = d.get("equity");
             if (equity instanceof Map eq) {
-                Object avail = eq.get("available");
                 Object util = eq.get("utilised");
-                double cash = avail instanceof Map a ? toDouble(((Map) a).getOrDefault("cash", 0)) : 0;
-                double debits = util instanceof Map u ? toDouble(((Map) u).getOrDefault("debits", 0)) : 0;
-                r.put("availableMargin", cash - debits);
+                double net = toDouble(eq.getOrDefault("net", 0));
+                double debits = util instanceof Map u ? toDouble(u.getOrDefault("debits", 0)) : 0;
+                r.put("availableMargin", net);
                 r.put("usedMargin", debits);
-                r.put("totalFunds", cash);
-                r.put("collateral", avail instanceof Map a2 ? toDouble(((Map) a2).getOrDefault("collateral", 0)) : 0);
+                r.put("totalFunds", net + debits);
+                Object avail = eq.get("available");
+                r.put("collateral", avail instanceof Map a2 ? toDouble(a2.getOrDefault("collateral", 0)) : 0);
                 return r;
             }
         }
@@ -1725,6 +1735,10 @@ public class BrokerAccountService {
             case "FYERS" -> {
                 Map<String, Object> m = brokerShell("FYERS", "Fyers", "oauth", "authCode");
                 m.put("loginOptions", List.of(
+                        loginOption("accessToken",
+                                "Paste access token from Fyers API dashboard",
+                                List.of("accessToken"),
+                                "PUT /api/v1/brokers/accounts/{accountId}/token"),
                         loginOption("oauth",
                                 "Login with Fyers in browser",
                                 List.of(),
@@ -1742,11 +1756,14 @@ public class BrokerAccountService {
             }
             case "ANGELONE" -> {
                 Map<String, Object> m = brokerShell("ANGELONE", "Angel One", "totp", "totpCode");
+                m.put("requiresUserCredentials", true);
+                m.put("credentialFields", List.of("clientId", "apiSecret"));
+                m.put("credentialNote", "First set your Angel One client code (clientId) and password (apiSecret) via Update Account, then login with TOTP code.");
                 m.put("loginOptions", List.of(
                         loginOption("totp",
-                                "Angel One client code + password + TOTP from authenticator",
-                                List.of("clientId", "apiSecret", "totpCode"),
-                                "PUT /api/v1/brokers/accounts/{accountId} then POST .../login { totpCode }")));
+                                "TOTP from authenticator app (requires client code + password set first via Update Account)",
+                                List.of("totpCode"),
+                                "PUT /api/v1/brokers/accounts/{accountId} (set clientId + apiSecret) → POST .../login { totpCode }")));
                 yield m;
             }
             default -> {
@@ -2033,5 +2050,17 @@ public class BrokerAccountService {
             return name + " is not responding. Please try again.";
         }
         return name + " error. Please re-login and try again.";
+    }
+
+    public Mono<Map<String, Object>> disconnectAccount(UUID accountId, UUID userId) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new IllegalArgumentException("Account not found")))
+                .flatMap(account -> {
+                    account.setAccessToken(null);
+                    account.setSessionActive(false);
+                    return repo.save(account);
+                })
+                .map(saved -> Map.of("message", "Account disconnected successfully"));
     }
 }

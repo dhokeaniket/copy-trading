@@ -62,6 +62,15 @@ public class PositionDto {
     public String getProduct() { return product; }
     public void setProduct(String product) { this.product = product; }
 
+    // Aliases for Frontend Compatibility
+    public double getUnrealizedPnl() { return this.pnl; }
+    public double getChange() {
+        if (this.avgPrice == 0) return 0;
+        return ((this.ltp - this.avgPrice) / this.avgPrice) * 100;
+    }
+    public String getInstrument() { return this.symbol; }
+    public String getType() { return this.side; }
+
     /** Recalculate PnL based on current avgPrice, ltp, qty */
     public void recalculatePnl() {
         this.pnl = (this.ltp - this.avgPrice) * this.qty;

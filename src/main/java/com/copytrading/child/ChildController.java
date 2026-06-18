@@ -150,8 +150,9 @@ public class ChildController {
     }
 
     @GetMapping("/open-book")
-    public Mono<Map<String, Object>> openBook(@AuthenticationPrincipal String userId) {
-        return tradingDataService.getOpenBook(UUID.fromString(userId), false);
+    public Mono<Map<String, Object>> openBook(@AuthenticationPrincipal String userId,
+                                              @RequestParam(required = false) UUID accountId) {
+        return tradingDataService.getOpenBook(UUID.fromString(userId), accountId, false);
     }
 
     @GetMapping("/open-options")

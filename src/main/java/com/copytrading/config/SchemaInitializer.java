@@ -48,8 +48,8 @@ public class SchemaInitializer {
                 """,
                 """
                 CREATE TABLE IF NOT EXISTS master_active_accounts (
-                  master_id        UUID PRIMARY KEY,
-                  broker_account_id UUID NOT NULL,
+                  master_id        UUID NOT NULL,
+                  broker_account_id UUID PRIMARY KEY,
                   activated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """,
@@ -138,7 +138,10 @@ public class SchemaInitializer {
                 "ALTER TABLE trades ADD COLUMN IF NOT EXISTS exchange_order_id VARCHAR(100)",
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS exchange_order_id VARCHAR(100)",
                 // TOTP secret per broker account (encrypted, for auto-TOTP generation)
-                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS totp_secret TEXT"
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS totp_secret TEXT",
+                // Multiple active broker accounts for Master (migrate PK to broker_account_id)
+                "ALTER TABLE master_active_accounts DROP CONSTRAINT IF EXISTS master_active_accounts_pkey CASCADE",
+                "ALTER TABLE master_active_accounts ADD PRIMARY KEY (broker_account_id)"
             };
 
             for (String sql : statements) {

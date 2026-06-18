@@ -250,7 +250,8 @@ public class CopyEngineService {
         if (req.getMasterBrokerId() != null && !req.getMasterBrokerId().isBlank()) {
             return Mono.just(req);
         }
-        return activeAccountRepo.findById(masterId)
+        return activeAccountRepo.findByMasterId(masterId)
+                .next()
                 .flatMap(active -> brokerRepo.findById(active.getBrokerAccountId()))
                 .doOnNext(acc -> {
                     req.setMasterBrokerId(acc.getBrokerId());

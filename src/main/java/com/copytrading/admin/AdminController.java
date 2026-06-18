@@ -60,6 +60,13 @@ public class AdminController {
         return adminService.getUserById(userId);
     }
 
+    // 2.5 PUT /admin/users/:userId/status
+    @PutMapping("/users/{userId}/status")
+    public Mono<Map<String, Object>> updateUserStatus(@PathVariable UUID userId, @RequestBody Map<String, String> body) {
+        String status = body.get("status");
+        return adminService.updateUserStatus(userId, status);
+    }
+
     // 2.5 PUT /admin/users/:userId
     @PutMapping(value = "/users/{userId}", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<UserDto> updateUser(@PathVariable UUID userId,

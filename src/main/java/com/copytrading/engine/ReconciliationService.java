@@ -3,6 +3,7 @@ package com.copytrading.engine;
 import com.copytrading.broker.BrokerAccount;
 import com.copytrading.broker.BrokerAccountRepository;
 import com.copytrading.broker.BrokerAccountService;
+import com.copytrading.logs.CopyLogRepository;
 import com.copytrading.trade.TradeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +32,7 @@ public class ReconciliationService {
     private final BrokerAccountRepository brokerRepo;
     private final BrokerAccountService brokerService;
     private final TradeRepository tradeRepo;
+    private final CopyLogRepository copyLogRepo;
     private final CanonicalOrderMapper canonicalMapper;
 
     private volatile boolean running = false;
@@ -38,10 +40,12 @@ public class ReconciliationService {
     public ReconciliationService(BrokerAccountRepository brokerRepo,
                                  BrokerAccountService brokerService,
                                  TradeRepository tradeRepo,
+                                 CopyLogRepository copyLogRepo,
                                  CanonicalOrderMapper canonicalMapper) {
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
         this.tradeRepo = tradeRepo;
+        this.copyLogRepo = copyLogRepo;
         this.canonicalMapper = canonicalMapper;
     }
 
@@ -87,10 +91,13 @@ public class ReconciliationService {
         }
         String desired = toTradeStatus(canonStatus);
         return tradeRepo.findByUserIdAndBrokerOrderId(account.getUserId(), orderId)
-                .filter(t -> !desired.equalsIgnoreCase(t.getStatus()))
+                .filter(t -> !desired.equalsIgnoreCase(t.getStatus()) || (canonical.getPrice() > 0 && t.getPrice() != canonical.getPrice()))
                 .flatMap(t -> {
                     String prev = t.getStatus();
                     t.setStatus(desired);
+                    if (canonical.getPrice() > 0 && t.getPrice() != canonical.getPrice()) {
+                        t.setPrice(canonical.getPrice());
+                    }
                     if ("EXECUTED".equals(desired) && t.getExecutedAt() == null) {
                         t.setExecutedAt(Instant.now());
                     }
@@ -99,7 +106,16 @@ public class ReconciliationService {
                     }
                     return tradeRepo.save(t).doOnSuccess(s -> log.info(
                             "RECONCILE_TRADE_SYNCED account={} broker={} orderId={} {} -> {}",
-                            account.getId(), account.getBrokerId(), orderId, prev, desired));
+                            account.getId(), account.getBrokerId(), orderId, prev, desired))
+                        .then(copyLogRepo.findByChildBrokerOrderId(orderId)
+                                .flatMap(cl -> {
+                                    if (canonical.getPrice() > 0 && (cl.getPrice() == null || cl.getPrice() != canonical.getPrice())) {
+                                        cl.setPrice(canonical.getPrice());
+                                        return copyLogRepo.save(cl);
+                                    }
+                                    return Mono.just(cl);
+                                })
+                        );
                 })
                 .map(t -> 1L)
                 .defaultIfEmpty(0L);

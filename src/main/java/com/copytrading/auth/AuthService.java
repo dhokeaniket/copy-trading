@@ -83,8 +83,15 @@ public class AuthService {
     // ── 1.2 Login: password → OTP (email or phone) when 2FA enabled ──
     public Mono<LoginResponse> login(LoginRequest req) {
         return users.findByEmail(req.getEmail().toLowerCase().trim())
-                .filter(UserAccount::isActive)
-                .filter(u -> encoder.matches(req.getPassword(), u.getPasswordHash()))
+                .flatMap(u -> {
+                    if (!u.isActive()) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "Unable to Login. Your account has been Deactivated."));
+                    }
+                    if (!encoder.matches(req.getPassword(), u.getPasswordHash())) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials"));
+                    }
+                    return Mono.just(u);
+                })
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials")))
                 .flatMap(u -> {
                     if (!u.isTwoFactorEnabled()) {
@@ -158,7 +165,12 @@ public class AuthService {
     // ── 1.2b Login by phone (after SMS OTP verification) ──
     public Mono<Map<String, Object>> loginByPhone(String phone) {
         return users.findByPhone(phone)
-                .filter(UserAccount::isActive)
+                .flatMap(u -> {
+                    if (!u.isActive()) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "Unable to Login. Your account has been Deactivated."));
+                    }
+                    return Mono.just(u);
+                })
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials. Please check your phone number or register.")))
                 .flatMap(u -> issueTokens(u).map(tokens -> {
                     Map<String, Object> r = new java.util.LinkedHashMap<>();

@@ -81,7 +81,7 @@ public final class OrderNormalizer {
     }
 
     public static double extractPrice(Map<String, Object> order) {
-        String priceStr = extractField(order, "price", "average_fill_price", "averagePrice", "average_price");
+        String priceStr = extractField(order, "average_fill_price", "averagePrice", "average_price", "price");
         if (priceStr == null) return 0;
         try {
             return Double.parseDouble(priceStr);

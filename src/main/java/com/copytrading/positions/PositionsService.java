@@ -71,7 +71,8 @@ public class PositionsService {
      * Falls back to trades table if broker session unavailable.
      */
     public Mono<Map<String, Object>> getMasterPositions(UUID masterId) {
-        return activeAccountRepo.findById(masterId)
+        return activeAccountRepo.findByMasterId(masterId)
+                .next()
                 .flatMap(active -> brokerRepo.findById(active.getBrokerAccountId()))
                 .filter(a -> a.getAccessToken() != null)
                 .switchIfEmpty(
@@ -193,6 +194,13 @@ public class PositionsService {
     private List<Map<String, Object>> extractPositionsList(String broker, Map raw) {
         switch (broker) {
             case "GROWW": {
+                Object data = raw.get("data");
+                if (data instanceof List) {
+                    return (List<Map<String, Object>>) data;
+                } else if (data instanceof Map m && m.containsKey("positions")) {
+                    Object p = m.get("positions");
+                    if (p instanceof List) return (List<Map<String, Object>>) p;
+                }
                 Object payload = raw.get("payload");
                 if (payload instanceof List) return (List<Map<String, Object>>) payload;
                 return List.of();

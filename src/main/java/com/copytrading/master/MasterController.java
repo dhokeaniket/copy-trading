@@ -48,13 +48,25 @@ public class MasterController {
     @PostMapping(value = "/children/bulk-link", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> bulkLinkChildren(@AuthenticationPrincipal String userId,
                                                        @RequestBody BulkLinkRequest req) {
-        var children = req.getChildren().stream().map(c -> {
-            Map<String, Object> m = new java.util.LinkedHashMap<>();
-            m.put("childId", c.getChildId().toString());
-            if (c.getScalingFactor() != null) m.put("scalingFactor", c.getScalingFactor());
-            return m;
-        }).toList();
-        return service.bulkLinkChildren(UUID.fromString(userId), children);
+        if (req == null || req.getChildren() == null) {
+            return Mono.just(Map.of("error", "children list is required"));
+        }
+        try {
+            var children = req.getChildren().stream().map(c -> {
+                Map<String, Object> m = new java.util.LinkedHashMap<>();
+                if (c.getChildId() == null) {
+                    throw new IllegalArgumentException("childId cannot be null");
+                }
+                m.put("childId", c.getChildId().toString());
+                if (c.getScalingFactor() != null) m.put("scalingFactor", c.getScalingFactor());
+                return m;
+            }).toList();
+            return service.bulkLinkChildren(UUID.fromString(userId), children);
+        } catch (IllegalArgumentException e) {
+            return Mono.just(Map.of("error", e.getMessage() != null ? e.getMessage() : "Invalid input format"));
+        } catch (Exception e) {
+            return Mono.just(Map.of("error", "Internal server error during bulk link: " + e.getMessage()));
+        }
     }
 
     @PostMapping(value = "/subscribe/{childId}", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -173,7 +185,31 @@ public class MasterController {
     @PostMapping(value = "/active-account", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> setActiveAccount(@AuthenticationPrincipal String userId,
                                                        @RequestBody com.copytrading.master.dto.ActiveAccountRequest body) {
-        return service.setActiveAccount(UUID.fromString(userId), UUID.fromString(body.getBrokerAccountId()));
+        if (body == null || body.getBrokerAccountId() == null || body.getBrokerAccountId().isBlank()) {
+            return Mono.just(Map.of("error", "brokerAccountId is required"));
+        }
+        try {
+            return service.setActiveAccount(UUID.fromString(userId), UUID.fromString(body.getBrokerAccountId()));
+        } catch (IllegalArgumentException e) {
+            return Mono.just(Map.of("error", "Invalid UUID format"));
+        }
+    }
+
+    // Bulk Active accounts
+    @PostMapping(value = "/active-accounts", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> setActiveAccounts(@AuthenticationPrincipal String userId,
+                                                       @RequestBody com.copytrading.master.dto.ActiveAccountsRequest body) {
+        if (body == null || body.getBrokerAccountIds() == null) {
+            return Mono.just(Map.of("error", "brokerAccountIds is required"));
+        }
+        try {
+            java.util.List<UUID> brokerIds = body.getBrokerAccountIds().stream()
+                    .map(UUID::fromString)
+                    .toList();
+            return service.setActiveAccounts(UUID.fromString(userId), brokerIds);
+        } catch (IllegalArgumentException e) {
+            return Mono.just(Map.of("error", "Invalid UUID format in list"));
+        }
     }
 
     @GetMapping("/active-account")
@@ -212,8 +248,9 @@ public class MasterController {
 
     @Operation(summary = "Open order book", description = "Pending/open orders from master's active broker")
     @GetMapping("/open-book")
-    public Mono<Map<String, Object>> openBook(@AuthenticationPrincipal String userId) {
-        return tradingDataService.getOpenBook(UUID.fromString(userId), true);
+    public Mono<Map<String, Object>> openBook(@AuthenticationPrincipal String userId,
+                                              @RequestParam(required = false) UUID accountId) {
+        return tradingDataService.getOpenBook(UUID.fromString(userId), accountId, true);
     }
 
     @Operation(summary = "Open F&O positions", description = "Option/futures positions from master's active broker")
