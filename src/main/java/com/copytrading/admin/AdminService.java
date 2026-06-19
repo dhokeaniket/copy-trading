@@ -334,22 +334,28 @@ public class AdminService {
             List<?> filtered = status != null
                     ? logs.stream().filter(l -> status.equalsIgnoreCase(l.getChildStatus()) || status.equalsIgnoreCase(l.getMasterStatus())).toList()
                     : logs;
-            List<Map<String, Object>> mappedLogs = filtered.stream().map(l -> {
-                Map<String, Object> map = new LinkedHashMap<>();
-                com.copytrading.logs.CopyLog cl = (com.copytrading.logs.CopyLog) l;
-                map.put("id", cl.getId());
-                map.put("masterId", cl.getMasterId());
-                map.put("childId", cl.getChildId());
-                map.put("type", "REPLICATED");
-                map.put("action", cl.getTradeType() != null ? cl.getTradeType() : "BUY");
-                map.put("symbol", cl.getSymbol());
-                map.put("qty", cl.getChildQty() != null ? cl.getChildQty() : cl.getQty());
-                map.put("price", cl.getPrice());
-                map.put("status", cl.getChildStatus() != null ? cl.getChildStatus() : cl.getMasterStatus());
-                map.put("message", cl.getErrorMessage() != null ? cl.getErrorMessage() : cl.getSkipReason());
-                map.put("createdAt", cl.getCreatedAt() != null ? cl.getCreatedAt() : cl.getChildPlacedAt());
-                return map;
-            }).toList();
+            List<Map<String, Object>> mappedLogs = filtered.stream()
+                .map(l -> (com.copytrading.logs.CopyLog) l)
+                .sorted((a, b) -> {
+                    java.time.Instant tA = a.getCreatedAt() != null ? a.getCreatedAt() : java.time.Instant.EPOCH;
+                    java.time.Instant tB = b.getCreatedAt() != null ? b.getCreatedAt() : java.time.Instant.EPOCH;
+                    return tB.compareTo(tA);
+                })
+                .map(cl -> {
+                    Map<String, Object> map = new LinkedHashMap<>();
+                    map.put("id", cl.getId());
+                    map.put("masterId", cl.getMasterId());
+                    map.put("childId", cl.getChildId());
+                    map.put("type", "REPLICATED");
+                    map.put("action", cl.getTradeType() != null ? cl.getTradeType() : "BUY");
+                    map.put("symbol", cl.getSymbol());
+                    map.put("qty", cl.getChildQty() != null ? cl.getChildQty() : cl.getQty());
+                    map.put("price", cl.getPrice());
+                    map.put("status", cl.getChildStatus() != null ? cl.getChildStatus() : cl.getMasterStatus());
+                    map.put("message", cl.getErrorMessage() != null ? cl.getErrorMessage() : cl.getSkipReason());
+                    map.put("createdAt", cl.getCreatedAt() != null ? cl.getCreatedAt() : cl.getChildPlacedAt());
+                    return map;
+                }).toList();
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("logs", mappedLogs);
             return resp;
