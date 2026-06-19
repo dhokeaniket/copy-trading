@@ -269,6 +269,8 @@ public class AdminService {
             long openPositions = 0;
             long buyOrders = 0;
             long sellOrders = 0;
+            long equityTrades = 0;
+            long foTrades = 0;
 
             Map<UUID, Double> childPnlMap = new java.util.HashMap<>();
             java.time.format.DateTimeFormatter dateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd MMM").withZone(java.time.ZoneId.of("Asia/Kolkata"));
@@ -284,6 +286,8 @@ public class AdminService {
                 .collect(java.util.stream.Collectors.groupingBy(l -> l.getSymbol().toUpperCase()));
 
             for (Map.Entry<String, List<com.copytrading.logs.CopyLog>> entry : bySymbol.entrySet()) {
+                String sym = entry.getKey();
+                boolean isFo = sym.contains("FUT") || sym.endsWith("CE") || sym.endsWith("PE") || sym.length() > 10;
                 double lastPriceInLog = 0.0;
                 
                 Map<UUID, Double> childBuyValue = new java.util.HashMap<>();
@@ -304,6 +308,9 @@ public class AdminService {
 
                     if ("BUY".equalsIgnoreCase(l.getTradeType())) buyOrders++;
                     if ("SELL".equalsIgnoreCase(l.getTradeType())) sellOrders++;
+                    
+                    if (isFo) foTrades++;
+                    else equityTrades++;
 
                     UUID cId = l.getChildId();
                     String dayStr = l.getCreatedAt() != null ? dateFormatter.format(l.getCreatedAt()) : null;
@@ -379,6 +386,10 @@ public class AdminService {
                 else if (pnl < 0) losingChildren++;
             }
 
+            long totalAssetTrades = equityTrades + foTrades;
+            double equityPct = totalAssetTrades > 0 ? (double) equityTrades / totalAssetTrades * 100 : 52.0;
+            double foPct = totalAssetTrades > 0 ? (double) foTrades / totalAssetTrades * 100 : 48.0;
+
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("totalUsers", admins + masters + children);
             resp.put("totalAdmins", admins);
@@ -390,6 +401,8 @@ public class AdminService {
             resp.put("openPositions", openPositions);
             resp.put("buyOrders", buyOrders);
             resp.put("sellOrders", sellOrders);
+            resp.put("equityPercentage", Math.round(equityPct));
+            resp.put("foPercentage", Math.round(foPct));
             resp.put("profitableChildren", profitableChildren);
             resp.put("losingChildren", losingChildren);
             resp.put("pausedChildren", pausedChildren);
