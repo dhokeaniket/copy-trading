@@ -20,6 +20,50 @@ public class SchemaInitializer {
 
             String[] statements = {
                 """
+                CREATE TABLE IF NOT EXISTS users (
+                  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                  name          VARCHAR(200) NOT NULL,
+                  email         VARCHAR(255) UNIQUE NOT NULL,
+                  password_hash TEXT NOT NULL,
+                  role          VARCHAR(20) NOT NULL CHECK (role IN ('ADMIN','MASTER','CHILD')),
+                  status        VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+                  phone         VARCHAR(30),
+                  two_factor_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                  two_factor_secret  TEXT,
+                  telegram_chat_id   VARCHAR(100),
+                  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS broker_accounts (
+                  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                  user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                  broker_id       VARCHAR(50) NOT NULL,
+                  client_id       VARCHAR(100) NOT NULL,
+                  api_key         TEXT,
+                  api_secret      TEXT,
+                  access_token    TEXT,
+                  nickname        VARCHAR(100),
+                  status          VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+                  session_active  BOOLEAN NOT NULL DEFAULT FALSE,
+                  session_expires TIMESTAMPTZ,
+                  linked_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                  id                BIGSERIAL PRIMARY KEY,
+                  master_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                  child_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                  broker_account_id UUID NOT NULL REFERENCES broker_accounts(id) ON DELETE CASCADE,
+                  scaling_factor    DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+                  copying_status    VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+                  approved_once     BOOLEAN NOT NULL DEFAULT FALSE,
+                  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS copy_logs (
                   id               BIGSERIAL PRIMARY KEY,
                   master_id        UUID,
@@ -98,6 +142,22 @@ public class SchemaInitializer {
                   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """,
+                """
+                CREATE TABLE IF NOT EXISTS system_settings (
+                  key   VARCHAR(255) PRIMARY KEY,
+                  value TEXT NOT NULL
+                )
+                """,
+                "INSERT INTO system_settings (key, value) VALUES ('kill_switch', 'false') ON CONFLICT DO NOTHING",
+                """
+                CREATE TABLE IF NOT EXISTS admin_audit_logs (
+                  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                  action     VARCHAR(100) NOT NULL,
+                  parameters TEXT,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """,
                 // Add skip_reason column to existing copy_logs tables
                 "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS skip_reason VARCHAR(50)",
                 // Add latency_ms column to copy_logs
@@ -144,13 +204,14 @@ public class SchemaInitializer {
                 "ALTER TABLE master_active_accounts ADD PRIMARY KEY (broker_account_id)"
             };
 
-            for (String sql : statements) {
-                db.sql(sql).then().subscribe(
-                    v -> {},
-                    e -> log.warn("Schema init warning: {}", e.getMessage()),
-                    () -> log.info("Schema check OK: {}", sql.trim().substring(0, Math.min(60, sql.trim().length())))
-                );
-            }
+            reactor.core.publisher.Flux.fromArray(statements)
+                .concatMap(sql -> db.sql(sql).then()
+                    .doOnSuccess(v -> log.info("Schema check OK: {}", sql.trim().substring(0, Math.min(60, sql.trim().length()))))
+                    .doOnError(e -> log.warn("Schema init warning: {}", e.getMessage()))
+                    .onErrorResume(e -> reactor.core.publisher.Mono.empty())
+                )
+                .then()
+                .block();
         };
     }
 }

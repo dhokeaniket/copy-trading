@@ -220,3 +220,27 @@ CREATE TABLE IF NOT EXISTS broker_error_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_broker_errors_user ON broker_error_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_broker_errors_created ON broker_error_logs(created_at);
+
+-- ============================================================
+-- System Settings
+-- ============================================================
+CREATE TABLE IF NOT EXISTS system_settings (
+  key   VARCHAR(255) PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+INSERT INTO system_settings (key, value) VALUES ('kill_switch', 'false') ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- Admin Audit Logs
+-- ============================================================
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  action     VARCHAR(100) NOT NULL,
+  parameters TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_user ON admin_audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_created ON admin_audit_logs(created_at);
