@@ -232,7 +232,8 @@ public class AdminService {
                 users.countByRole("MASTER"),
                 users.countByRole("CHILD"),
                 subscriptionRepo.findAll().collectList(),
-                tradeLogRepo.findAll().collectList()
+                tradeLogRepo.findAll().collectList(),
+                copyLogRepo.findAll().collectList()
         ).map(tuple -> {
             long admins = tuple.getT1();
             long masters = tuple.getT2();
@@ -240,9 +241,27 @@ public class AdminService {
 
             var subs = tuple.getT4();
             var logs = tuple.getT5();
+            var copyLogs = tuple.getT6();
+            
             long activeSubs = subs.stream().filter(s -> "ACTIVE".equals(s.getCopyingStatus())).count();
-            long totalTrades = logs.stream().filter(l -> "EXECUTED".equals(l.getStatus())).count();
+            
+            Instant startOfDay = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata")).atStartOfDay(java.time.ZoneId.of("Asia/Kolkata")).toInstant();
+            
+            long totalTradesToday = logs.stream()
+                    .filter(l -> "EXECUTED".equals(l.getStatus()))
+                    .filter(l -> l.getCreatedAt() != null && !l.getCreatedAt().isBefore(startOfDay))
+                    .count();
+                    
             long totalReplications = logs.stream().filter(l -> "REPLICATED".equals(l.getType())).count();
+
+            long avgLatency = 0;
+            if (!copyLogs.isEmpty()) {
+                avgLatency = (long) copyLogs.stream()
+                        .filter(c -> c.getLatencyMs() != null && c.getLatencyMs() > 0)
+                        .mapToLong(com.copytrading.logs.CopyLog::getLatencyMs)
+                        .average()
+                        .orElse(0.0);
+            }
 
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("totalUsers", admins + masters + children);
@@ -250,9 +269,10 @@ public class AdminService {
             resp.put("totalMasters", masters);
             resp.put("activeMasters", masters);
             resp.put("totalChildren", children);
-            resp.put("totalTrades", totalTrades);
+            resp.put("totalTrades", totalTradesToday);
+            resp.put("latency", avgLatency);
             resp.put("totalReplications", totalReplications);
-            resp.put("volumeToday", 0);
+            resp.put("volumeToday", totalTradesToday);
             resp.put("tradeVolume", 0);
             resp.put("activeSubscriptions", activeSubs);
             resp.put("revenueMtd", 0);
@@ -262,19 +282,29 @@ public class AdminService {
 
     // 2.10 System health
     public Mono<Map<String, Object>> getSystemHealth() {
-        Runtime rt = Runtime.getRuntime();
-        long maxMem = rt.maxMemory();
-        long usedMem = rt.totalMemory() - rt.freeMemory();
-        double memPct = (double) usedMem / maxMem * 100;
+        return copyLogRepo.findAll().collectList().map(copyLogs -> {
+            long avgLatency = 0;
+            if (!copyLogs.isEmpty()) {
+                avgLatency = (long) copyLogs.stream()
+                        .filter(c -> c.getLatencyMs() != null && c.getLatencyMs() > 0)
+                        .mapToLong(com.copytrading.logs.CopyLog::getLatencyMs)
+                        .average()
+                        .orElse(0.0);
+            }
+            Runtime rt = Runtime.getRuntime();
+            long maxMem = rt.maxMemory();
+            long usedMem = rt.totalMemory() - rt.freeMemory();
+            double memPct = (double) usedMem / maxMem * 100;
 
-        Map<String, Object> resp = new LinkedHashMap<>();
-        resp.put("cpuUsage", Math.round(ProcessHandle.current().info().totalCpuDuration()
-                .map(d -> d.toMillis() / 1000.0).orElse(0.0)));
-        resp.put("memoryUsage", Math.round(memPct * 100.0) / 100.0);
-        resp.put("avgTradeLatency", 0);
-        resp.put("brokerStatus", List.of());
-        resp.put("activeWebSocketConnections", 0);
-        return Mono.just(resp);
+            Map<String, Object> resp = new LinkedHashMap<>();
+            resp.put("cpuUsage", Math.round(ProcessHandle.current().info().totalCpuDuration()
+                    .map(d -> d.toMillis() / 1000.0).orElse(0.0)));
+            resp.put("memoryUsage", Math.round(memPct * 100.0) / 100.0);
+            resp.put("avgTradeLatency", avgLatency);
+            resp.put("brokerStatus", List.of());
+            resp.put("activeWebSocketConnections", 0);
+            return resp;
+        });
     }
 
     // 2.11 Get all subscriptions
@@ -294,18 +324,34 @@ public class AdminService {
 
     // 2.12 Get all trade logs
     public Mono<Map<String, Object>> getTradeLogs(UUID userId, String status) {
-        Flux<com.copytrading.logs.TradeLog> flux;
+        Flux<com.copytrading.logs.CopyLog> flux;
         if (userId != null) {
-            flux = tradeLogRepo.findByMasterId(userId);
+            flux = copyLogRepo.findByMasterId(userId);
         } else {
-            flux = tradeLogRepo.findAll();
+            flux = copyLogRepo.findAll();
         }
         return flux.collectList().map(logs -> {
             List<?> filtered = status != null
-                    ? logs.stream().filter(l -> status.equalsIgnoreCase(l.getStatus())).toList()
+                    ? logs.stream().filter(l -> status.equalsIgnoreCase(l.getChildStatus()) || status.equalsIgnoreCase(l.getMasterStatus())).toList()
                     : logs;
+            List<Map<String, Object>> mappedLogs = filtered.stream().map(l -> {
+                Map<String, Object> map = new LinkedHashMap<>();
+                com.copytrading.logs.CopyLog cl = (com.copytrading.logs.CopyLog) l;
+                map.put("id", cl.getId());
+                map.put("masterId", cl.getMasterId());
+                map.put("childId", cl.getChildId());
+                map.put("type", "REPLICATED");
+                map.put("action", cl.getTradeType() != null ? cl.getTradeType() : "BUY");
+                map.put("symbol", cl.getSymbol());
+                map.put("qty", cl.getChildQty() != null ? cl.getChildQty() : cl.getQty());
+                map.put("price", cl.getPrice());
+                map.put("status", cl.getChildStatus() != null ? cl.getChildStatus() : cl.getMasterStatus());
+                map.put("message", cl.getErrorMessage() != null ? cl.getErrorMessage() : cl.getSkipReason());
+                map.put("createdAt", cl.getCreatedAt() != null ? cl.getCreatedAt() : cl.getChildPlacedAt());
+                return map;
+            }).toList();
             Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("logs", filtered);
+            resp.put("logs", mappedLogs);
             return resp;
         });
     }

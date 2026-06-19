@@ -578,18 +578,13 @@ public class BrokerAccountService {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "authCode required. Open this URL to login (afterwards POST .../login with authCode and the same redirectUri used here): " + loginUrl));
         }
-        // Dedup: reject reused auth codes (Upstox codes are single-use)
-        String codeKey = "UPSTOX:" + req.getAuthCode().substring(0, Math.min(10, req.getAuthCode().length()));
-        Long prev = usedAuthCodes.putIfAbsent(codeKey, System.currentTimeMillis());
-        if (prev != null) {
-            log.warn("UPSTOX_DUPLICATE_AUTH_CODE accountId={} — rejecting reused code", a.getId());
-            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "This auth code was already used. Please get a fresh one by opening the Upstox login page again."));
-        }
-        // Clean old entries (> 2 min)
-        usedAuthCodes.entrySet().removeIf(e -> System.currentTimeMillis() - e.getValue() > 120_000);
-
-        return upstoxClient.generateToken(apiKey, apiSecret, req.getAuthCode(), effectiveOAuthRedirectForLogin(req))
+        // Upstox auth codes are single-use at the broker API level — no local dedup (allows retry after network errors).
+        String tokenRedirect = effectiveOAuthRedirectForLogin(req);
+        log.info("UPSTOX_DEBUG apiKey='{}' hasSecret={} redirectUri='{}'",
+                apiKey,
+                (apiSecret != null && !apiSecret.isBlank()),
+                tokenRedirect);
+        return upstoxClient.generateToken(apiKey, apiSecret, req.getAuthCode(), tokenRedirect)
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Upstox",
                         r -> (String) r.get("access_token")))
                 .onErrorResume(e -> {
@@ -2262,8 +2257,9 @@ public class BrokerAccountService {
                 if (ux != null && ux[0] != null && !ux[0].isBlank()) {
                     String encRedirect = UriUtils.encodeQueryParam(redirect, StandardCharsets.UTF_8);
                     String encClient = UriUtils.encodeQueryParam(ux[0], StandardCharsets.UTF_8);
+                    String encState = UriUtils.encodeQueryParam(String.valueOf(a.getId()), StandardCharsets.UTF_8);
                     config.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id="
-                            + encClient + "&redirect_uri=" + encRedirect);
+                            + encClient + "&redirect_uri=" + encRedirect + "&state=" + encState);
                     config.put("message", "Open oauthUrl in browser, then POST login with { authCode, redirectUri } — redirectUri must match the oauth-url redirect exactly.");
                     config.put("effectiveRedirectUri", redirect);
                     config.put("redirectUriHint",
