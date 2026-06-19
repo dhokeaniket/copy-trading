@@ -577,7 +577,12 @@ public class CopyEngineService {
             case "FYERS": {
                 // POST /orders/sync — JSON, Authorization: appId:accessToken
                 // side: 1=BUY, -1=SELL; type: 1=LIMIT, 2=MARKET, 3=SL-M, 4=SL
-                String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + token;
+                String appId = account.getApiKey() != null ? account.getApiKey().trim() : "";
+                if (appId.isBlank()) {
+                    return Mono.error(new RuntimeException(
+                            "Fyers MyAPI apiKey missing on child account — user must PUT apiKey + apiSecret from their Fyers app."));
+                }
+                String fyersAuth = appId + ":" + token;
                 String fyersSym;
                 if (isFnO) {
                     if (sym.contains(":")) {
@@ -741,7 +746,11 @@ public class CopyEngineService {
                 // POST /rest/secure/angelbroking/order/v1/placeOrder — JSON
                 // producttype: INTRADAY, DELIVERY, CARRYFORWARD
                 // symboltoken is REQUIRED (numeric token from scrip master)
-                String apiKey = platformConfig.getAngelone().getApiKey();
+                String apiKey = account.getApiKey() != null ? account.getApiKey().trim() : "";
+                if (apiKey.isBlank()) {
+                    return Mono.error(new RuntimeException(
+                            "Angel One SmartAPI apiKey missing on child account — user must PUT apiKey from their Angel SmartAPI app."));
+                }
                 String angelProd = BrokerFieldTranslator.product(prod, "ANGELONE", isFnO);
                 String angelSym = isFnO ? sym : sym + "-EQ";
                 String angelToken = instruments.getAngelToken(angelSym, isFnO);

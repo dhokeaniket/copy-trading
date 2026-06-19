@@ -13,10 +13,10 @@ import java.util.Map;
  * Angel One SmartAPI v2 REST client.
  *
  * Base URL: https://apiconnect.angelone.in
- * Auth: Bearer jwtToken + api_key header
+ * Auth: Bearer jwtToken + X-PrivateKey header (each user's SmartAPI app API key, stored per broker account)
  *
  * Login: POST /rest/auth/angelbroking/user/v1/loginByPassword
- *   Body: { clientcode, password (SmartAPI PIN, often 4-digit MPIN), totp }
+ *   Body: { clientcode, password = SmartAPI trading PIN (often 4-digit MPIN), totp = 6-digit authenticator TOTP }
  *   Response: { data: { jwtToken, refreshToken, feedToken } }
  *
  * Place Order: POST /rest/secure/angelbroking/order/v1/placeOrder
@@ -41,6 +41,8 @@ public class AngelOneApiClient {
     /**
      * Login via clientcode + password + TOTP.
      * POST /rest/auth/angelbroking/user/v1/loginByPassword
+     *
+     * @param apiKey SmartAPI app key for this user (X-PrivateKey header)
      */
     public Mono<Map> login(String apiKey, String clientCode, String password, String totp) {
         Map<String, String> body = new LinkedHashMap<>();

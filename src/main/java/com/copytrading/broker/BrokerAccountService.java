@@ -95,14 +95,46 @@ public class BrokerAccountService {
         return creds != null ? creds.getApiKey() : null;
     }
 
+    /** Angel SmartAPI key sent as {@code X-PrivateKey} — from the user's own SmartAPI app on this account only. */
+    private String angelOnePrivateKey(BrokerAccount a) {
+        if (a == null || a.getApiKey() == null) return "";
+        return a.getApiKey().trim();
+    }
+
+    private boolean angelOnePrivateKeyMissing(BrokerAccount a) {
+        return angelOnePrivateKey(a).isBlank();
+    }
+
+    /** Fyers MyAPI app id (stored in {@code apiKey}). */
+    private String fyersAppId(BrokerAccount a) {
+        if (a == null || a.getApiKey() == null) return "";
+        return a.getApiKey().trim();
+    }
+
+    private boolean fyersAppIdMissing(BrokerAccount a) {
+        return fyersAppId(a).isBlank();
+    }
+
+    /**
+     * Fyers v3 {@code Authorization} header value: {@code appId:access_token}.
+     * @return {@code null} if app id or session token is missing
+     */
+    private String fyersAuthHeader(BrokerAccount a) {
+        String appId = fyersAppId(a);
+        if (appId.isBlank()) return null;
+        String tok = sessionToken(a);
+        if (tok == null || tok.isBlank()) return null;
+        return appId + ":" + tok;
+    }
+
     // 3.1 List supported brokers
     public Mono<Map<String, Object>> listBrokers() {
         List<Map<String, Object>> brokers = List.of(
             growwBrokerInfo(),
             brokerInfo("ZERODHA", "Zerodha", true, List.of(), "oauth", "requestToken"),
-            brokerInfo("FYERS", "Fyers", true, List.of(), "oauth", "authCode"),
-            brokerInfo("UPSTOX", "Upstox", true, List.of(), "oauth", "authCode"),
-            brokerInfo("ANGELONE", "Angel One", true, List.of(), "totp", "totpCode"),
+            loginConfigForBroker("FYERS"),
+            loginConfigForBroker("UPSTOX"),
+            loginConfigForBroker("ANGELONE"),
             dhanBrokerInfo()
         );
         Map<String, Object> resp = new LinkedHashMap<>();
@@ -138,20 +170,25 @@ public class BrokerAccountService {
         if (req.getProxyUser() != null) a.setProxyUser(req.getProxyUser());
         if (req.getProxyPass() != null) a.setProxyPass(req.getProxyPass());
 
-        // For OAuth brokers, use platform-level keys; for Groww, also fall back to platform keys
-        PlatformBrokerConfig.BrokerCreds platformCreds = platformConfig.getFor(broker);
-        if (platformCreds != null && platformCreds.getApiKey() != null && !platformCreds.getApiKey().isBlank()) {
-            // Use platform keys if user didn't provide their own
-            if (req.getApiKey() == null || req.getApiKey().isBlank()) {
-                a.setApiKey(platformCreds.getApiKey());
-                a.setApiSecret(platformCreds.getApiSecret() != null ? platformCreds.getApiSecret() : "");
-            } else {
-                a.setApiKey(req.getApiKey());
-                a.setApiSecret(req.getApiSecret() != null ? req.getApiSecret() : "");
-            }
-        } else {
+        // Each user registers their own broker developer app — never copy platform keys from config.
+        if ("ANGELONE".equals(broker) || "FYERS".equals(broker) || "UPSTOX".equals(broker)) {
             a.setApiKey(req.getApiKey() != null ? req.getApiKey() : "");
             a.setApiSecret(req.getApiSecret() != null ? req.getApiSecret() : "");
+        } else {
+            // For OAuth brokers, use platform-level keys; for Groww, also fall back to platform keys
+            PlatformBrokerConfig.BrokerCreds platformCreds = platformConfig.getFor(broker);
+            if (platformCreds != null && platformCreds.getApiKey() != null && !platformCreds.getApiKey().isBlank()) {
+                if (req.getApiKey() == null || req.getApiKey().isBlank()) {
+                    a.setApiKey(platformCreds.getApiKey());
+                    a.setApiSecret(platformCreds.getApiSecret() != null ? platformCreds.getApiSecret() : "");
+                } else {
+                    a.setApiKey(req.getApiKey());
+                    a.setApiSecret(req.getApiSecret() != null ? req.getApiSecret() : "");
+                }
+            } else {
+                a.setApiKey(req.getApiKey() != null ? req.getApiKey() : "");
+                a.setApiSecret(req.getApiSecret() != null ? req.getApiSecret() : "");
+            }
         }
 
         a.setAccessToken(req.getAccessToken());
@@ -460,40 +497,28 @@ public class BrokerAccountService {
     }
 
     /**
-     * Upstox: use per-account apiKey+apiSecret only when both are set; otherwise platform pair — never mix.
-     * @return two-element array {@code [apiKey, apiSecret]}, or {@code null} if neither pair is complete
+     * Upstox: per-account {@code apiKey} (client_id) + {@code apiSecret} only — required for OAuth token exchange.
+     * @return two-element array {@code [apiKey, apiSecret]}, or {@code null} if incomplete
      */
     private String[] resolveUpstoxApiPair(BrokerAccount a) {
-        var platformCreds = platformConfig.getUpstox();
         String accKey = a.getApiKey() != null ? a.getApiKey().trim() : "";
         String accSecret = credentials.apiSecret(a);
         if (accSecret != null) accSecret = accSecret.trim();
         if (!accKey.isBlank() && accSecret != null && !accSecret.isBlank()) {
             return new String[] { accKey, accSecret };
-        }
-        if (platformCreds != null
-                && platformCreds.getApiKey() != null && !platformCreds.getApiKey().isBlank()
-                && platformCreds.getApiSecret() != null && !platformCreds.getApiSecret().isBlank()) {
-            return new String[] { platformCreds.getApiKey().trim(), platformCreds.getApiSecret().trim() };
         }
         return null;
     }
 
     /**
-     * Fyers: same pairing rule as Upstox — auth code must be issued for the same app_id as appIdHash uses.
+     * Fyers: per-account MyAPI {@code apiKey} (app id) + {@code apiSecret} only.
      */
     private String[] resolveFyersApiPair(BrokerAccount a) {
-        var platformCreds = platformConfig.getFyers();
         String accKey = a.getApiKey() != null ? a.getApiKey().trim() : "";
         String accSecret = credentials.apiSecret(a);
         if (accSecret != null) accSecret = accSecret.trim();
         if (!accKey.isBlank() && accSecret != null && !accSecret.isBlank()) {
             return new String[] { accKey, accSecret };
-        }
-        if (platformCreds != null
-                && platformCreds.getApiKey() != null && !platformCreds.getApiKey().isBlank()
-                && platformCreds.getApiSecret() != null && !platformCreds.getApiSecret().isBlank()) {
-            return new String[] { platformCreds.getApiKey().trim(), platformCreds.getApiSecret().trim() };
         }
         return null;
     }
@@ -503,11 +528,12 @@ public class BrokerAccountService {
         String[] fy = resolveFyersApiPair(a);
         if (fy == null) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Fyers API key and secret required: set brokers.fyers on the server, or save both apiKey and apiSecret on this broker account."));
+                    "Fyers requires apiKey (MyAPI app id) and apiSecret on this broker account — create an app in Fyers MyAPI and PUT both fields."));
         }
         if (req == null || req.getAuthCode() == null || req.getAuthCode().isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "authCode required. Complete Fyers OAuth flow with app_id=" + fy[0]));
+                    "authCode required. Complete Fyers OAuth with app_id=" + fy[0]
+                            + ". If login fails with redirect error, the redirect URL in Fyers MyAPI must match GET .../oauth-url (same redirectUri on POST .../login)."));
         }
         return fyersClient.generateToken(fy[0], fy[1], req.getAuthCode())
                 .flatMap(resp -> extractAndSaveSession(a, resp, "Fyers",
@@ -522,6 +548,11 @@ public class BrokerAccountService {
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("FYERS_LOGIN_FAILED error={}", e.getMessage(), e);
+                    String redirect = oauthRedirectOrDefault(req != null ? req.getRedirectUri() : null);
+                    Optional<ResponseStatusException> interpreted = interpretOAuthTokenError("FYERS", e, redirect);
+                    if (interpreted.isPresent()) {
+                        return Mono.error(interpreted.get());
+                    }
                     return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Fyers API error: " + e.getMessage()));
                 });
     }
@@ -531,7 +562,7 @@ public class BrokerAccountService {
         String[] ux = resolveUpstoxApiPair(a);
         if (ux == null) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Upstox API key and secret required: set brokers.upstox on the server, or save both apiKey and apiSecret on this broker account."));
+                    "Upstox requires apiKey (client_id) and apiSecret on this broker account — create an app in the Upstox developer console and PUT both fields."));
         }
         final String apiKey = ux[0];
         final String apiSecret = ux[1];
@@ -543,7 +574,7 @@ public class BrokerAccountService {
             String loginUrl = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id="
                     + encClient + "&redirect_uri=" + redirectForUrl;
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "authCode required. Open this URL to login: " + loginUrl));
+                    "authCode required. Open this URL to login (afterwards POST .../login with authCode and the same redirectUri used here): " + loginUrl));
         }
         // Dedup: reject reused auth codes (Upstox codes are single-use)
         String codeKey = "UPSTOX:" + req.getAuthCode().substring(0, Math.min(10, req.getAuthCode().length()));
@@ -562,14 +593,12 @@ public class BrokerAccountService {
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("UPSTOX_LOGIN_FAILED error={}", e.getMessage(), e);
-                    String msg = e.getMessage() != null ? e.getMessage() : "unknown";
-                    if (msg.contains("401") || msg.contains("Invalid Credentials") || msg.contains("UDAPI100016")) {
-                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                                "Upstox rejected the token request (401). Usually: auth code expired/reused, "
-                                        + "redirect_uri does not match the Upstox app + oauth-url, or api key/secret mismatch. "
-                                        + "Confirm UPSTOX_API_SECRET on EC2 matches this client_id in the Upstox developer console, "
-                                        + "and that the app redirect URL exactly matches brokers.callbackUrl / login redirectUri."));
+                    String redirect = effectiveOAuthRedirectForLogin(req);
+                    Optional<ResponseStatusException> interpreted = interpretOAuthTokenError("UPSTOX", e, redirect);
+                    if (interpreted.isPresent()) {
+                        return Mono.error(interpreted.get());
                     }
+                    String msg = e.getMessage() != null ? e.getMessage() : "unknown";
                     return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Upstox API error: " + msg));
                 });
     }
@@ -638,22 +667,24 @@ public class BrokerAccountService {
 
     // --- ANGEL ONE LOGIN (clientcode + password + TOTP) ---
     private Mono<Map<String, Object>> loginAngelOne(BrokerAccount a, BrokerLoginRequest req) {
-        var creds = platformConfig.getAngelone();
-        String apiKey = creds.getApiKey();
-        if (apiKey == null || apiKey.isBlank()) {
+        String apiKey = angelOnePrivateKey(a);
+        if (apiKey.isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Angel One API key not configured on platform"));
+                    "Angel One requires apiKey on this broker account (SmartAPI app key from Angel One dashboard). "
+                            + "PUT apiKey together with clientId and apiSecret (MPIN), then POST login with totpCode."));
         }
         if (req == null || req.getTotpCode() == null || req.getTotpCode().isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "totpCode required for Angel One login. Also set clientId (your Angel One client code) and password via account update."));
+                    "totpCode required: the 6-digit TOTP from your authenticator app. "
+                            + "Ensure apiKey (SmartAPI app key), clientId, and apiSecret (4-digit MPIN) are already set via PUT account."));
         }
         // clientId = Angel One client code; apiSecret = SmartAPI PIN (stored encrypted — decrypt for login)
         String clientCode = a.getClientId();
         String password = credentials.apiSecret(a);
         if (clientCode == null || clientCode.isBlank() || password == null || password.isBlank()) {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Angel One requires clientId (client code) and apiSecret (SmartAPI login PIN / MPIN) set on the broker account."));
+                    "Angel One requires apiKey (SmartAPI app key), clientId (client code), and apiSecret on the broker account. "
+                            + "apiSecret must be your SmartAPI trading PIN (often 4-digit MPIN) — not the 6-digit TOTP; TOTP goes only in totpCode on this POST."));
         }
         return angelOneClient.login(apiKey, clientCode, password, req.getTotpCode())
                 .flatMap(resp -> {
@@ -676,8 +707,14 @@ public class BrokerAccountService {
                                 + (ec != null && !ec.toString().isBlank() && !"0".equals(ec.toString())
                                 ? " (code " + ec + ")" : "");
                         String userMsg = detail.isBlank()
-                                ? "Check client code, SmartAPI PIN in apiSecret (often 4-digit MPIN), TOTP, and platform Angel One API key."
+                                ? "Check apiKey (SmartAPI app key on account), clientId, apiSecret (4-digit MPIN — not 6-digit TOTP), and totpCode (6-digit TOTP on login)."
                                 : detail;
+                        if (!detail.isBlank()) {
+                            String d = detail.toLowerCase();
+                            if (d.contains("mpin") || d.contains("4 digit")) {
+                                userMsg = detail + " — Put the 4-digit MPIN in account apiSecret (PUT account); put the 6-digit authenticator code in totpCode (POST login).";
+                            }
+                        }
                         log.warn("ANGELONE_LOGIN_REJECTED accountId={} detail={}", a.getId(), userMsg);
                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                                 "Angel One: " + userMsg));
@@ -882,14 +919,35 @@ public class BrokerAccountService {
                 case "ZERODHA":
                     result = zerodhaClient.getMargins(zerodhaApiKey(a), sessionToken(a)).map(resp -> parseZerodhaMargin(resp)); break;
                 case "FYERS":
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
-                    result = fyersClient.getFunds(fyersAuth).map(resp -> parseFyersMargin(resp)); break;
+                    if (fyersAppIdMissing(a)) {
+                        Map<String, Object> missing = new LinkedHashMap<>();
+                        missing.put("availableMargin", 0);
+                        missing.put("usedMargin", 0);
+                        missing.put("totalFunds", 0);
+                        missing.put("collateral", 0);
+                        missing.put("error", "Fyers MyAPI app id (apiKey) missing on account — PUT apiKey + apiSecret from your Fyers app.");
+                        result = Mono.just(missing);
+                    } else {
+                        result = fyersClient.getFunds(fyersAuthHeader(a)).map(resp -> parseFyersMargin(resp));
+                    }
+                    break;
                 case "UPSTOX":
                     result = upstoxClient.getFundsMargin(sessionToken(a)).map(resp -> parseUpstoxMargin(resp)); break;
                 case "DHAN":
                     result = dhanClient.getFunds(sessionToken(a)).map(resp -> parseDhanMargin(resp)); break;
                 case "ANGELONE":
-                    result = angelOneClient.getRMS(platformConfig.getAngelone().getApiKey(), sessionToken(a)).map(resp -> parseAngelOneMargin(resp)); break;
+                    if (angelOnePrivateKeyMissing(a)) {
+                        Map<String, Object> missing = new LinkedHashMap<>();
+                        missing.put("availableMargin", 0);
+                        missing.put("usedMargin", 0);
+                        missing.put("totalFunds", 0);
+                        missing.put("collateral", 0);
+                        missing.put("error", "Angel One SmartAPI apiKey missing on account — PUT apiKey from your Angel SmartAPI app.");
+                        result = Mono.just(missing);
+                    } else {
+                        result = angelOneClient.getRMS(angelOnePrivateKey(a), sessionToken(a)).map(resp -> parseAngelOneMargin(resp));
+                    }
+                    break;
                 default:
                     result = Mono.just(mockMargin()); break;
             }
@@ -948,8 +1006,11 @@ public class BrokerAccountService {
                                 return Map.<String, Object>of("positions", data != null ? data : List.of());
                             });
                 case "FYERS":
-                    String fyersPosAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
-                    return fyersClient.getPositions(fyersPosAuth)
+                    if (fyersAppIdMissing(a)) {
+                        return Mono.just(Map.<String, Object>of("positions", List.of(), "error",
+                                "Fyers MyAPI apiKey missing on account."));
+                    }
+                    return fyersClient.getPositions(fyersAuthHeader(a))
                             .map(resp -> {
                                 Object netPositions = resp.get("netPositions");
                                 return Map.<String, Object>of("positions", netPositions != null ? netPositions : List.of());
@@ -965,7 +1026,11 @@ public class BrokerAccountService {
                             .map(resp -> Map.<String, Object>of(
                                     "positions", resp.getOrDefault("positions", List.of())));
                 case "ANGELONE":
-                    return angelOneClient.getPositions(platformConfig.getAngelone().getApiKey(), sessionToken(a))
+                    if (angelOnePrivateKeyMissing(a)) {
+                        return Mono.just(Map.<String, Object>of("positions", List.of(), "error",
+                                "Angel One SmartAPI apiKey missing on account."));
+                    }
+                    return angelOneClient.getPositions(angelOnePrivateKey(a), sessionToken(a))
                             .map(resp -> {
                                 Object data = resp.get("data");
                                 return Map.<String, Object>of("positions", data != null ? data : List.of());
@@ -1019,8 +1084,10 @@ public class BrokerAccountService {
                     return zerodhaClient.getOrders(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
                 case "FYERS":
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
-                    return fyersClient.getOrders(fyersAuth)
+                    if (fyersAppIdMissing(a)) {
+                        return Mono.just(Map.of("orders", List.of(), "error", "Fyers MyAPI apiKey missing on account."));
+                    }
+                    return fyersClient.getOrders(fyersAuthHeader(a))
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("orderBook", resp)));
                 case "UPSTOX":
                     return upstoxClient.getOrders(sessionToken(a))
@@ -1030,7 +1097,10 @@ public class BrokerAccountService {
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("orders", resp)))
                             .onErrorResume(e -> Mono.just(Map.of("orders", List.of(), "error", e.getMessage())));
                 case "ANGELONE":
-                    return angelOneClient.getOrders(platformConfig.getAngelone().getApiKey(), sessionToken(a))
+                    if (angelOnePrivateKeyMissing(a)) {
+                        return Mono.just(Map.of("orders", List.of(), "error", "Angel One SmartAPI apiKey missing on account."));
+                    }
+                    return angelOneClient.getOrders(angelOnePrivateKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("orders", resp.getOrDefault("data", resp)));
                 default:
                     return Mono.just(Map.<String, Object>of("orders", List.of()));
@@ -1052,8 +1122,10 @@ public class BrokerAccountService {
                     return zerodhaClient.getTrades(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
                 case "FYERS":
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
-                    return fyersClient.getTrades(fyersAuth)
+                    if (fyersAppIdMissing(a)) {
+                        return Mono.just(Map.of("trades", List.of(), "error", "Fyers MyAPI apiKey missing on account."));
+                    }
+                    return fyersClient.getTrades(fyersAuthHeader(a))
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("tradeBook", resp)));
                 case "UPSTOX":
                     return upstoxClient.getTrades(sessionToken(a))
@@ -1063,7 +1135,10 @@ public class BrokerAccountService {
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("trades", resp)))
                             .onErrorResume(e -> Mono.just(Map.of("trades", List.of(), "error", e.getMessage())));
                 case "ANGELONE":
-                    return angelOneClient.getTrades(platformConfig.getAngelone().getApiKey(), sessionToken(a))
+                    if (angelOnePrivateKeyMissing(a)) {
+                        return Mono.just(Map.of("trades", List.of(), "error", "Angel One SmartAPI apiKey missing on account."));
+                    }
+                    return angelOneClient.getTrades(angelOnePrivateKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("trades", resp.getOrDefault("data", resp)));
                 default:
                     return Mono.just(Map.<String, Object>of("trades", List.of()));
@@ -1085,8 +1160,10 @@ public class BrokerAccountService {
                     return zerodhaClient.getHoldings(zerodhaApiKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
                 case "FYERS":
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
-                    return fyersClient.getHoldings(fyersAuth)
+                    if (fyersAppIdMissing(a)) {
+                        return Mono.just(Map.of("holdings", List.of(), "error", "Fyers MyAPI apiKey missing on account."));
+                    }
+                    return fyersClient.getHoldings(fyersAuthHeader(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("holdings", resp)));
                 case "UPSTOX":
                     return upstoxClient.getHoldings(sessionToken(a))
@@ -1096,7 +1173,10 @@ public class BrokerAccountService {
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("holdings", resp)))
                             .onErrorResume(e -> Mono.just(Map.of("holdings", List.of(), "error", e.getMessage())));
                 case "ANGELONE":
-                    return angelOneClient.getHoldings(platformConfig.getAngelone().getApiKey(), sessionToken(a))
+                    if (angelOnePrivateKeyMissing(a)) {
+                        return Mono.just(Map.of("holdings", List.of(), "error", "Angel One SmartAPI apiKey missing on account."));
+                    }
+                    return angelOneClient.getHoldings(angelOnePrivateKey(a), sessionToken(a))
                             .map(resp -> Map.<String, Object>of("holdings", resp.getOrDefault("data", resp)));
                 default:
                     return Mono.just(Map.<String, Object>of("holdings", List.of()));
@@ -1149,7 +1229,11 @@ public class BrokerAccountService {
                             "exchange", BrokerFieldTranslator.exchangeSegment(exchange, "ZERODHA", isFnO)
                     )).map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 case "FYERS": {
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
+                    if (fyersAppIdMissing(a)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Fyers MyAPI apiKey missing on account — PUT apiKey + apiSecret from your Fyers app."));
+                    }
+                    String fyersAuth = fyersAuthHeader(a);
                     int side = type.equalsIgnoreCase("BUY") ? 1 : -1;
                     String fyersSym = symbol.contains(":") ? symbol : ("NSE:" + symbol + (isFnO ? "" : "-EQ"));
                     return fyersClient.placeOrder(fyersAuth, Map.of(
@@ -1195,7 +1279,11 @@ public class BrokerAccountService {
                             .map(resp -> Map.<String, Object>of("message", "Position close order placed", "response", resp));
                 }
                 case "ANGELONE": {
-                    String apiKey = platformConfig.getAngelone().getApiKey();
+                    String apiKey = angelOnePrivateKey(a);
+                    if (apiKey.isBlank()) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Angel One SmartAPI apiKey missing on account — PUT apiKey from your Angel SmartAPI app."));
+                    }
                     String angelSym = isFnO ? symbol : symbol + "-EQ";
                     String angelToken = instruments.getAngelToken(angelSym, isFnO);
                     Map<String, Object> angelBody = new LinkedHashMap<>();
@@ -1251,7 +1339,11 @@ public class BrokerAccountService {
                     return zerodhaClient.cancelOrder(zerodhaApiKey(a), sessionToken(a), orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "FYERS": {
-                    String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
+                    if (fyersAppIdMissing(a)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Fyers MyAPI apiKey missing on account."));
+                    }
+                    String fyersAuth = fyersAuthHeader(a);
                     return fyersClient.cancelOrder(fyersAuth, orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 }
@@ -1262,7 +1354,11 @@ public class BrokerAccountService {
                     return dhanClient.cancelOrder(sessionToken(a), orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 case "ANGELONE":
-                    return angelOneClient.cancelOrder(platformConfig.getAngelone().getApiKey(), sessionToken(a), "NORMAL", orderId)
+                    if (angelOnePrivateKeyMissing(a)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Angel One SmartAPI apiKey missing on account."));
+                    }
+                    return angelOneClient.cancelOrder(angelOnePrivateKey(a), sessionToken(a), "NORMAL", orderId)
                             .map(resp -> Map.<String, Object>of("message", "Order cancelled", "response", resp));
                 default:
                     return Mono.just(Map.<String, Object>of("message", "Unsupported broker"));
@@ -1563,7 +1659,10 @@ public class BrokerAccountService {
                             return p;
                         });
             case "FYERS": {
-                String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + sessionToken(a);
+                if (fyersAppIdMissing(a)) {
+                    return Mono.just(Map.of("broker", "Fyers", "error", "Fyers MyAPI apiKey missing on account."));
+                }
+                String fyersAuth = fyersAuthHeader(a);
                 return fyersClient.getProfile(fyersAuth)
                         .map(resp -> {
                             Map<String, Object> p = new LinkedHashMap<>();
@@ -1609,7 +1708,10 @@ public class BrokerAccountService {
                             return p;
                         });
             case "ANGELONE":
-                return angelOneClient.getProfile(platformConfig.getAngelone().getApiKey(), sessionToken(a))
+                if (angelOnePrivateKeyMissing(a)) {
+                    return Mono.just(Map.of("broker", "Angel One", "error", "SmartAPI apiKey missing on account."));
+                }
+                return angelOneClient.getProfile(angelOnePrivateKey(a), sessionToken(a))
                         .map(resp -> {
                             Map<String, Object> p = new LinkedHashMap<>();
                             Object data = resp.get("data");
@@ -1734,36 +1836,54 @@ public class BrokerAccountService {
             }
             case "FYERS" -> {
                 Map<String, Object> m = brokerShell("FYERS", "Fyers", "oauth", "authCode");
+                m.put("requiresUserCredentials", true);
+                m.put("supportsPerAccountApiApp", true);
+                m.put("credentialFields", List.of("apiKey", "apiSecret"));
+                m.put("credentialNote",
+                        "Create your own app in Fyers MyAPI. PUT apiKey = App ID (e.g. XXXXX-100) and apiSecret = secret from the dashboard. "
+                                + "The redirect URL in MyAPI must match GET .../oauth-url (brokers.callbackUrl or your redirectUri). "
+                                + "Then GET oauth-url → browser login → POST .../login { authCode, redirectUri? }.");
                 m.put("loginOptions", List.of(
                         loginOption("accessToken",
                                 "Paste access token from Fyers API dashboard",
                                 List.of("accessToken"),
                                 "PUT /api/v1/brokers/accounts/{accountId}/token"),
                         loginOption("oauth",
-                                "Login with Fyers in browser",
+                                "After PUT apiKey + apiSecret: GET oauth-url → browser → POST .../login { authCode, redirectUri? }",
                                 List.of(),
-                                "GET .../oauth-url → open popup → POST .../login { authCode }")));
+                                "PUT credentials → GET .../oauth-url → POST .../login { authCode, redirectUri? }")));
                 yield m;
             }
             case "UPSTOX" -> {
                 Map<String, Object> m = brokerShell("UPSTOX", "Upstox", "oauth", "authCode");
+                m.put("requiresUserCredentials", true);
+                m.put("supportsPerAccountApiApp", true);
+                m.put("credentialFields", List.of("apiKey", "apiSecret"));
+                m.put("credentialNote",
+                        "Create your own app in the Upstox developer console. PUT apiKey = client_id and apiSecret = client secret. "
+                                + "Redirect URL in the app must match GET .../oauth-url (brokers.callbackUrl or your redirectUri). "
+                                + "Then GET oauth-url → browser → POST .../login { authCode, redirectUri? }.");
                 m.put("loginOptions", List.of(
                         loginOption("oauth",
-                                "Login with Upstox in browser",
+                                "After PUT apiKey + apiSecret: GET oauth-url → browser → POST .../login { authCode, redirectUri? }",
                                 List.of(),
-                                "GET .../oauth-url → open popup → POST .../login { authCode }")));
+                                "PUT credentials → GET .../oauth-url → POST .../login { authCode, redirectUri? }")));
                 yield m;
             }
             case "ANGELONE" -> {
                 Map<String, Object> m = brokerShell("ANGELONE", "Angel One", "totp", "totpCode");
                 m.put("requiresUserCredentials", true);
-                m.put("credentialFields", List.of("clientId", "apiSecret"));
-                m.put("credentialNote", "First set your Angel One client code (clientId) and password (apiSecret) via Update Account, then login with TOTP code.");
+                m.put("supportsPerAccountApiApp", true);
+                m.put("credentialFields", List.of("apiKey", "clientId", "apiSecret"));
+                m.put("credentialNote",
+                        "Create your own SmartAPI app in Angel One; PUT apiKey = that app's API key (sent as X-PrivateKey). "
+                                + "PUT clientId = Angel client code. PUT apiSecret = SmartAPI trading PIN (usually 4-digit MPIN, not the 6-digit authenticator code). "
+                                + "POST /login with totpCode = 6-digit TOTP only.");
                 m.put("loginOptions", List.of(
                         loginOption("totp",
-                                "TOTP from authenticator app (requires client code + password set first via Update Account)",
+                                "After PUT apiKey + clientId + apiSecret (MPIN): POST login with totpCode = 6-digit code from authenticator",
                                 List.of("totpCode"),
-                                "PUT /api/v1/brokers/accounts/{accountId} (set clientId + apiSecret) → POST .../login { totpCode }")));
+                                "PUT /api/v1/brokers/accounts/{accountId} { apiKey, clientId, apiSecret } → POST .../login { totpCode }")));
                 yield m;
             }
             default -> {
@@ -1803,6 +1923,9 @@ public class BrokerAccountService {
                             "API key + TOTP code from authenticator app",
                             List.of("apiKey", "totpCode"),
                             "POST /api/v1/brokers/accounts/" + a.getId() + "/login { totpCode }")));
+        }
+        if ("ANGELONE".equals(a.getBrokerId()) || "FYERS".equals(a.getBrokerId()) || "UPSTOX".equals(a.getBrokerId())) {
+            config.put("hasStoredApiKey", a.getApiKey() != null && !a.getApiKey().isBlank());
         }
         List<String> methods = extractLoginOptionMethods(config.get("loginOptions"));
         config.put("loginOptionMethods", methods);
@@ -1936,6 +2059,59 @@ public class BrokerAccountService {
         return fallback != null && !fallback.isBlank() ? fallback.trim() : "https://localhost";
     }
 
+    private static String trimBrokerErrSnippet(String raw) {
+        if (raw == null) return "";
+        return raw.length() > 380 ? raw.substring(0, 380) + "…" : raw;
+    }
+
+    /**
+     * Recognize common Fyers/Upstox OAuth token errors and return HTTP 400 with actionable copy.
+     *
+     * @param redirectUriUsedInExchange exact redirect_uri sent to the broker token endpoint
+     */
+    private Optional<ResponseStatusException> interpretOAuthTokenError(String brokerId, Throwable cause,
+                                                                       String redirectUriUsedInExchange) {
+        String raw = cause != null && cause.getMessage() != null ? cause.getMessage() : "";
+        String low = raw.toLowerCase(Locale.ROOT);
+        String redHint = redirectUriUsedInExchange != null && !redirectUriUsedInExchange.isBlank()
+                ? " Token request used redirect_uri=\"" + redirectUriUsedInExchange
+                + "\" — that exact string (scheme, host, path, trailing slash) must match your broker developer app."
+                : "";
+
+        if ("FYERS".equals(brokerId)) {
+            if (low.contains("redirect") || low.contains("redirect_uri")) {
+                return Optional.of(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Fyers: redirect URL mismatch." + redHint
+                                + " Fix: set the same URL in Fyers MyAPI for this app id, use it in GET .../oauth-url?redirectUri=..., and pass the same redirectUri on POST .../login. Raw: "
+                                + trimBrokerErrSnippet(raw)));
+            }
+            if ((low.contains("invalid") || low.contains("error")) && (low.contains("secret") || low.contains("hash") || low.contains("app"))) {
+                return Optional.of(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Fyers: app id or secret does not match. PUT apiKey (MyAPI App ID) and apiSecret from the Fyers dashboard on this account, then open a fresh GET .../oauth-url and login again. Raw: "
+                                + trimBrokerErrSnippet(raw)));
+            }
+            if ((low.contains("invalid") && low.contains("code")) || low.contains("expired") || low.contains("authorization_code")) {
+                return Optional.of(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Fyers: auth code invalid or expired. Open GET .../oauth-url again, complete browser login once, then POST .../login immediately with the new authCode. Raw: "
+                                + trimBrokerErrSnippet(raw)));
+            }
+        }
+        if ("UPSTOX".equals(brokerId)) {
+            if (low.contains("redirect") || low.contains("redirect_uri") || low.contains("udapi100016")) {
+                return Optional.of(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Upstox: redirect_uri mismatch or app credentials rejected (e.g. UDAPI100016)." + redHint
+                                + " Fix: Upstox developer app redirect URL must match; PUT apiSecret must match client_id; POST .../login.redirectUri must match GET .../oauth-url. Raw: "
+                                + trimBrokerErrSnippet(raw)));
+            }
+            if (low.contains("401") || (low.contains("invalid") && low.contains("client"))) {
+                return Optional.of(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Upstox: token request rejected. Check client_secret (apiSecret on account), fresh auth code, and redirect_uri match." + redHint + " Raw: "
+                                + trimBrokerErrSnippet(raw)));
+            }
+        }
+        return Optional.empty();
+    }
+
     private void enrichOAuthUrls(BrokerAccount a, Map<String, Object> config, String redirectUri) {
         String redirect = oauthRedirectOrDefault(redirectUri);
         switch (a.getBrokerId()) {
@@ -1961,8 +2137,22 @@ public class BrokerAccountService {
                     String encClient = UriUtils.encodeQueryParam(fy[0], StandardCharsets.UTF_8);
                     config.put("oauthUrl", "https://api-t1.fyers.in/api/v3/generate-authcode?client_id="
                             + encClient + "&redirect_uri=" + encRedirect + "&response_type=code&state=ok");
+                    config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback (and optional redirectUri matching this flow).");
+                    config.put("effectiveRedirectUri", redirect);
+                    config.put("redirectUriHint",
+                            "In Fyers MyAPI for app id " + fy[0] + ", set the redirect URL to exactly: " + redirect);
+                } else {
+                    config.put("oauthUrl", null);
+                    config.put("errorCode", "CREDENTIALS_REQUIRED");
+                    config.put("action", "PUT_BROKER_CREDENTIALS");
+                    config.put("needsCredentials", true);
+                    config.put("requiredFields", List.of("apiKey", "apiSecret"));
+                    config.put("effectiveRedirectUri", redirect);
+                    config.put("brokerRedirectRegistrationHint",
+                            "PUT apiKey (MyAPI app id) and apiSecret first. Then register this redirect URL in Fyers MyAPI before using oauthUrl: " + redirect);
+                    config.put("message",
+                            "Missing Fyers credentials on this account. PUT apiKey + apiSecret (see GET /api/v1/brokers for field names), then call GET .../oauth-url again.");
                 }
-                config.put("message", "Open oauthUrl in browser, then POST login with authCode from callback (and optional redirectUri matching this flow).");
             }
             case "UPSTOX" -> {
                 String[] ux = resolveUpstoxApiPair(a);
@@ -1971,15 +2161,29 @@ public class BrokerAccountService {
                     String encClient = UriUtils.encodeQueryParam(ux[0], StandardCharsets.UTF_8);
                     config.put("oauthUrl", "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id="
                             + encClient + "&redirect_uri=" + encRedirect);
+                    config.put("message", "Open oauthUrl in browser, then POST login with { authCode, redirectUri } — redirectUri must match the oauth-url redirect exactly.");
+                    config.put("effectiveRedirectUri", redirect);
+                    config.put("redirectUriHint",
+                            "In Upstox developer console for client_id " + ux[0] + ", set redirect URL to exactly: " + redirect);
+                } else {
+                    config.put("oauthUrl", null);
+                    config.put("errorCode", "CREDENTIALS_REQUIRED");
+                    config.put("action", "PUT_BROKER_CREDENTIALS");
+                    config.put("needsCredentials", true);
+                    config.put("requiredFields", List.of("apiKey", "apiSecret"));
+                    config.put("effectiveRedirectUri", redirect);
+                    config.put("brokerRedirectRegistrationHint",
+                            "PUT apiKey (client_id) and apiSecret (client_secret) first. Then register this redirect URL in the Upstox app before using oauthUrl: " + redirect);
+                    config.put("message",
+                            "Missing Upstox credentials on this account. PUT apiKey + apiSecret, then call GET .../oauth-url again.");
                 }
-                config.put("message", "Open oauthUrl in browser, then POST login with { authCode, redirectUri } — redirectUri must match the oauth-url redirect exactly.");
             }
             case "DHAN" ->
                     config.put("message", "Option 1: PUT token. Option 2: POST login {} for loginUrl, then login with authCode (tokenId).");
             case "GROWW" ->
                     config.put("message", "Choose access token or API key + TOTP from loginOptions.");
             case "ANGELONE" ->
-                    config.put("message", "Set clientId and apiSecret (SmartAPI login PIN — often 4-digit MPIN) on account, then POST login with totpCode from your authenticator.");
+                    config.put("message", "PUT apiKey (your SmartAPI app key), clientId, and apiSecret (4-digit MPIN). Then POST login with totpCode = 6-digit TOTP.");
             default -> { }
         }
     }

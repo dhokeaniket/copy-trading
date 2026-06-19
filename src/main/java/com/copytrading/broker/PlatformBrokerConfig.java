@@ -9,10 +9,7 @@ public class PlatformBrokerConfig {
 
     private BrokerCreds groww = new BrokerCreds();
     private BrokerCreds zerodha = new BrokerCreds();
-    private BrokerCreds fyers = new BrokerCreds();
-    private BrokerCreds upstox = new BrokerCreds();
     private BrokerCreds dhan = new BrokerCreds();
-    private BrokerCreds angelone = new BrokerCreds();
     private String callbackUrl;
     /** Outbound IP to whitelist in Groww (and similar) broker dashboards. */
     private String serverEgressIp;
@@ -21,14 +18,8 @@ public class PlatformBrokerConfig {
     public void setGroww(BrokerCreds groww) { this.groww = groww; }
     public BrokerCreds getZerodha() { return zerodha; }
     public void setZerodha(BrokerCreds zerodha) { this.zerodha = zerodha; }
-    public BrokerCreds getFyers() { return fyers; }
-    public void setFyers(BrokerCreds fyers) { this.fyers = fyers; }
-    public BrokerCreds getUpstox() { return upstox; }
-    public void setUpstox(BrokerCreds upstox) { this.upstox = upstox; }
     public BrokerCreds getDhan() { return dhan; }
     public void setDhan(BrokerCreds dhan) { this.dhan = dhan; }
-    public BrokerCreds getAngelone() { return angelone; }
-    public void setAngelone(BrokerCreds angelone) { this.angelone = angelone; }
     public String getCallbackUrl() { return callbackUrl; }
     public void setCallbackUrl(String callbackUrl) { this.callbackUrl = callbackUrl; }
     public String getServerEgressIp() { return serverEgressIp; }
@@ -38,10 +29,7 @@ public class PlatformBrokerConfig {
         return switch (brokerId) {
             case "GROWW" -> groww;
             case "ZERODHA" -> zerodha;
-            case "FYERS" -> fyers;
-            case "UPSTOX" -> upstox;
             case "DHAN" -> dhan;
-            case "ANGELONE" -> angelone;
             default -> null;
         };
     }

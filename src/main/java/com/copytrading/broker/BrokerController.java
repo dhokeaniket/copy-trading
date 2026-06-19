@@ -156,7 +156,7 @@ public class BrokerController {
         return service.getLoginOptions(accountId, UUID.fromString(userId));
     }
 
-    @Operation(summary = "Login to broker", description = "Create broker session. Body varies: Groww={}, Zerodha={requestToken}, Fyers/Upstox={authCode, redirectUri?}, Dhan={authCode:tokenId}, AngelOne={totpCode}. For Upstox/Fyers OAuth, redirectUri must match GET .../oauth-url redirect exactly.")
+    @Operation(summary = "Login to broker", description = "Create broker session. Groww={}, Zerodha={requestToken}, Dhan={authCode:tokenId}. Fyers/Upstox: PUT apiKey+apiSecret (each user's developer app) then {authCode, redirectUri?} after GET oauth-url. AngelOne: {totpCode} after PUT apiKey, clientId, apiSecret (MPIN). redirectUri must match GET .../oauth-url for OAuth brokers.")
     @PostMapping(value = "/api/v1/brokers/accounts/{accountId}/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> loginToBroker(@PathVariable UUID accountId,
                                                     @AuthenticationPrincipal String userId,
@@ -164,7 +164,10 @@ public class BrokerController {
         return service.loginToBroker(accountId, UUID.fromString(userId), req);
     }
 
-    // 3.7b GET /brokers/accounts/:accountId/oauth-url (get OAuth login URL for browser redirect)
+    @Operation(summary = "OAuth URL and login options",
+            description = "Returns loginOptions plus oauthUrl for OAuth brokers. "
+                    + "Fyers/Upstox without PUT apiKey+apiSecret: oauthUrl is null, errorCode=CREDENTIALS_REQUIRED, action=PUT_BROKER_CREDENTIALS, "
+                    + "effectiveRedirectUri and brokerRedirectRegistrationHint show the redirect URL to register in the broker developer console.")
     @GetMapping("/api/v1/brokers/accounts/{accountId}/oauth-url")
     public Mono<Map<String, Object>> getOAuthUrl(@PathVariable UUID accountId,
                                                   @AuthenticationPrincipal String userId,

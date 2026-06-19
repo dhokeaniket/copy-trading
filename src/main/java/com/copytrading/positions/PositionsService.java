@@ -153,19 +153,30 @@ public class PositionsService {
             case "ZERODHA":
                 rawMono = zerodhaClient.getPositions(platformConfig.getZerodha().getApiKey(), token);
                 break;
-            case "FYERS":
-                String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + token;
-                rawMono = fyersClient.getPositions(fyersAuth);
+            case "FYERS": {
+                String appId = account.getApiKey() != null ? account.getApiKey().trim() : "";
+                if (appId.isBlank()) {
+                    rawMono = Mono.error(new IllegalStateException("Fyers MyAPI apiKey missing on account"));
+                } else {
+                    rawMono = fyersClient.getPositions(appId + ":" + token);
+                }
                 break;
+            }
             case "UPSTOX":
                 rawMono = upstoxClient.getPositions(token);
                 break;
             case "DHAN":
                 rawMono = dhanClient.getPositions(token);
                 break;
-            case "ANGELONE":
-                rawMono = angelOneClient.getPositions(platformConfig.getAngelone().getApiKey(), token);
+            case "ANGELONE": {
+                String priv = account.getApiKey() != null ? account.getApiKey().trim() : "";
+                if (priv.isBlank()) {
+                    rawMono = Mono.error(new IllegalStateException("Angel One SmartAPI apiKey missing on account"));
+                } else {
+                    rawMono = angelOneClient.getPositions(priv, token);
+                }
                 break;
+            }
             default:
                 return Mono.just(List.of());
         }

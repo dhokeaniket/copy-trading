@@ -123,25 +123,28 @@ Option B: API key + TOTP (requires IP whitelisting in Groww dashboard)
 4. POST .../login { "requestToken": "..." }
 ```
 
-### **Fyers** (Access Token OR OAuth) ✅ NEW
+### **Fyers** (Access Token OR OAuth) ✅
 ```
 Option A: Paste access token from Fyers dashboard
   PUT /api/v1/brokers/accounts/{accountId}/token { "accessToken": "..." }
 
-Option B: OAuth
-  1. GET .../oauth-url → open browser popup
-  2. User logs in on Fyers → redirect with auth_code
-  3. POST .../login { "authCode": "..." }
+Option B: OAuth (each user’s MyAPI app)
+  1. PUT .../accounts/{accountId} { "apiKey": "<MyAPI app id>", "apiSecret": "<secret>" }
+  2. GET .../oauth-url → open browser popup
+  3. User logs in on Fyers → redirect with auth_code
+  4. POST .../login { "authCode": "...", "redirectUri": "..." }
 ```
+No platform `brokers.fyers` — credentials live only on the broker account.
 
-### **Upstox** (OAuth) ✅ FIXED
+### **Upstox** (OAuth) ✅
 ```
-1. Link account (platform API key used)
+1. PUT .../accounts/{accountId} { "apiKey": "<client_id>", "apiSecret": "<client_secret>" }
 2. GET .../oauth-url → open browser popup
 3. User logs in on Upstox → redirect with code
-4. POST .../login { "authCode": "..." }
+4. POST .../login { "authCode": "...", "redirectUri": "..." }
    - Can retry immediately if first attempt fails (no more 2-min lockout)
 ```
+No platform `brokers.upstox` — each user uses their own Upstox developer app.
 
 ### **Dhan** (Access Token OR OAuth)
 ```
@@ -154,25 +157,35 @@ Option B: OAuth 3-step
   3. POST .../login { "authCode": "tokenId" }
 ```
 
-### **AngelOne** (TOTP) ✅ FIXED
+### **AngelOne** (per-account SmartAPI app + TOTP) ✅
 ```
-1. Link account
+1. Link account (POST) with brokerId ANGELONE — optionally include apiKey, clientId, apiSecret
 2. PUT /api/v1/brokers/accounts/{accountId}
    {
-     "clientId": "A12345",       // Angel One client code
-     "apiSecret": "password"     // Angel One password
+     "apiKey": "YOUR_SMARTAPI_APP_KEY",   // from user's Angel SmartAPI app (X-PrivateKey)
+     "clientId": "A12345",                // Angel client code
+     "apiSecret": "1234"                  // 4-digit MPIN / trading PIN (not 6-digit TOTP)
    }
-3. POST .../login { "totpCode": "123456" }  // From authenticator app
+3. POST .../login { "totpCode": "123456" }  // 6-digit authenticator TOTP
 ```
+No platform `brokers.angelone` / `ANGELONE_API_KEY` — each user registers their own SmartAPI app.
+
+### API hints when something is wrong (Fyers / Upstox)
+
+| Situation | What the API returns |
+|-----------|----------------------|
+| Skipped PUT (no apiKey+apiSecret) | `GET .../oauth-url` / login-options: `oauthUrl: null`, `needsCredentials: true`, `errorCode: "CREDENTIALS_REQUIRED"`, `action: "PUT_BROKER_CREDENTIALS"`, plus `effectiveRedirectUri` and `brokerRedirectRegistrationHint` (exact URL to register in the broker app). |
+| Redirect mismatch or bad secret at token exchange | `POST .../login` → **400** with a message that names redirect_uri / client_secret / fresh auth code; raw broker snippet is trimmed at the end. |
+| Wrong app / code | Same **400** path when the error body matches known patterns; otherwise **502** with the broker message. |
 
 ---
 
 ## Testing Checklist
 
 ### AngelOne
-- [ ] Link account without clientId/apiSecret → Login should fail with clear error: *"Angel One requires clientId (client code) and apiSecret (password) set on the broker account."*
-- [ ] Set clientId + apiSecret via Update Account → then login with TOTP → should succeed
-- [ ] GET /api/v1/brokers → AngelOne entry should show `requiresUserCredentials: true` and `credentialNote` with clear instructions
+- [ ] Link account without apiKey/clientId/apiSecret → Login should fail with clear error about missing SmartAPI apiKey or credentials
+- [ ] Set apiKey + clientId + apiSecret via PUT → then login with TOTP → should succeed
+- [ ] GET /api/v1/brokers → AngelOne entry should show `credentialFields` including apiKey and `credentialNote` with MPIN vs TOTP
 
 ### Fyers
 - [ ] GET /api/v1/brokers → Fyers entry should show TWO login options: `accessToken` and `oauth`
@@ -200,13 +213,14 @@ Option B: OAuth 3-step
 
 **New (Correct):**
 ```
-Step 1: Set Credentials
-[ ] Angel One Client Code: _______
-[ ] Password: _______
-[Save Credentials]
+Step 1: Set credentials (user's own SmartAPI app)
+[ ] SmartAPI API Key (from Angel app dashboard): _______
+[ ] Angel client code: _______
+[ ] MPIN (4-digit trading PIN): _______
+[Save]
 
 Step 2: Login with TOTP
-[ ] TOTP Code: _______
+[ ] 6-digit TOTP: _______
 [Connect]
 ```
 
