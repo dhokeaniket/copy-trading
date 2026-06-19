@@ -244,15 +244,16 @@ public class AdminService {
             var copyLogs = tuple.getT6();
             
             long activeSubs = subs.stream().filter(s -> "ACTIVE".equals(s.getCopyingStatus())).count();
-            
+            long pausedChildren = subs.stream().filter(s -> "PAUSED".equals(s.getCopyingStatus())).count();
+
             Instant startOfDay = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata")).atStartOfDay(java.time.ZoneId.of("Asia/Kolkata")).toInstant();
-            
-            long totalTradesToday = logs.stream()
-                    .filter(l -> "EXECUTED".equals(l.getStatus()))
+
+            long totalTradesToday = copyLogs.stream()
+                    .filter(l -> "SUCCESS".equalsIgnoreCase(l.getChildStatus()))
                     .filter(l -> l.getCreatedAt() != null && !l.getCreatedAt().isBefore(startOfDay))
                     .count();
-                    
-            long totalReplications = logs.stream().filter(l -> "REPLICATED".equals(l.getType())).count();
+
+            long totalReplications = copyLogs.stream().filter(l -> "SUCCESS".equalsIgnoreCase(l.getChildStatus())).count();
 
             long avgLatency = 0;
             if (!copyLogs.isEmpty()) {
@@ -263,12 +264,137 @@ public class AdminService {
                         .orElse(0.0);
             }
 
+            // --- Comprehensive Aggregations ---
+            double todayPnl = 0.0;
+            long openPositions = 0;
+            long buyOrders = 0;
+            long sellOrders = 0;
+
+            Map<UUID, Double> childPnlMap = new java.util.HashMap<>();
+            java.time.format.DateTimeFormatter dateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd MMM").withZone(java.time.ZoneId.of("Asia/Kolkata"));
+            Map<String, Double> dailyPnlMap = new java.util.LinkedHashMap<>();
+            
+            java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
+            for (int i = 29; i >= 0; i--) {
+                dailyPnlMap.put(dateFormatter.format(today.minusDays(i)), 0.0);
+            }
+
+            Map<String, List<com.copytrading.logs.CopyLog>> bySymbol = copyLogs.stream()
+                .filter(l -> "SUCCESS".equalsIgnoreCase(l.getChildStatus()) && l.getSymbol() != null)
+                .collect(java.util.stream.Collectors.groupingBy(l -> l.getSymbol().toUpperCase()));
+
+            for (Map.Entry<String, List<com.copytrading.logs.CopyLog>> entry : bySymbol.entrySet()) {
+                double lastPriceInLog = 0.0;
+                
+                Map<UUID, Double> childBuyValue = new java.util.HashMap<>();
+                Map<UUID, Double> childSellValue = new java.util.HashMap<>();
+                Map<UUID, Integer> childNetQty = new java.util.HashMap<>();
+                
+                Map<String, Double> dayBuyValue = new java.util.HashMap<>();
+                Map<String, Double> daySellValue = new java.util.HashMap<>();
+                Map<String, Integer> dayNetQty = new java.util.HashMap<>();
+
+                double todayBuyValue = 0, todaySellValue = 0;
+                int todayNetQty = 0;
+
+                for (com.copytrading.logs.CopyLog l : entry.getValue()) {
+                    double price = l.getPrice() != null ? l.getPrice() : 0.0;
+                    int qty = l.getChildQty() != null ? l.getChildQty() : (l.getQty() != null ? l.getQty() : 0);
+                    if (price > 0) lastPriceInLog = price;
+
+                    if ("BUY".equalsIgnoreCase(l.getTradeType())) buyOrders++;
+                    if ("SELL".equalsIgnoreCase(l.getTradeType())) sellOrders++;
+
+                    UUID cId = l.getChildId();
+                    String dayStr = l.getCreatedAt() != null ? dateFormatter.format(l.getCreatedAt()) : null;
+                    boolean isToday = l.getCreatedAt() != null && !l.getCreatedAt().isBefore(startOfDay);
+
+                    if ("BUY".equalsIgnoreCase(l.getTradeType())) {
+                        if (cId != null) {
+                            childBuyValue.merge(cId, price * qty, Double::sum);
+                            childNetQty.merge(cId, qty, Integer::sum);
+                        }
+                        if (dayStr != null) {
+                            dayBuyValue.merge(dayStr, price * qty, Double::sum);
+                            dayNetQty.merge(dayStr, qty, Integer::sum);
+                        }
+                        if (isToday) {
+                            todayBuyValue += price * qty;
+                            todayNetQty += qty;
+                        }
+                    } else if ("SELL".equalsIgnoreCase(l.getTradeType())) {
+                        if (cId != null) {
+                            childSellValue.merge(cId, price * qty, Double::sum);
+                            childNetQty.merge(cId, -qty, Integer::sum);
+                        }
+                        if (dayStr != null) {
+                            daySellValue.merge(dayStr, price * qty, Double::sum);
+                            dayNetQty.merge(dayStr, -qty, Integer::sum);
+                        }
+                        if (isToday) {
+                            todaySellValue += price * qty;
+                            todayNetQty -= qty;
+                        }
+                    }
+                }
+
+                double ltp = lastPriceInLog;
+                todayPnl += (todaySellValue - todayBuyValue + (todayNetQty * ltp));
+
+                for (Map.Entry<UUID, Integer> cEntry : childNetQty.entrySet()) {
+                    if (cEntry.getValue() != 0) openPositions++;
+                    
+                    double cBuy = childBuyValue.getOrDefault(cEntry.getKey(), 0.0);
+                    double cSell = childSellValue.getOrDefault(cEntry.getKey(), 0.0);
+                    double cPnl = cSell - cBuy + (cEntry.getValue() * ltp);
+                    childPnlMap.merge(cEntry.getKey(), cPnl, Double::sum);
+                }
+
+                for (String day : dayBuyValue.keySet()) {
+                    double dBuy = dayBuyValue.getOrDefault(day, 0.0);
+                    double dSell = daySellValue.getOrDefault(day, 0.0);
+                    int dNet = dayNetQty.getOrDefault(day, 0);
+                    double dPnl = dSell - dBuy + (dNet * ltp);
+                    if (dailyPnlMap.containsKey(day)) {
+                        dailyPnlMap.put(day, dailyPnlMap.get(day) + dPnl);
+                    }
+                }
+            }
+
+            List<Map<String, Object>> equityCurve = new java.util.ArrayList<>();
+            double cumulativePnl = 0.0;
+            for (Map.Entry<String, Double> dEntry : dailyPnlMap.entrySet()) {
+                cumulativePnl += dEntry.getValue();
+                Map<String, Object> point = new java.util.HashMap<>();
+                point.put("label", dEntry.getKey());
+                point.put("equity", Math.round(cumulativePnl * 100.0) / 100.0);
+                point.put("followers", activeSubs);
+                equityCurve.add(point);
+            }
+
+            long profitableChildren = 0;
+            long losingChildren = 0;
+            for (Double pnl : childPnlMap.values()) {
+                if (pnl > 0) profitableChildren++;
+                else if (pnl < 0) losingChildren++;
+            }
+
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("totalUsers", admins + masters + children);
             resp.put("totalAdmins", admins);
             resp.put("totalMasters", masters);
             resp.put("activeMasters", masters);
             resp.put("totalChildren", children);
+            
+            resp.put("todayPnl", Math.round(todayPnl * 100.0) / 100.0);
+            resp.put("openPositions", openPositions);
+            resp.put("buyOrders", buyOrders);
+            resp.put("sellOrders", sellOrders);
+            resp.put("profitableChildren", profitableChildren);
+            resp.put("losingChildren", losingChildren);
+            resp.put("pausedChildren", pausedChildren);
+            resp.put("equityCurve", equityCurve);
+
             resp.put("totalTrades", totalTradesToday);
             resp.put("latency", avgLatency);
             resp.put("totalReplications", totalReplications);
