@@ -17,8 +17,10 @@ import com.copytrading.security.BrokerCredentials;
 import com.copytrading.subscription.SubscriptionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.codec.DecodingException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.UriUtils;
 import reactor.core.publisher.Mono;
@@ -725,9 +727,110 @@ public class BrokerAccountService {
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("ANGELONE_LOGIN_FAILED error={}", e.getMessage(), e);
-                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                            "Angel One API error: " + e.getMessage()));
+                    return Mono.error(mapAngelOneLoginFailure(e));
                 });
+    }
+
+    /**
+     * Angel SmartAPI returns HTTP errors as thrown {@link RuntimeException} from {@link AngelOneApiClient};
+     * map 4xx / parse failures to 400 so clients see a credential/config problem instead of generic 502.
+     */
+    private static ResponseStatusException mapAngelOneLoginFailure(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof WebClientResponseException w) {
+                int sc = w.getStatusCode().value();
+                String body = trimBrokerErrSnippet(w.getResponseBodyAsString(StandardCharsets.UTF_8));
+                if (sc >= 400 && sc < 500) {
+                    return angelLoginRejected400(
+                            (body != null && !body.isBlank() ? body : "HTTP " + sc));
+                }
+                return new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                        "Angel SmartAPI returned HTTP " + sc + ". " + (body != null ? body : ""));
+            }
+            if (t instanceof DecodingException) {
+                String msg = t.getMessage() != null ? t.getMessage() : t.toString();
+                return new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Angel One returned a body that could not be read as the expected JSON (HTML/error page, wrong Content-Type, or unexpected shape). Check apiKey, clientId, trading PIN (apiSecret), and totpCode. Detail: "
+                                + trimBrokerErrSnippet(msg));
+            }
+        }
+        String m = joinedThrowableMessages(e);
+        String low = m.toLowerCase(Locale.ROOT);
+        OptionalInt http = parseAngelLoginHttpStatus(m);
+        if (http.isPresent()) {
+            int sc = http.getAsInt();
+            if (sc >= 400 && sc < 500) {
+                return angelLoginRejected400(trimBrokerErrSnippet(m));
+            }
+            if (sc >= 500) {
+                return new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                        "Angel SmartAPI returned HTTP " + sc + ". " + trimBrokerErrSnippet(m));
+            }
+        }
+        // e.g. legacy "AngelOne login 403 FORBIDDEN: {...}"
+        if (m.contains("AngelOne login 4") || m.contains("AngelOne login 422")) {
+            return angelLoginRejected400(trimBrokerErrSnippet(m));
+        }
+        if (low.contains("jsonparse") || low.contains("unexpected character") || low.contains("cannot deserialize")
+                || low.contains("malformedjson") || low.contains("unrecognized token")) {
+            return new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Angel One login response was not valid JSON or did not match the expected shape. " + trimBrokerErrSnippet(m));
+        }
+        if (low.contains("connection refused") || low.contains("timeout") || low.contains("unknownhost")
+                || low.contains("timed out") || low.contains("premature close")) {
+            return new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Cannot reach Angel One SmartAPI from this server (network/DNS/TLS). " + trimBrokerErrSnippet(m));
+        }
+        return new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Angel One API error: " + trimBrokerErrSnippet(m));
+    }
+
+    private static ResponseStatusException angelLoginRejected400(String detailSnippet) {
+        String low = detailSnippet.toLowerCase(Locale.ROOT);
+        String hint = "";
+        if (low.contains("ip") || low.contains("whitelist") || low.contains("forbidden")) {
+            hint = " If Angel mentions IP: whitelist this server's outbound IP in your SmartAPI / Angel app settings.";
+        }
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Angel SmartAPI rejected the login (HTTP 4xx). Check apiKey (app API key), clientId, apiSecret = trading PIN/MPIN (not TOTP), totpCode = current 6-digit code."
+                        + hint + " Detail: " + detailSnippet);
+    }
+
+    private static String joinedThrowableMessages(Throwable e) {
+        StringJoiner j = new StringJoiner(" | ");
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t.getMessage() != null && !t.getMessage().isBlank()) {
+                j.add(t.getMessage());
+            }
+        }
+        if (j.length() > 0) {
+            return j.toString();
+        }
+        return e != null && e.getMessage() != null ? e.getMessage() : (e != null ? e.toString() : "unknown");
+    }
+
+    /** Parses {@code AngelOne login HTTP <digits>:} from SmartAPI client errors. */
+    private static OptionalInt parseAngelLoginHttpStatus(String m) {
+        if (m == null || m.isBlank()) {
+            return OptionalInt.empty();
+        }
+        String prefix = "AngelOne login HTTP ";
+        int i = m.indexOf(prefix);
+        if (i < 0) {
+            return OptionalInt.empty();
+        }
+        int start = i + prefix.length();
+        int end = start;
+        while (end < m.length() && Character.isDigit(m.charAt(end))) {
+            end++;
+        }
+        if (end == start) {
+            return OptionalInt.empty();
+        }
+        try {
+            return OptionalInt.of(Integer.parseInt(m.substring(start, end)));
+        } catch (NumberFormatException ex) {
+            return OptionalInt.empty();
+        }
     }
 
     /** Common helper: extract token from response, save session, return status */

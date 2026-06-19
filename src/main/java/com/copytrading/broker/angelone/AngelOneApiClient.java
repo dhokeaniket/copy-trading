@@ -61,7 +61,8 @@ public class AngelOneApiClient {
                 .bodyValue(body)
                 .retrieve()
                 .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
-                        .flatMap(e -> Mono.error(new RuntimeException("AngelOne login " + r.statusCode() + ": " + e))))
+                        .flatMap(errBody -> Mono.error(new RuntimeException(
+                                "AngelOne login HTTP " + r.statusCode().value() + ": " + errBody))))
                 .bodyToMono(Map.class)
                 .doOnNext(r -> log.info("ANGELONE_LOGIN_RESP keys={}", r.keySet()));
     }
@@ -85,7 +86,8 @@ public class AngelOneApiClient {
                 .bodyValue(body)
                 .retrieve()
                 .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
-                        .flatMap(e -> Mono.error(new RuntimeException("AngelOne token " + r.statusCode() + ": " + e))))
+                        .flatMap(errBody -> Mono.error(new RuntimeException(
+                                "AngelOne token HTTP " + r.statusCode().value() + ": " + errBody))))
                 .bodyToMono(Map.class);
     }
 
