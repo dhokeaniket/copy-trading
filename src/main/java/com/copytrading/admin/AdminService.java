@@ -469,7 +469,13 @@ public class AdminService {
         } else {
             flux = copyLogRepo.findAll();
         }
-        return flux.collectList().map(logs -> {
+        return Mono.zip(flux.collectList(), brokerAccountRepo.findAll().collectList()).map(tuple -> {
+            List<com.copytrading.logs.CopyLog> logs = tuple.getT1();
+            List<com.copytrading.broker.BrokerAccount> brokers = tuple.getT2();
+            Map<UUID, String> brokerMap = brokers.stream()
+                .filter(b -> b.getUserId() != null && b.getBrokerId() != null)
+                .collect(java.util.stream.Collectors.toMap(com.copytrading.broker.BrokerAccount::getUserId, com.copytrading.broker.BrokerAccount::getBrokerId, (a,b)->a));
+
             List<?> filtered = status != null
                     ? logs.stream().filter(l -> status.equalsIgnoreCase(l.getChildStatus()) || status.equalsIgnoreCase(l.getMasterStatus())).toList()
                     : logs;
@@ -493,6 +499,7 @@ public class AdminService {
                     map.put("status", cl.getChildStatus() != null ? cl.getChildStatus() : cl.getMasterStatus());
                     map.put("message", cl.getErrorMessage() != null ? cl.getErrorMessage() : cl.getSkipReason());
                     map.put("createdAt", cl.getCreatedAt() != null ? cl.getCreatedAt() : cl.getChildPlacedAt());
+                    map.put("broker", brokerMap.getOrDefault(cl.getChildId(), "N/A"));
                     return map;
                 }).toList();
             Map<String, Object> resp = new LinkedHashMap<>();
