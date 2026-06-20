@@ -187,4 +187,21 @@ public class DhanApiClient {
                 .header("access-token", accessToken)
                 .retrieve().bodyToMono(Map.class);
     }
+
+    public Mono<Map> getOrderDetails(String accessToken, String orderId) {
+        return apiClient.get()
+                .uri("/v2/orders/" + orderId)
+                .header("access-token", accessToken)
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Dhan getOrder " + r.statusCode() + ": " + e))))
+                .bodyToMono(String.class)
+                .map(body -> {
+                    Map<String, Object> map = new java.util.HashMap<>();
+                    try {
+                        map = objectMapper.readValue(body, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>(){});
+                    } catch (Exception e) {}
+                    return map;
+                });
+    }
 }

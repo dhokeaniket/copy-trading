@@ -50,17 +50,17 @@ public class EmailOtpService {
     public record OtpEntry(String otp, Instant expiresAt, Instant sentAt, int attempts) {}
 
     public EmailOtpService(ReactiveStringRedisTemplate redis,
-                           JavaMailSender mailSender,
+                           org.springframework.beans.factory.ObjectProvider<JavaMailSender> mailSenderProvider,
                            @Value("${spring.mail.username:}") String fromAddress,
                            @Value("${app.mail.from:${spring.mail.username:}}") String fromOverride,
                            @Value("${app.name:Ascentra Capital}") String appName) {
         this.redis = redis;
-        this.mailSender = mailSender;
+        this.mailSender = mailSenderProvider.getIfAvailable();
         String from = fromOverride != null && !fromOverride.isBlank() ? fromOverride : fromAddress;
         this.fromAddress = from;
         this.appName = appName;
         this.mailConfigured = from != null && !from.isBlank()
-                && mailSender != null;
+                && this.mailSender != null;
 
         boolean available = false;
         try {

@@ -119,16 +119,20 @@ public class AdminController {
     @GetMapping("/subscriptions")
     public Mono<Map<String, Object>> getSubscriptions(
             @RequestParam(required = false) UUID masterId,
-            @RequestParam(required = false) String status) {
-        return adminService.getSubscriptions(masterId, status);
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "50") int limit) {
+        return adminService.getSubscriptions(masterId, status, page, limit);
     }
 
     // 2.12 GET /admin/trade-logs
     @GetMapping("/trade-logs")
     public Mono<Map<String, Object>> getTradeLogs(
             @RequestParam(required = false) UUID userId,
-            @RequestParam(required = false) String status) {
-        return adminService.getTradeLogs(userId, status);
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "50") int limit) {
+        return adminService.getTradeLogs(userId, status, page, limit);
     }
 
     // 2.13 GET /admin/master-child-map
@@ -208,9 +212,29 @@ public class AdminController {
         return adminService.getPnL(dateFrom, dateTo);
     }
 
-    // 2.22 GET /admin/broker-status
+    // 2.21 GET /admin/broker-status
     @GetMapping("/broker-status")
     public Mono<List<Map<String, Object>>> getBrokerStatus() {
         return adminService.getBrokerStatus();
+    }
+
+    // 2.22 GET /admin/settings/risk
+    @GetMapping("/settings/risk")
+    public Mono<String> getGlobalRiskSettings() {
+        return adminService.getGlobalRiskSettings();
+    }
+
+    // 2.23 POST /admin/settings/risk
+    @PostMapping("/settings/risk")
+    @AdminAudit(action = "UPDATE_RISK_SETTINGS")
+    public Mono<Void> saveGlobalRiskSettings(@RequestBody String json) {
+        return adminService.saveGlobalRiskSettings(json);
+    }
+
+    // 2.24 POST /admin/impersonate/{userId}
+    @PostMapping("/impersonate/{userId}")
+    @AdminAudit(action = "IMPERSONATE_USER")
+    public Mono<Map<String, String>> impersonateUser(@PathVariable UUID userId) {
+        return adminService.impersonateUser(userId);
     }
 }

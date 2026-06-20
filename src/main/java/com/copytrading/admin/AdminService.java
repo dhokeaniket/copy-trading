@@ -26,6 +26,15 @@ public class AdminService {
 
     private static final Logger log = LoggerFactory.getLogger(AdminService.class);
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.copytrading.ws.TradeUpdatesHub tradeUpdatesHub;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.copytrading.admin.repository.SystemSettingRepository systemSettingRepo;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.copytrading.auth.JwtService jwtService;
+
     private final UserAccountRepository users;
     private final RefreshTokenRepository refreshTokens;
     private final AuthService authService;
@@ -39,6 +48,7 @@ public class AdminService {
     private final org.springframework.r2dbc.core.DatabaseClient databaseClient;
     private final KillSwitchCache killSwitchCache;
     private final com.copytrading.broker.BrokerAccountService brokerService;
+    private final AdminAlertService adminAlertService;
 
     public AdminService(UserAccountRepository users,
                         RefreshTokenRepository refreshTokens,
@@ -52,7 +62,8 @@ public class AdminService {
                         com.copytrading.logs.CopyLogRepository copyLogRepo,
                         org.springframework.r2dbc.core.DatabaseClient databaseClient,
                         KillSwitchCache killSwitchCache,
-                        com.copytrading.broker.BrokerAccountService brokerService) {
+                        com.copytrading.broker.BrokerAccountService brokerService,
+                        AdminAlertService adminAlertService) {
         this.users = users;
         this.refreshTokens = refreshTokens;
         this.authService = authService;
@@ -66,6 +77,7 @@ public class AdminService {
         this.databaseClient = databaseClient;
         this.killSwitchCache = killSwitchCache;
         this.brokerService = brokerService;
+        this.adminAlertService = adminAlertService;
     }
 
     @PostConstruct
@@ -436,33 +448,46 @@ public class AdminService {
 
     // 2.10 System health
     public Mono<Map<String, Object>> getSystemHealth() {
-        return copyLogRepo.findAll().collectList().map(copyLogs -> {
-            long avgLatency = 0;
-            if (!copyLogs.isEmpty()) {
-                avgLatency = (long) copyLogs.stream()
-                        .filter(c -> c.getLatencyMs() != null && c.getLatencyMs() > 0)
-                        .mapToLong(com.copytrading.logs.CopyLog::getLatencyMs)
-                        .average()
-                        .orElse(0.0);
-            }
-            Runtime rt = Runtime.getRuntime();
-            long maxMem = rt.maxMemory();
-            long usedMem = rt.totalMemory() - rt.freeMemory();
-            double memPct = (double) usedMem / maxMem * 100;
+        long startPing = System.currentTimeMillis();
+        return databaseClient.sql("SELECT 1").fetch().rowsUpdated()
+            .flatMap(rows -> copyLogRepo.findAll().collectList())
+            .map(copyLogs -> {
+                long dbLatency = System.currentTimeMillis() - startPing;
+                long avgLatency = 0;
+                if (!copyLogs.isEmpty()) {
+                    avgLatency = (long) copyLogs.stream()
+                            .filter(c -> c.getLatencyMs() != null && c.getLatencyMs() > 0)
+                            .mapToLong(com.copytrading.logs.CopyLog::getLatencyMs)
+                            .average()
+                            .orElse(0.0);
+                }
+                Runtime rt = Runtime.getRuntime();
+                long maxMem = rt.maxMemory();
+                long usedMem = rt.totalMemory() - rt.freeMemory();
+                double memPct = (double) usedMem / maxMem * 100;
 
-            Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("cpuUsage", Math.round(ProcessHandle.current().info().totalCpuDuration()
-                    .map(d -> d.toMillis() / 1000.0).orElse(0.0)));
-            resp.put("memoryUsage", Math.round(memPct * 100.0) / 100.0);
-            resp.put("avgTradeLatency", avgLatency);
-            resp.put("brokerStatus", List.of());
-            resp.put("activeWebSocketConnections", 0);
-            return resp;
-        });
+                int activeConnections = tradeUpdatesHub != null ? tradeUpdatesHub.getActiveConnections() : 0;
+
+                Map<String, Object> resp = new LinkedHashMap<>();
+                resp.put("cpuUsage", Math.round(ProcessHandle.current().info().totalCpuDuration()
+                        .map(d -> d.toMillis() / 1000.0).orElse(0.0)));
+                resp.put("memoryUsage", Math.round(memPct * 100.0) / 100.0);
+                resp.put("avgTradeLatency", avgLatency);
+                resp.put("brokerStatus", List.of());
+                resp.put("dbLatency", dbLatency);
+                resp.put("activeWebSocketConnections", activeConnections);
+                return resp;
+            })
+            .onErrorResume(e -> {
+                Map<String, Object> errResp = new LinkedHashMap<>();
+                errResp.put("status", "DOWN");
+                errResp.put("error", e.getMessage());
+                return Mono.just(errResp);
+            });
     }
 
     // 2.11 Get all subscriptions
-    public Mono<Map<String, Object>> getSubscriptions(UUID masterId, String status) {
+    public Mono<Map<String, Object>> getSubscriptions(UUID masterId, String status, int page, int limit) {
         Flux<com.copytrading.subscription.Subscription> flux;
         if (masterId != null) {
             flux = subscriptionRepo.findByMasterId(masterId);
@@ -470,14 +495,27 @@ public class AdminService {
             flux = subscriptionRepo.findAll();
         }
         return flux.collectList().map(subs -> {
+            List<com.copytrading.subscription.Subscription> filtered = subs;
+            if (status != null && !status.isBlank()) {
+                filtered = subs.stream().filter(s -> status.equals(s.getCopyingStatus())).collect(java.util.stream.Collectors.toList());
+            }
+            long total = filtered.size();
+            List<com.copytrading.subscription.Subscription> paginated = filtered.stream()
+                .skip((long) (page - 1) * limit)
+                .limit(limit)
+                .collect(java.util.stream.Collectors.toList());
+
             Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("subscriptions", subs);
+            resp.put("subscriptions", paginated);
+            resp.put("total", total);
+            resp.put("page", page);
+            resp.put("limit", limit);
             return resp;
         });
     }
 
     // 2.12 Get all trade logs
-    public Mono<Map<String, Object>> getTradeLogs(UUID userId, String status) {
+    public Mono<Map<String, Object>> getTradeLogs(UUID userId, String status, int page, int limit) {
         Flux<com.copytrading.logs.CopyLog> flux;
         if (userId != null) {
             flux = copyLogRepo.findByMasterId(userId);
@@ -544,8 +582,22 @@ public class AdminService {
                     map.put("broker", brokerMap.getOrDefault(cl.getChildId(), "N/A"));
                     return map;
                 }).toList();
+            
+            if (status != null && !status.isBlank()) {
+                mappedLogs = mappedLogs.stream().filter(m -> status.equals(m.get("status"))).collect(java.util.stream.Collectors.toList());
+            }
+
+            long total = mappedLogs.size();
+            List<Map<String, Object>> paginated = mappedLogs.stream()
+                .skip((long) (page - 1) * limit)
+                .limit(limit)
+                .collect(java.util.stream.Collectors.toList());
+
             Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("logs", mappedLogs);
+            resp.put("logs", paginated);
+            resp.put("total", total);
+            resp.put("page", page);
+            resp.put("limit", limit);
             return resp;
         });
     }
@@ -570,12 +622,12 @@ public class AdminService {
                             return c;
                         }))
                     .collectList()
-                    .map(children -> {
+                    .map(childList -> {
                         Map<String, Object> m = new LinkedHashMap<>();
                         m.put("masterId", master.getId().toString());
-                        m.put("masterName", master.getName());
-                        m.put("masterEmail", master.getEmail());
-                        m.put("children", children);
+                        m.put("name", master.getName());
+                        m.put("email", master.getEmail());
+                        m.put("children", childList);
                         return m;
                     })
             ).collectList().map(list -> {
@@ -587,7 +639,39 @@ public class AdminService {
         });
     }
 
-    // 2.14 Get admin audit logs
+    // 2.14 Get Global Risk Settings
+    public Mono<String> getGlobalRiskSettings() {
+        return systemSettingRepo.findById("global_risk_settings")
+                .map(com.copytrading.admin.model.SystemSetting::getValue)
+                .defaultIfEmpty("{}");
+    }
+
+    // 2.15 Save Global Risk Settings
+    public Mono<Void> saveGlobalRiskSettings(String json) {
+        return systemSettingRepo.findById("global_risk_settings")
+                .flatMap(setting -> {
+                    setting.setValue(json);
+                    setting.setNew(false);
+                    return systemSettingRepo.save(setting);
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    com.copytrading.admin.model.SystemSetting newSetting = new com.copytrading.admin.model.SystemSetting("global_risk_settings", json);
+                    newSetting.setNew(true);
+                    return systemSettingRepo.save(newSetting);
+                })).then();
+    }
+
+    // 2.16 View As User (Impersonation)
+    public Mono<Map<String, String>> impersonateUser(UUID userId) {
+        return users.findById(userId)
+                .switchIfEmpty(Mono.error(new IllegalArgumentException("User not found")))
+                .map(user -> {
+                    String token = jwtService.generateImpersonationToken(user.getId(), user.getEmail());
+                    return Map.of("accessToken", token);
+                });
+    }
+
+    // 2.17 Get admin audit logs
     public Mono<Map<String, Object>> getAuditLogs(int page, int limit) {
         int offset = (page - 1) * limit;
         String selectQuery = """
@@ -650,12 +734,16 @@ public class AdminService {
             });
     }
 
-    // 2.16 Toggle Kill Switch
+    // 2.16 POST /admin/kill-switch
     public Mono<Void> toggleKillSwitch(boolean enable) {
+        killSwitchCache.setEnabled(enable);
+        adminAlertService.sendAdminAlert(
+                "GLOBAL KILL SWITCH " + (enable ? "ACTIVATED" : "DEACTIVATED"),
+                "The platform-wide kill switch has been " + (enable ? "turned ON. All new copy trades will be blocked." : "turned OFF. Normal trading has resumed.")
+        );
         return databaseClient.sql("UPDATE system_settings SET value = :val WHERE key = 'kill_switch'")
             .bind("val", String.valueOf(enable))
-            .then()
-            .doOnSuccess(v -> killSwitchCache.setEnabled(enable));
+            .then();
     }
 
     // 2.17 Get Positions for Force Square-Off
@@ -754,47 +842,140 @@ public class AdminService {
         });
     }
 
-    // 2.19 Order Trace
+    // 2.19 Order Trace (ADM-17)
     public Mono<Map<String, Object>> getOrderTrace(String traceId) {
         if (traceId == null || traceId.isBlank()) return Mono.just(Map.of());
 
-        String masterSql = """
-            SELECT t.id, t.broker_order_id, u.name as master_user, b.broker_id as master_broker,
-                   t.instrument as symbol, t.transaction_type as side, t.quantity, t.order_type,
-                   t.product, t.exchange, t.placed_at, t.status, t.average_price, t.status_message
-            FROM trades t
-            LEFT JOIN users u ON t.user_id = u.id
-            LEFT JOIN broker_accounts b ON t.broker_account_id = b.id
-            WHERE t.id::text = :traceId OR t.broker_order_id = :traceId
+        // We use copy_logs as the source of truth because it binds master and children via copy_group_id
+        String traceBaseSql = """
+            SELECT c.copy_group_id
+            FROM copy_logs c
+            WHERE c.copy_group_id = :traceId OR c.master_trade_id = :traceId OR c.child_broker_order_id = :traceId
             LIMIT 1
             """;
 
-        String childSql = """
-            SELECT c.child_id, u.name as child_user, b.broker_id as child_broker,
-                   c.qty as qty_copied, c.child_status as status, c.created_at as executed_at,
-                   c.error_message, c.skip_reason
-            FROM copy_logs c
-            LEFT JOIN users u ON c.child_id = u.id
-            LEFT JOIN broker_accounts b ON b.user_id = c.child_id
-            WHERE c.master_trade_id = :traceId OR c.master_id::text = :traceId
-            """;
+        return databaseClient.sql(traceBaseSql).bind("traceId", traceId).map(row -> row.get("copy_group_id", String.class)).first()
+            .defaultIfEmpty(traceId) // fallback to whatever was passed
+            .flatMap(resolvedGroupId -> {
+                String masterSql = """
+                    SELECT c.master_trade_id as broker_order_id, u.name as master_user,
+                           c.symbol, c.trade_type as side, c.qty as quantity, c.order_type,
+                           c.product, c.master_placed_at as placed_at, c.master_status as status, c.price
+                    FROM copy_logs c
+                    LEFT JOIN users u ON c.master_id = u.id
+                    WHERE c.copy_group_id = :groupId
+                    LIMIT 1
+                    """;
 
-        Mono<Map<String, Object>> masterMono = databaseClient.sql(masterSql)
-            .bind("traceId", traceId)
-            .fetch().first()
-            .defaultIfEmpty(Map.of());
+                String childSql = """
+                    SELECT c.child_id, u.name as child_user, b.broker_id as child_broker,
+                           c.child_qty, c.qty as master_qty, c.child_status as status, c.child_placed_at as executed_at,
+                           c.child_broker_order_id, c.latency_ms, c.entry_price, c.filled_qty,
+                           c.error_message, c.skip_reason
+                    FROM copy_logs c
+                    LEFT JOIN users u ON c.child_id = u.id
+                    LEFT JOIN broker_accounts b ON b.user_id = c.child_id
+                    WHERE c.copy_group_id = :groupId
+                    """;
 
-        Mono<List<Map<String, Object>>> childrenMono = databaseClient.sql(childSql)
-            .bind("traceId", traceId)
-            .fetch().all().collectList();
+                Mono<Map<String, Object>> masterMono = databaseClient.sql(masterSql)
+                    .bind("groupId", resolvedGroupId)
+                    .fetch().first()
+                    .defaultIfEmpty(Map.of());
 
-        return Mono.zip(masterMono, childrenMono).map(tuple -> {
-            Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("traceId", traceId);
-            resp.put("masterOrder", tuple.getT1());
-            resp.put("childCopies", tuple.getT2());
-            return resp;
-        });
+                Mono<List<Map<String, Object>>> childrenMono = databaseClient.sql(childSql)
+                    .bind("groupId", resolvedGroupId)
+                    .fetch().all().collectList();
+
+                return Mono.zip(masterMono, childrenMono).map(tuple -> {
+                    Map<String, Object> masterObj = tuple.getT1();
+                    List<Map<String, Object>> childrenList = tuple.getT2();
+
+                    // Formatting child copies
+                    List<Map<String, Object>> formattedChildren = new ArrayList<>();
+                    List<Map<String, Object>> checksList = new ArrayList<>();
+                    int copied = 0, skipped = 0, failed = 0;
+                    long totalLatency = 0;
+                    int latencyCount = 0;
+
+                    for (Map<String, Object> c : childrenList) {
+                        Map<String, Object> fc = new LinkedHashMap<>();
+                        fc.put("childUser", c.get("child_user"));
+                        fc.put("childBroker", c.get("child_broker"));
+                        
+                        Number cQty = (Number) c.get("child_qty");
+                        Number mQty = (Number) c.get("master_qty");
+                        if (cQty != null && mQty != null && mQty.doubleValue() > 0) {
+                            fc.put("scalingFactor", String.format("%.2fx", cQty.doubleValue() / mQty.doubleValue()));
+                        } else {
+                            fc.put("scalingFactor", "N/A");
+                        }
+                        
+                        fc.put("quantityCopied", cQty);
+                        fc.put("brokerOrderId", c.get("child_broker_order_id"));
+                        
+                        String status = (String) c.get("status");
+                        fc.put("status", status);
+                        fc.put("executedAt", c.get("executed_at"));
+                        fc.put("price", c.get("entry_price"));
+                        
+                        Number latency = (Number) c.get("latency_ms");
+                        fc.put("latencyMs", latency);
+                        
+                        // Calculate slippage if possible
+                        Number masterPrice = (Number) masterObj.get("price");
+                        Number childPrice = (Number) c.get("entry_price");
+                        if (masterPrice != null && childPrice != null && masterPrice.doubleValue() > 0) {
+                            double slippage = childPrice.doubleValue() - masterPrice.doubleValue();
+                            fc.put("slippage", String.format("%.2f", slippage));
+                        } else {
+                            fc.put("slippage", "N/A");
+                        }
+
+                        String skipReason = (String) c.get("skip_reason");
+                        String errorMsg = (String) c.get("error_message");
+                        String reason = skipReason != null ? skipReason : errorMsg;
+                        fc.put("reason", reason);
+
+                        formattedChildren.add(fc);
+
+                        // Checks logic
+                        if (reason != null && (reason.contains("risk") || reason.contains("guard") || reason.contains("limit") || reason.contains("scale"))) {
+                            checksList.add(Map.of(
+                                "childUser", c.get("child_user"),
+                                "checkType", skipReason != null ? "PRE-TRADE CHECK" : "POST-TRADE GUARD",
+                                "result", "FAILED",
+                                "ruleTriggered", reason
+                            ));
+                        }
+
+                        // Summary counts
+                        if ("SUCCESS".equalsIgnoreCase(status) || "PLACED".equalsIgnoreCase(status) || "COMPLETED".equalsIgnoreCase(status)) copied++;
+                        else if ("SKIPPED".equalsIgnoreCase(status)) skipped++;
+                        else failed++;
+
+                        if (latency != null) {
+                            totalLatency += latency.longValue();
+                            latencyCount++;
+                        }
+                    }
+
+                    Map<String, Object> summary = new LinkedHashMap<>();
+                    summary.put("totalChildren", childrenList.size());
+                    summary.put("copied", copied);
+                    summary.put("skipped", skipped);
+                    summary.put("failed", failed);
+                    summary.put("averageLatencyMs", latencyCount > 0 ? (totalLatency / latencyCount) : 0);
+
+                    Map<String, Object> resp = new LinkedHashMap<>();
+                    resp.put("traceId", resolvedGroupId);
+                    resp.put("masterOrder", masterObj);
+                    resp.put("checks", checksList);
+                    resp.put("childCopies", formattedChildren);
+                    resp.put("summary", summary);
+                    return resp;
+                });
+            });
     }
 
     // 2.20 Failed Copies Monitor
