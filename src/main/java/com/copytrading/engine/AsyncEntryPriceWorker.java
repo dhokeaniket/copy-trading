@@ -87,11 +87,11 @@ public class AsyncEntryPriceWorker {
             case "DHAN":
                 return dhanClient.getOrderDetails(token, orderId);
             case "FYERS": {
-                String fyersAuth = platformConfig.getFyers().getApiKey() + ":" + token;
+                String fyersAuth = account.getApiKey() + ":" + token;
                 return fyersClient.getOrderDetails(fyersAuth, orderId);
             }
             case "ANGELONE": {
-                String apiKey = platformConfig.getAngelone().getApiKey();
+                String apiKey = account.getApiKey();
                 return angelOneClient.getOrderDetails(apiKey, token, orderId);
             }
             default:
