@@ -21,9 +21,21 @@ import java.util.UUID;
 public class AdminController {
 
     private final AdminService adminService;
+    private final org.springframework.r2dbc.core.DatabaseClient databaseClient;
 
-    public AdminController(AdminService adminService) {
+    public AdminController(AdminService adminService, org.springframework.r2dbc.core.DatabaseClient databaseClient) {
         this.adminService = adminService;
+        this.databaseClient = databaseClient;
+    }
+
+    @GetMapping("/fix-db")
+    @Operation(summary = "TEMPORARY FIX", description = "Executes missing schema updates")
+    public Mono<String> fixDatabase() {
+        String sql = "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS entry_price NUMERIC; " +
+                     "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS filled_qty INTEGER; " +
+                     "ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS invested_value NUMERIC; " +
+                     "CREATE INDEX IF NOT EXISTS idx_copy_logs_pending_entry ON copy_logs(child_status) WHERE child_status = 'PLACED' AND entry_price IS NULL;";
+        return databaseClient.sql(sql).then().thenReturn("Database fixed successfully! 500 Errors should be gone now.");
     }
 
     // 2.1 GET /admin/users
