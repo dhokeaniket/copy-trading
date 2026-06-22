@@ -71,6 +71,15 @@ public class CopyLog {
     @Column("trigger_price")
     private Double triggerPrice;
 
+    @Column("entry_price")
+    private Double entryPrice;
+
+    @Column("filled_qty")
+    private Integer filledQty;
+
+    @Column("invested_value")
+    private Double investedValue;
+
     @Column("created_at")
     private Instant createdAt;
 
@@ -120,4 +129,11 @@ public class CopyLog {
     public void setTriggerPrice(Double triggerPrice) { this.triggerPrice = triggerPrice; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    
+    public Double getEntryPrice() { return entryPrice; }
+    public void setEntryPrice(Double entryPrice) { this.entryPrice = entryPrice; }
+    public Integer getFilledQty() { return filledQty; }
+    public void setFilledQty(Integer filledQty) { this.filledQty = filledQty; }
+    public Double getInvestedValue() { return investedValue; }
+    public void setInvestedValue(Double investedValue) { this.investedValue = investedValue; }
 }

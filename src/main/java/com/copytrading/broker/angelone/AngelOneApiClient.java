@@ -158,6 +158,23 @@ public class AngelOneApiClient {
                 .bodyToMono(Map.class);
     }
 
+    public Mono<Map> getOrderDetails(String apiKey, String jwtToken, String orderId) {
+        return getOrders(apiKey, jwtToken)
+                .map(res -> {
+                    if (res.get("data") instanceof java.util.List) {
+                        java.util.List<Map<String, Object>> orders = (java.util.List<Map<String, Object>>) res.get("data");
+                        for (Map<String, Object> order : orders) {
+                            if (orderId.equals(order.get("orderid")) || orderId.equals(order.get("uniqueorderid"))) {
+                                Map<String, Object> wrap = new java.util.HashMap<>();
+                                wrap.put("data", order);
+                                return wrap;
+                            }
+                        }
+                    }
+                    return java.util.Collections.emptyMap();
+                });
+    }
+
     /**
      * Get trade book.
      * GET /rest/secure/angelbroking/order/v1/getTradeBook

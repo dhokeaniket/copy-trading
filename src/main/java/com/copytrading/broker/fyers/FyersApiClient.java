@@ -139,6 +139,16 @@ public class FyersApiClient {
                 .retrieve().bodyToMono(Map.class);
     }
 
+    public Mono<Map> getOrderDetails(String accessToken, String orderId) {
+        return client.get()
+                .uri("/orders?id=" + orderId)
+                .header("Authorization", accessToken)
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Fyers getOrder " + r.statusCode() + ": " + e))))
+                .bodyToMono(Map.class);
+    }
+
     private static String sha256Hex(String input) {
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256").digest(input.getBytes(StandardCharsets.UTF_8));

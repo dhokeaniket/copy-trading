@@ -48,6 +48,20 @@ public class JwtService {
                 .compact();
     }
 
+    public String generateImpersonationToken(UUID userId, String email) {
+        Instant now = Instant.now();
+        return Jwts.builder()
+                .setSubject(userId.toString())
+                .setIssuer(issuer)
+                .setIssuedAt(Date.from(now))
+                .setExpiration(Date.from(now.plusSeconds(accessTokenExpSeconds)))
+                .claim("email", email)
+                .claim("role", "USER")
+                .claim("impersonated", true)
+                .signWith(key, SignatureAlgorithm.HS256)
+                .compact();
+    }
+
     /** Short-lived token (5 min) that only allows 2FA verification. */
     public String generatePending2FAToken(UUID userId, String role) {
         Instant now = Instant.now();

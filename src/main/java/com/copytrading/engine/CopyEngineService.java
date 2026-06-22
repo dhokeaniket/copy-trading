@@ -89,6 +89,7 @@ public class CopyEngineService {
     private final EnginePollingProperties pollingProperties;
     private final BrokerRateLimiter rateLimiter;
     private final SubscriptionCache subscriptionCache;
+    private final com.copytrading.config.KillSwitchCache killSwitchCache;
 
     public CopyEngineService(SubscriptionRepository subs,
                              BrokerAccountRepository brokerRepo,
@@ -117,7 +118,8 @@ public class CopyEngineService {
                              BrokerCredentials credentials,
                              EnginePollingProperties pollingProperties,
                              BrokerRateLimiter rateLimiter,
-                             SubscriptionCache subscriptionCache) {
+                             SubscriptionCache subscriptionCache,
+                             com.copytrading.config.KillSwitchCache killSwitchCache) {
         this.subs = subs;
         this.brokerRepo = brokerRepo;
         this.brokerService = brokerService;
@@ -146,6 +148,7 @@ public class CopyEngineService {
         this.pollingProperties = pollingProperties;
         this.rateLimiter = rateLimiter;
         this.subscriptionCache = subscriptionCache;
+        this.killSwitchCache = killSwitchCache;
     }
 
     /**
@@ -158,6 +161,13 @@ public class CopyEngineService {
         String copyGroupId = UUID.randomUUID().toString();
         String masterTriggeredAt = engineReceivedAt.toString();
         String orderKey = generateOrderKey(req.getSymbol(), req.getQty());
+
+        if (killSwitchCache.isEnabled()) {
+            log.warn("COPY_ENGINE_BLOCKED Kill switch is active. master={} symbol={}", masterId, req.getSymbol());
+            return Mono.just(Map.<String, Object>of(
+                    "message", "Kill switch is active. Copy trading is temporarily paused.",
+                    "blocked", true));
+        }
 
         // Duplicate signal detection.
         // Prefer the master broker's native order id (order_id / exchange_order_id) as the dedup basis:

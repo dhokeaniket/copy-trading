@@ -141,4 +141,13 @@ public class UpstoxApiClient {
                 .header("Authorization", "Bearer " + accessToken)
                 .retrieve().bodyToMono(Map.class);
     }
+    public Mono<Map> getOrderDetails(String accessToken, String orderId) {
+        return client.get()
+                .uri("/v2/order/details?order_id=" + orderId)
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve()
+                .onStatus(s -> s.isError(), r -> r.bodyToMono(String.class)
+                        .flatMap(e -> Mono.error(new RuntimeException("Upstox getOrder " + r.statusCode() + ": " + e))))
+                .bodyToMono(Map.class);
+    }
 }

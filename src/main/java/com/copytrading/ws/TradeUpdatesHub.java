@@ -15,5 +15,9 @@ public class TradeUpdatesHub {
   public Flux<String> stream() {
     return sink.asFlux();
   }
+
+  public int getActiveConnections() {
+    return sink.currentSubscriberCount();
+  }
 }
 

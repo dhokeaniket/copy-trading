@@ -23,8 +23,13 @@ import java.util.UUID;
 public class RiskService {
 
     private static final Logger log = LoggerFactory.getLogger(RiskService.class);
-
     private final RiskRuleRepository riskRepo;
+    
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.copytrading.admin.repository.SystemSettingRepository systemSettingRepo;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final CopyLogRepository copyLogs;
     private final TradeRepository trades;
     private final BrokerAccountService brokerService;
@@ -49,6 +54,7 @@ public class RiskService {
      */
     public Mono<String> checkRiskLimits(UUID childId, UUID brokerAccountId) {
         return riskRepo.findByUserId(childId)
+                .switchIfEmpty(getGlobalRiskRule())
                 .flatMap(rule -> {
                     if (rule.isCopyPaused()) {
                         return Mono.just("COPY_PAUSED: Copy trading is paused");
@@ -81,6 +87,23 @@ public class RiskService {
                             });
                 })
                 .defaultIfEmpty("");
+    }
+
+    private Mono<RiskRule> getGlobalRiskRule() {
+        return systemSettingRepo.findById("global_risk_settings")
+            .map(setting -> {
+                try {
+                    return objectMapper.readValue(setting.getValue(), RiskRule.class);
+                } catch (Exception e) {
+                    log.warn("Failed to parse global risk settings: {}", e.getMessage());
+                    RiskRule r = new RiskRule();
+                    r.setMaxTradesPerDay(100);
+                    r.setMaxOpenPositions(20);
+                    r.setMaxCapitalExposure(1000000.0);
+                    return r;
+                }
+            })
+            .defaultIfEmpty(new RiskRule());
     }
 
     private Mono<String> checkMarginUtilization(UUID childId, UUID brokerAccountId, RiskRule rule) {

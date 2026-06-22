@@ -18,6 +18,9 @@ public interface CopyLogRepository extends ReactiveCrudRepository<CopyLog, Long>
 
     Flux<CopyLog> findByCopyGroupId(String copyGroupId);
 
+    @Query("SELECT * FROM copy_logs WHERE child_status = :status AND entry_price IS NULL AND child_broker_order_id IS NOT NULL")
+    Flux<CopyLog> findPendingForEntryPrice(String status);
+
     Mono<CopyLog> findByChildBrokerOrderId(String childBrokerOrderId);
 
     Flux<CopyLog> findByMasterTradeId(String masterTradeId);
