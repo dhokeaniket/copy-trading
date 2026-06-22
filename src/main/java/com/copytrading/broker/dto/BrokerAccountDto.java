@@ -90,5 +90,5 @@ public class BrokerAccountDto {
     public String getProxyHost() { return proxyHost; }
     public Integer getProxyPort() { return proxyPort; }
     public boolean isProxyConfigured() { return proxyConfigured; }
-    public boolean isCopyEnable() { return isCopyEnable; }
+    public boolean getIsCopyEnable() { return isCopyEnable; }
 }
