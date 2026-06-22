@@ -25,6 +25,7 @@ public class BrokerAccountDto {
     private String proxyHost;
     private Integer proxyPort;
     private boolean proxyConfigured;
+    private boolean isCopyEnable;
 
     public static BrokerAccountDto from(BrokerAccount a) {
         BrokerAccountDto d = new BrokerAccountDto();
@@ -47,6 +48,7 @@ public class BrokerAccountDto {
         d.proxyHost = a.getProxyHost();
         d.proxyPort = a.getProxyPort();
         d.proxyConfigured = a.hasProxy();
+        d.isCopyEnable = a.getIsCopyEnable() != null ? a.getIsCopyEnable() : true;
         return d;
     }
 
@@ -88,4 +90,5 @@ public class BrokerAccountDto {
     public String getProxyHost() { return proxyHost; }
     public Integer getProxyPort() { return proxyPort; }
     public boolean isProxyConfigured() { return proxyConfigured; }
+    public boolean isCopyEnable() { return isCopyEnable; }
 }

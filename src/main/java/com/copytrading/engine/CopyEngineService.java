@@ -252,26 +252,40 @@ public class CopyEngineService {
                                 return Mono.just(r);
                             });
                 });
+        })
+        .onErrorResume(e -> {
+            if ("MASTER_COPY_DISABLED".equals(e.getMessage())) {
+                log.info("COPY_ENGINE_SKIPPED master={} symbol={} reason=master copy disabled", masterId, req.getSymbol());
+                return Mono.just(Map.<String, Object>of(
+                        "message", "Master broker copy is disabled. Copy trading paused for this broker.",
+                        "skipped", true));
+            }
+            return Mono.error(e);
         });
     }
 
-    /** Uses masterBrokerId on the request, else the master's active account (same as before — no random broker pick). */
     private Mono<CopyTradeRequest> resolveMasterBroker(UUID masterId, CopyTradeRequest req) {
-        if (req.getMasterBrokerId() != null && !req.getMasterBrokerId().isBlank()) {
-            return Mono.just(req);
-        }
+        // If master broker is already provided but we still need to check isCopyEnable, 
+        // we should ideally fetch the account. But for simplicity and safety, we fetch the active account.
         return activeAccountRepo.findByMasterId(masterId)
                 .next()
                 .flatMap(active -> brokerRepo.findById(active.getBrokerAccountId()))
-                .doOnNext(acc -> {
+                .flatMap(acc -> {
+                    if (acc.getIsCopyEnable() != null && !acc.getIsCopyEnable()) {
+                        return Mono.error(new RuntimeException("MASTER_COPY_DISABLED"));
+                    }
                     req.setMasterBrokerId(acc.getBrokerId());
                     log.info("COPY_MASTER_BROKER_RESOLVED master={} broker={} accountId={}",
                             masterId, acc.getBrokerId(), acc.getId());
+                    return Mono.just(req);
                 })
-                .switchIfEmpty(Mono.fromRunnable(() ->
-                        log.warn("COPY_MASTER_BROKER_UNKNOWN master={} — set active master account; will infer symbol format from symbol",
-                                masterId)))
-                .thenReturn(req);
+                .switchIfEmpty(Mono.defer(() -> {
+                    if (req.getMasterBrokerId() != null && !req.getMasterBrokerId().isBlank()) {
+                        return Mono.just(req);
+                    }
+                    log.warn("COPY_MASTER_BROKER_UNKNOWN master={} — set active master account; will infer symbol format from symbol", masterId);
+                    return Mono.just(req);
+                }));
     }
 
     /**

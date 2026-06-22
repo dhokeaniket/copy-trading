@@ -64,6 +64,9 @@ public class BrokerAccount {
     @Column("ip_slot")
     private int ipSlot;
 
+    @Column("is_copy_enable")
+    private Boolean isCopyEnable;
+
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
     public UUID getUserId() { return userId; }
@@ -90,6 +93,8 @@ public class BrokerAccount {
     public void setLinkedAt(Instant linkedAt) { this.linkedAt = linkedAt; }
     public int getIpSlot() { return ipSlot; }
     public void setIpSlot(int ipSlot) { this.ipSlot = ipSlot; }
+    public Boolean getIsCopyEnable() { return isCopyEnable; }
+    public void setIsCopyEnable(Boolean isCopyEnable) { this.isCopyEnable = isCopyEnable; }
     public String getProxyHost() { return proxyHost; }
     public void setProxyHost(String proxyHost) { this.proxyHost = proxyHost; }
     public Integer getProxyPort() { return proxyPort; }

@@ -298,6 +298,16 @@ public class BrokerAccountService {
                 });
     }
 
+    public Mono<BrokerAccountDto> toggleCopyEnable(UUID accountId, UUID userId, boolean isCopyEnable) {
+        return repo.findById(accountId)
+                .filter(a -> a.getUserId().equals(userId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found")))
+                .flatMap(a -> {
+                    a.setIsCopyEnable(isCopyEnable);
+                    return repo.save(a).map(BrokerAccountDto::from);
+                });
+    }
+
     /** Login UI config for reconnect — same options as GET /api/v1/brokers (e.g. Groww accessToken + apiKeyWithTotp). */
     public Mono<Map<String, Object>> getLoginOptions(UUID accountId, UUID userId) {
         return repo.findById(accountId)

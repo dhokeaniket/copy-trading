@@ -135,6 +135,18 @@ public class BrokerController {
         return service.updateAccount(accountId, UUID.fromString(userId), req);
     }
 
+    @Operation(summary = "Toggle copy enable for broker account")
+    @PatchMapping(value = "/api/v1/brokers/accounts/{accountId}/copy-enable", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<BrokerAccountDto> toggleCopyEnable(@PathVariable UUID accountId,
+                                                   @AuthenticationPrincipal String userId,
+                                                   @RequestBody Map<String, Boolean> body) {
+        Boolean isCopyEnable = body.get("isCopyEnable");
+        if (isCopyEnable == null) {
+            isCopyEnable = true;
+        }
+        return service.toggleCopyEnable(accountId, UUID.fromString(userId), isCopyEnable);
+    }
+
     // 3.6 DELETE /brokers/accounts/:accountId
     @DeleteMapping("/api/v1/brokers/accounts/{accountId}")
     public Mono<Map<String, String>> deleteAccount(@PathVariable UUID accountId,
