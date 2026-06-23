@@ -320,6 +320,7 @@ public class OrderPollingService {
                     "\",\"qty\":" + qty + ",\"broker\":\"" + account.getBrokerId() + "\"}");
 
             CopyTradeRequest req = canonicalMapper.toCopyTradeRequest(canonical);
+            req.setMasterBrokerId(account.getBrokerId());
 
             copyEngine.copyTrade(masterId, req)
                     .subscribe(

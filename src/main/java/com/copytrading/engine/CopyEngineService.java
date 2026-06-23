@@ -265,25 +265,22 @@ public class CopyEngineService {
     }
 
     private Mono<CopyTradeRequest> resolveMasterBroker(UUID masterId, CopyTradeRequest req) {
-        // If master broker is already provided but we still need to check isCopyEnable, 
-        // we should ideally fetch the account. But for simplicity and safety, we fetch the active account.
+        // If masterBrokerId already set by the poller, just pass through.
+        if (req.getMasterBrokerId() != null && !req.getMasterBrokerId().isBlank()) {
+            return Mono.just(req);
+        }
+        // Try to resolve from master_active_accounts (legacy fallback for manual copies)
         return activeAccountRepo.findByMasterId(masterId)
                 .next()
                 .flatMap(active -> brokerRepo.findById(active.getBrokerAccountId()))
                 .flatMap(acc -> {
-                    if (acc.getIsCopyEnable() != null && !acc.getIsCopyEnable()) {
-                        return Mono.error(new RuntimeException("MASTER_COPY_DISABLED"));
-                    }
                     req.setMasterBrokerId(acc.getBrokerId());
                     log.info("COPY_MASTER_BROKER_RESOLVED master={} broker={} accountId={}",
                             masterId, acc.getBrokerId(), acc.getId());
                     return Mono.just(req);
                 })
                 .switchIfEmpty(Mono.defer(() -> {
-                    if (req.getMasterBrokerId() != null && !req.getMasterBrokerId().isBlank()) {
-                        return Mono.just(req);
-                    }
-                    log.warn("COPY_MASTER_BROKER_UNKNOWN master={} — set active master account; will infer symbol format from symbol", masterId);
+                    log.warn("COPY_MASTER_BROKER_UNKNOWN master={} — will infer symbol format from symbol", masterId);
                     return Mono.just(req);
                 }));
     }
@@ -615,7 +612,15 @@ public class CopyEngineService {
                         fyersSym = ("BSE".equals(exch) ? "BSE:" : "NSE:") + sym;
                     }
                 } else {
-                    fyersSym = ("BSE".equals(exch) ? "BSE:" : "NSE:") + sym + "-EQ";
+                    // Strip any existing -EQ suffix and NSE:/BSE: prefix before adding Fyers format (NSE:SYMBOL-EQ)
+                    String cleanSym = sym;
+                    if (cleanSym.startsWith("NSE:") || cleanSym.startsWith("BSE:")) {
+                        cleanSym = cleanSym.substring(4);
+                    }
+                    if (cleanSym.toUpperCase().endsWith("-EQ")) {
+                        cleanSym = cleanSym.substring(0, cleanSym.length() - 3);
+                    }
+                    fyersSym = ("BSE".equals(exch) ? "BSE:" : "NSE:") + cleanSym + "-EQ";
                 }
                 String fyersProd = BrokerFieldTranslator.product(prod, "FYERS", isFnO);
                 int fyersType = Integer.parseInt(BrokerFieldTranslator.orderType(oType, "FYERS"));
@@ -777,7 +782,9 @@ public class CopyEngineService {
                             "Angel One SmartAPI apiKey missing on child account — user must PUT apiKey from their Angel SmartAPI app."));
                 }
                 String angelProd = BrokerFieldTranslator.product(prod, "ANGELONE", isFnO);
-                String angelSym = isFnO ? sym : sym + "-EQ";
+                // Strip any existing -EQ suffix before adding Angel One format (SYMBOL-EQ)
+                String cleanSymForAngel = sym.toUpperCase().endsWith("-EQ") ? sym.substring(0, sym.length() - 3) : sym;
+                String angelSym = isFnO ? sym : cleanSymForAngel + "-EQ";
                 String angelToken = instruments.getAngelToken(angelSym, isFnO);
                 if (angelToken == null) angelToken = instruments.getAngelToken(sym, isFnO);
                 if (angelToken == null || angelToken.isBlank()) {
