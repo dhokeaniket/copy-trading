@@ -15,16 +15,16 @@ public class RiskRule {
     private UUID userId;
 
     @Column("max_trades_per_day")
-    private int maxTradesPerDay;
+    private int maxTradesPerDay = 50;
 
     @Column("max_open_positions")
-    private int maxOpenPositions;
+    private int maxOpenPositions = 20;
 
     @Column("max_capital_exposure")
-    private double maxCapitalExposure;
+    private double maxCapitalExposure = 80.0;
 
     @Column("margin_check_enabled")
-    private boolean marginCheckEnabled;
+    private boolean marginCheckEnabled = true;
 
     @Column("updated_at")
     private Instant updatedAt;
