@@ -782,8 +782,14 @@ public class CopyEngineService {
                             "Angel One SmartAPI apiKey missing on child account — user must PUT apiKey from their Angel SmartAPI app."));
                 }
                 String angelProd = BrokerFieldTranslator.product(prod, "ANGELONE", isFnO);
-                // Strip any existing -EQ suffix before adding Angel One format (SYMBOL-EQ)
-                String cleanSymForAngel = sym.toUpperCase().endsWith("-EQ") ? sym.substring(0, sym.length() - 3) : sym;
+                // Strip any existing NSE:/BSE: prefix and -EQ suffix before adding Angel One format (SYMBOL-EQ)
+                String cleanSymForAngel = sym;
+                if (cleanSymForAngel.startsWith("NSE:") || cleanSymForAngel.startsWith("BSE:")) {
+                    cleanSymForAngel = cleanSymForAngel.substring(4);
+                }
+                if (cleanSymForAngel.toUpperCase().endsWith("-EQ")) {
+                    cleanSymForAngel = cleanSymForAngel.substring(0, cleanSymForAngel.length() - 3);
+                }
                 String angelSym = isFnO ? sym : cleanSymForAngel + "-EQ";
                 String angelToken = instruments.getAngelToken(angelSym, isFnO);
                 if (angelToken == null) angelToken = instruments.getAngelToken(sym, isFnO);
