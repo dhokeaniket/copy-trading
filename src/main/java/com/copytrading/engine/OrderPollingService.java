@@ -173,10 +173,13 @@ public class OrderPollingService {
     public void pollMasterOrders() {
         if (!pollingEnabled || resetInProgress) return;
 
-        activeAccountRepo.findAll()
-                .flatMap(activeAccount -> pollSingleMaster(activeAccount)
+        // Poll ALL broker accounts where session is active AND is_copy_enable=true
+        // for any user who is a master (has active subscribers).
+        // This allows masters with multiple broker accounts to have all of them polled.
+        brokerRepo.findPollableMasterAccounts()
+                .flatMap(account -> pollBrokerAccount(account)
                         .onErrorResume(e -> {
-                            log.warn("POLL_ERROR master={} error={}", activeAccount.getMasterId(), e.getMessage());
+                            log.warn("POLL_ERROR master={} broker={} error={}", account.getUserId(), account.getBrokerId(), e.getMessage());
                             return Mono.empty();
                         }))
                 .subscribe();
@@ -244,6 +247,30 @@ public class OrderPollingService {
                             log.debug("POLL_ORDERS_FAIL master={} broker={} error={}", masterId, account.getBrokerId(), e.getMessage());
                             return Mono.just(0);
                         }))
+                .then();
+    }
+
+    /**
+     * Poll a single broker account directly (used by the new multi-account polling).
+     * The account's user_id IS the master_id.
+     */
+    private Mono<Void> pollBrokerAccount(BrokerAccount account) {
+        UUID masterId = account.getUserId();
+        if (snapshotInProgressMasters.contains(masterId)) {
+            return Mono.empty();
+        }
+        return brokerService.getOrders(account.getId(), masterId)
+                .map(resp -> {
+                    List<?> ordersList = extractOrdersList(resp.get("orders"));
+                    if (ordersList != null && !ordersList.isEmpty()) {
+                        return processOrders(masterId, account, ordersList);
+                    }
+                    return 0;
+                })
+                .onErrorResume(e -> {
+                    log.debug("POLL_ORDERS_FAIL master={} broker={} error={}", masterId, account.getBrokerId(), e.getMessage());
+                    return Mono.just(0);
+                })
                 .then();
     }
 
