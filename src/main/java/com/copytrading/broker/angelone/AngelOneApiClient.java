@@ -2,6 +2,7 @@ package com.copytrading.broker.angelone;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
@@ -23,6 +24,9 @@ import java.util.Map;
  *   Body: { variety, tradingsymbol, symboltoken, transactiontype, exchange,
  *           ordertype, producttype, duration, price, squareoff, stoploss, quantity, triggerprice }
  *   Response: { data: { orderid, uniqueorderid } }
+ *
+ * Note: X-ClientPublicIP must be the actual server egress IP, not 127.0.0.1, or Angel One
+ * may reject requests if the SmartAPI app has IP whitelisting enabled.
  */
 @Component
 public class AngelOneApiClient {
@@ -31,11 +35,26 @@ public class AngelOneApiClient {
     private static final String BASE = "https://apiconnect.angelone.in";
     private final WebClient client;
 
-    public AngelOneApiClient(WebClient.Builder builder) {
+    /**
+     * Actual public egress IP of this server — sent as X-ClientPublicIP to Angel One.
+     * Configure via: brokers.server-egress-ip in application properties.
+     * Falls back to "127.0.0.1" (Angel One may still accept this for non-IP-restricted apps).
+     */
+    private final String serverPublicIp;
+
+    public AngelOneApiClient(WebClient.Builder builder,
+                              @Value("${brokers.server-egress-ip:127.0.0.1}") String serverPublicIp) {
         this.client = builder.baseUrl(BASE)
                 .defaultHeader("Accept", "application/json")
                 .defaultHeader("Content-Type", "application/json")
                 .build();
+        this.serverPublicIp = serverPublicIp != null && !serverPublicIp.isBlank() ? serverPublicIp : "127.0.0.1";
+        log.info("ANGELONE_CLIENT_INIT publicIp={}", this.serverPublicIp);
+    }
+
+    /** Expose the configured public IP for use in proxy-path order placement. */
+    public String getServerPublicIp() {
+        return serverPublicIp;
     }
 
     /**
@@ -49,12 +68,12 @@ public class AngelOneApiClient {
         body.put("clientcode", clientCode);
         body.put("password", password);
         body.put("totp", totp);
-        log.info("ANGELONE_LOGIN clientCode={}", clientCode);
+        log.info("ANGELONE_LOGIN clientCode={} publicIp={}", clientCode, serverPublicIp);
         return client.post()
                 .uri("/rest/auth/angelbroking/user/v1/loginByPassword")
                 .header("X-PrivateKey", apiKey)
                 .header("X-ClientLocalIP", "127.0.0.1")
-                .header("X-ClientPublicIP", "127.0.0.1")
+                .header("X-ClientPublicIP", serverPublicIp)
                 .header("X-MACAddress", "00:00:00:00:00:00")
                 .header("X-UserType", "USER")
                 .header("X-SourceID", "WEB")
@@ -79,7 +98,7 @@ public class AngelOneApiClient {
                 .header("Authorization", "Bearer " + jwtToken)
                 .header("X-PrivateKey", apiKey)
                 .header("X-ClientLocalIP", "127.0.0.1")
-                .header("X-ClientPublicIP", "127.0.0.1")
+                .header("X-ClientPublicIP", serverPublicIp)
                 .header("X-MACAddress", "00:00:00:00:00:00")
                 .header("X-UserType", "USER")
                 .header("X-SourceID", "WEB")
@@ -102,7 +121,7 @@ public class AngelOneApiClient {
                 .header("Authorization", "Bearer " + jwtToken)
                 .header("X-PrivateKey", apiKey)
                 .header("X-ClientLocalIP", "127.0.0.1")
-                .header("X-ClientPublicIP", "127.0.0.1")
+                .header("X-ClientPublicIP", serverPublicIp)
                 .header("X-MACAddress", "00:00:00:00:00:00")
                 .header("X-UserType", "USER")
                 .header("X-SourceID", "WEB")
@@ -127,7 +146,7 @@ public class AngelOneApiClient {
                 .header("Authorization", "Bearer " + jwtToken)
                 .header("X-PrivateKey", apiKey)
                 .header("X-ClientLocalIP", "127.0.0.1")
-                .header("X-ClientPublicIP", "127.0.0.1")
+                .header("X-ClientPublicIP", serverPublicIp)
                 .header("X-MACAddress", "00:00:00:00:00:00")
                 .header("X-UserType", "USER")
                 .header("X-SourceID", "WEB")
@@ -148,7 +167,7 @@ public class AngelOneApiClient {
                 .header("Authorization", "Bearer " + jwtToken)
                 .header("X-PrivateKey", apiKey)
                 .header("X-ClientLocalIP", "127.0.0.1")
-                .header("X-ClientPublicIP", "127.0.0.1")
+                .header("X-ClientPublicIP", serverPublicIp)
                 .header("X-MACAddress", "00:00:00:00:00:00")
                 .header("X-UserType", "USER")
                 .header("X-SourceID", "WEB")
@@ -185,7 +204,7 @@ public class AngelOneApiClient {
                 .header("Authorization", "Bearer " + jwtToken)
                 .header("X-PrivateKey", apiKey)
                 .header("X-ClientLocalIP", "127.0.0.1")
-                .header("X-ClientPublicIP", "127.0.0.1")
+                .header("X-ClientPublicIP", serverPublicIp)
                 .header("X-MACAddress", "00:00:00:00:00:00")
                 .header("X-UserType", "USER")
                 .header("X-SourceID", "WEB")
@@ -205,7 +224,7 @@ public class AngelOneApiClient {
                 .header("Authorization", "Bearer " + jwtToken)
                 .header("X-PrivateKey", apiKey)
                 .header("X-ClientLocalIP", "127.0.0.1")
-                .header("X-ClientPublicIP", "127.0.0.1")
+                .header("X-ClientPublicIP", serverPublicIp)
                 .header("X-MACAddress", "00:00:00:00:00:00")
                 .header("X-UserType", "USER")
                 .header("X-SourceID", "WEB")

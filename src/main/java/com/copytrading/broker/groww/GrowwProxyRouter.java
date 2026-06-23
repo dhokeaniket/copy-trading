@@ -14,16 +14,25 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Routes broker API calls through per-user proxies so each user's requests
- * exit from a unique public IP (required by Groww's per-user IP whitelisting,
- * and useful for Angel One static IP requirement).
+ * exit from a unique public IP.
  *
- * IP Pool:
- *   - Slot 0: 13.53.246.13  → default (no proxy, primary ENI)
- *   - Slot 1: 13.61.58.89   → proxy on 127.0.0.1:8889 (secondary ENI)
- *   - Add more slots as you add more ENIs
+ * Required by brokers that enforce per-IP API whitelisting (Groww, Angel One, etc.)
  *
- * Admin assigns an ip_slot to each broker_account.
- * Slot 0 = default IP (no proxy), Slot 1+ = proxy through secondary ENI.
+ * IP Pool mirrors the Stockholm EC2 Squid config (EC2-MULTI-IP-SETUP-GUIDE.md):
+ *   Slot 0:  13.53.246.13   → primary ENI, no proxy (direct)
+ *   Slot 1:  13.61.58.89    → Squid port 8889
+ *   Slot 2:  13.60.103.120  → Squid port 8890
+ *   Slot 3:  56.228.67.106  → Squid port 8891
+ *   Slot 4:  13.48.122.204  → Squid port 8892
+ *   Slot 5:  13.63.33.92    → Squid port 8893
+ *   Slot 6:  13.62.184.217  → Squid port 8894
+ *   Slot 7:  13.48.142.174  → Squid port 8895
+ *   Slot 8:  16.192.7.87    → Squid port 8896
+ *   Slot 9:  13.63.15.121   → Squid port 8897
+ *
+ * Admin assigns ip_slot to each broker_account at link time.
+ * Works for ALL brokers — Groww, Upstox, Fyers, AngelOne, Zerodha, Dhan.
+ * Per-account explicit proxy_host/proxy_port in DB overrides this slot routing.
  */
 @Component
 public class GrowwProxyRouter {
@@ -32,10 +41,19 @@ public class GrowwProxyRouter {
 
     private static final String PRIMARY_IP = "13.53.246.13";
 
-    // Map of slot → proxy address. Slot 0 = no proxy (direct).
+    // Slot → Squid proxy config. Slot 0 = direct (no proxy).
+    // Squid listens on 127.0.0.1 and binds tcp_outgoing_address to the secondary private IP,
+    // which exits via the corresponding ENI's public IP.
     private static final Map<Integer, ProxyConfig> PROXY_POOL = Map.of(
-            1, new ProxyConfig("127.0.0.1", 8889, "13.61.58.89")
-            // Add more: 2, new ProxyConfig("127.0.0.1", 8890, "x.x.x.x")
+            1, new ProxyConfig("127.0.0.1", 8889, "13.61.58.89"),
+            2, new ProxyConfig("127.0.0.1", 8890, "13.60.103.120"),
+            3, new ProxyConfig("127.0.0.1", 8891, "56.228.67.106"),
+            4, new ProxyConfig("127.0.0.1", 8892, "13.48.122.204"),
+            5, new ProxyConfig("127.0.0.1", 8893, "13.63.33.92"),
+            6, new ProxyConfig("127.0.0.1", 8894, "13.62.184.217"),
+            7, new ProxyConfig("127.0.0.1", 8895, "13.48.142.174"),
+            8, new ProxyConfig("127.0.0.1", 8896, "16.192.7.87"),
+            9, new ProxyConfig("127.0.0.1", 8897, "13.63.15.121")
     );
 
     // Cache HttpClients per slot to avoid recreating them

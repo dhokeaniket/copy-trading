@@ -260,7 +260,7 @@ public class BrokerAccountService {
                             })
                             .onErrorReturn(dto)
                             .defaultIfEmpty(dto);
-                }, 2)
+                }, 1) // concurrency=1 to avoid spamming rate-limited brokers
                 .collectList()
                 .map(list -> Map.<String, Object>of("accounts", list));
     }
@@ -1065,6 +1065,17 @@ public class BrokerAccountService {
                 fallback.put("availableMargin", 0); fallback.put("usedMargin", 0);
                 fallback.put("totalFunds", 0); fallback.put("collateral", 0);
                 String friendly = friendlyBrokerError(a.getBrokerId(), e.getMessage());
+                // Rate limit (429) is transient — don't nuke session or mark as expired
+                String msg = e.getMessage() != null ? e.getMessage() : "";
+                if (msg.contains("429") || msg.contains("rate") || msg.contains("Rate")
+                        || msg.contains("TOO_MANY_REQUESTS") || msg.contains("exceeding access")) {
+                    log.warn("{}_RATE_LIMITED accountId={} — returning cached/empty margin, session intact",
+                            a.getBrokerId(), accountId);
+                    fallback.put("error", "Rate limited by broker — data will refresh shortly");
+                    fallback.put("errorCode", "RATE_LIMITED");
+                    fallback.put("action", "RETRY");
+                    return Mono.just(fallback);
+                }
                 fallback.put("error", friendly);
                 fallback.put("reason", friendly);
                 fallback.put("errorCode", "SESSION_EXPIRED");

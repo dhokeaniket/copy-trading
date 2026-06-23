@@ -629,7 +629,8 @@ public class CopyEngineService {
                 b.put("stopPrice", isSL ? triggerPrice : 0);
                 b.put(BrokerFieldTranslator.validityFieldName("FYERS"), BrokerFieldTranslator.validityValue("FYERS"));
                 b.put("disclosedQty", 0);
-                b.put("offlineOrder", true);
+                // offlineOrder=true means AMO (After Market Order) in Fyers — must be false for live market orders
+                b.put("offlineOrder", false);
                 b.put("stopLoss", 0);
                 b.put("takeProfit", 0);
                 // Route through per-user proxy if configured
