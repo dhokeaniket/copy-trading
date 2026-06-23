@@ -658,7 +658,15 @@ public class CopyEngineService {
                 // instrument_token: "NSE_EQ|INE002A01018" (ISIN format from instrument master)
                 // product: I=intraday, D=delivery
                 String upProd = BrokerFieldTranslator.product(prod, "UPSTOX", isFnO);
-                String upSym = instruments.getUpstoxInstrumentKey(sym, isFnO);
+                // Strip NSE:/BSE: prefix and -EQ suffix before Upstox instrument lookup
+                String cleanSymForUpstox = sym;
+                if (cleanSymForUpstox.startsWith("NSE:") || cleanSymForUpstox.startsWith("BSE:")) {
+                    cleanSymForUpstox = cleanSymForUpstox.substring(4);
+                }
+                if (!isFnO && cleanSymForUpstox.toUpperCase().endsWith("-EQ")) {
+                    cleanSymForUpstox = cleanSymForUpstox.substring(0, cleanSymForUpstox.length() - 3);
+                }
+                String upSym = instruments.getUpstoxInstrumentKey(cleanSymForUpstox, isFnO);
                 if (upSym == null) {
                     // Fail safe: Upstox requires an ISIN-based instrument_token (e.g. NSE_EQ|INE002A01018).
                     // Never fall back to a raw trading symbol — Upstox rejects it and it can mis-route.
@@ -704,8 +712,16 @@ public class CopyEngineService {
                 String dhanProd = BrokerFieldTranslator.product(prod, "DHAN", isFnO);
                 // Derive expiry date from master symbol for precise weekly/monthly lookup
                 String expiryDate = symbolMapper.extractExpiryDate(symbol, masterBrokerId);
-                String secId = instruments.getDhanSecurityId(sym, isFnO, expiryDate);
-                if (secId == null && !sym.equalsIgnoreCase(symbol)) {
+                // Strip NSE:/BSE: prefix and -EQ suffix for Dhan lookup
+                String cleanSymForDhan = sym;
+                if (cleanSymForDhan.startsWith("NSE:") || cleanSymForDhan.startsWith("BSE:")) {
+                    cleanSymForDhan = cleanSymForDhan.substring(4);
+                }
+                if (!isFnO && cleanSymForDhan.toUpperCase().endsWith("-EQ")) {
+                    cleanSymForDhan = cleanSymForDhan.substring(0, cleanSymForDhan.length() - 3);
+                }
+                String secId = instruments.getDhanSecurityId(cleanSymForDhan, isFnO, expiryDate);
+                if (secId == null && !cleanSymForDhan.equalsIgnoreCase(symbol)) {
                     secId = instruments.getDhanSecurityId(symbol, isFnO, expiryDate);
                 }
                 String clientId = account.getClientId() != null && !account.getClientId().isBlank()
