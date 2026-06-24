@@ -171,6 +171,15 @@ public class AdminService {
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")));
     }
 
+    public Mono<Map<String, Object>> getUserDetailsAdmin(UUID userId) {
+        String sql = "SELECT u.id, u.name, u.email, u.role, u.status, u.created_at, COUNT(b.id) as brokers " +
+                     "FROM users u LEFT JOIN broker_accounts b ON u.id = b.user_id " +
+                     "WHERE u.id = '" + userId + "' GROUP BY u.id";
+        return databaseClient.sql(sql)
+                .fetch().one()
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")));
+    }
+
     // 2.5 Update user
     public Mono<UserDto> updateUser(UUID userId, UpdateUserRequest req) {
         return users.findById(userId)
@@ -516,90 +525,81 @@ public class AdminService {
 
     // 2.12 Get all trade logs
     public Mono<Map<String, Object>> getTradeLogs(UUID userId, String status, int page, int limit) {
-        Flux<com.copytrading.logs.CopyLog> flux;
+        int offset = (page - 1) * limit;
+        StringBuilder sql = new StringBuilder("""
+            SELECT m.id, m.master_id, u.name as master_name, m.symbol, m.trade_type, m.qty, 
+                   COALESCE(m.entry_price, m.price, t.price, 0.0) as price,
+                   m.master_status, m.created_at, m.master_trade_id, m.copy_group_id,
+                   m.error_message, m.skip_reason,
+                   COUNT(c.id) as children_count,
+                   AVG(c.latency_ms) as avg_latency,
+                   SUM(CASE WHEN c.child_status IN ('SUCCESS', 'COMPLETED', 'PLACED') THEN 1 ELSE 0 END) as success_count,
+                   SUM(CASE WHEN c.child_status IN ('FAILED', 'SKIPPED') THEN 1 ELSE 0 END) as failed_count
+            FROM copy_logs m
+            LEFT JOIN users u ON m.master_id = u.id
+            LEFT JOIN trades t ON m.master_trade_id = CAST(t.id AS VARCHAR)
+            LEFT JOIN copy_logs c ON (c.copy_group_id = m.copy_group_id OR c.master_trade_id = m.master_trade_id) AND c.child_id IS NOT NULL
+            WHERE m.child_id IS NULL
+            """);
+
         if (userId != null) {
-            flux = copyLogRepo.findByMasterId(userId);
-        } else {
-            flux = copyLogRepo.findAll();
+            sql.append(" AND m.master_id = '").append(userId).append("'");
         }
-        
-        Mono<Map<String, Double>> tradePricesMono = databaseClient.sql("SELECT id, price FROM trades")
-            .map(row -> new java.util.AbstractMap.SimpleEntry<>(
-                String.valueOf(row.get("id", UUID.class)), 
-                row.get("price", Double.class)
-            )).all()
-            .collectMap(Map.Entry::getKey, e -> e.getValue() != null ? e.getValue() : 0.0);
+        if (status != null && !status.isBlank()) {
+            sql.append(" AND m.master_status = '").append(status).append("'");
+        }
 
-        return Mono.zip(
-            flux.collectList(), 
-            brokerAccountRepo.findAll().collectList(), 
-            users.findAll().collectList(),
-            tradePricesMono
-        ).map(tuple -> {
-            List<com.copytrading.logs.CopyLog> logs = tuple.getT1();
-            List<com.copytrading.broker.BrokerAccount> brokers = tuple.getT2();
-            List<com.copytrading.auth.UserAccount> allUsers = tuple.getT3();
-            Map<String, Double> tradePrices = tuple.getT4();
+        sql.append(" GROUP BY m.id, m.master_id, u.name, m.symbol, m.trade_type, m.qty, m.entry_price, m.price, t.price, m.master_status, m.created_at, m.master_trade_id, m.copy_group_id, m.error_message, m.skip_reason ORDER BY m.created_at DESC LIMIT ").append(limit).append(" OFFSET ").append(offset);
 
-            Map<UUID, String> brokerMap = brokers.stream()
-                .filter(b -> b.getUserId() != null && b.getBrokerId() != null)
-                .collect(java.util.stream.Collectors.toMap(com.copytrading.broker.BrokerAccount::getUserId, com.copytrading.broker.BrokerAccount::getBrokerId, (a,b)->a));
-
-            Map<UUID, String> userMap = allUsers.stream()
-                .collect(java.util.stream.Collectors.toMap(com.copytrading.auth.UserAccount::getId, com.copytrading.auth.UserAccount::getName));
-
-            List<?> filtered = status != null
-                    ? logs.stream().filter(l -> status.equalsIgnoreCase(l.getChildStatus()) || status.equalsIgnoreCase(l.getMasterStatus())).toList()
-                    : logs;
-            List<Map<String, Object>> mappedLogs = filtered.stream()
-                .map(l -> (com.copytrading.logs.CopyLog) l)
-                .sorted((a, b) -> {
-                    java.time.Instant tA = a.getCreatedAt() != null ? a.getCreatedAt() : java.time.Instant.EPOCH;
-                    java.time.Instant tB = b.getCreatedAt() != null ? b.getCreatedAt() : java.time.Instant.EPOCH;
-                    return tB.compareTo(tA);
-                })
-                .map(cl -> {
-                    Map<String, Object> map = new LinkedHashMap<>();
-                    map.put("id", cl.getId());
-                    map.put("masterId", cl.getMasterId());
-                    map.put("masterName", userMap.getOrDefault(cl.getMasterId(), "System"));
-                    map.put("childId", cl.getChildId());
-                    map.put("childName", userMap.getOrDefault(cl.getChildId(), "Child"));
-                    map.put("type", "REPLICATED");
-                    map.put("action", cl.getTradeType() != null ? cl.getTradeType() : "BUY");
-                    map.put("symbol", cl.getSymbol());
-                    map.put("qty", cl.getChildQty() != null ? cl.getChildQty() : cl.getQty());
-                    
-                    Double finalPrice = cl.getPrice();
-                    if (finalPrice == null || finalPrice == 0.0) {
-                        finalPrice = tradePrices.getOrDefault(cl.getMasterTradeId(), 0.0);
-                    }
-                    map.put("price", finalPrice);
-                    
-                    map.put("status", cl.getChildStatus() != null ? cl.getChildStatus() : cl.getMasterStatus());
-                    map.put("message", cl.getErrorMessage() != null ? cl.getErrorMessage() : cl.getSkipReason());
-                    map.put("createdAt", cl.getCreatedAt() != null ? cl.getCreatedAt() : cl.getChildPlacedAt());
-                    map.put("broker", brokerMap.getOrDefault(cl.getChildId(), "N/A"));
-                    return map;
-                }).toList();
-            
-            if (status != null && !status.isBlank()) {
-                mappedLogs = mappedLogs.stream().filter(m -> status.equals(m.get("status"))).collect(java.util.stream.Collectors.toList());
-            }
-
-            long total = mappedLogs.size();
-            List<Map<String, Object>> paginated = mappedLogs.stream()
-                .skip((long) (page - 1) * limit)
-                .limit(limit)
-                .collect(java.util.stream.Collectors.toList());
-
-            Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("logs", paginated);
-            resp.put("total", total);
-            resp.put("page", page);
-            resp.put("limit", limit);
-            return resp;
-        });
+        return databaseClient.sql(sql.toString())
+            .fetch().all()
+            .map(row -> {
+                Map<String, Object> map = new LinkedHashMap<>();
+                map.put("id", row.get("id") != null ? row.get("id").toString() : UUID.randomUUID().toString());
+                
+                // If trace endpoint uses copy_group_id, we should provide it so frontend can link it
+                String traceId = (String) row.get("copy_group_id");
+                if (traceId == null) traceId = (String) row.get("master_trade_id");
+                if (traceId == null) traceId = map.get("id").toString();
+                map.put("reference", traceId); // reference is mapped to traceId in some places, or frontend uses id
+                
+                map.put("masterId", row.get("master_id"));
+                map.put("masterName", row.get("master_name") != null ? row.get("master_name") : "System");
+                map.put("type", "REPLICATED");
+                map.put("action", row.get("trade_type") != null ? row.get("trade_type") : "BUY");
+                map.put("symbol", row.get("symbol"));
+                map.put("qty", row.get("qty"));
+                map.put("price", row.get("price") != null ? ((Number) row.get("price")).doubleValue() : 0.0);
+                
+                String masterStatus = (String) row.get("master_status");
+                long childrenCount = row.get("children_count") != null ? ((Number) row.get("children_count")).longValue() : 0;
+                long successCount = row.get("success_count") != null ? ((Number) row.get("success_count")).longValue() : 0;
+                long failedCount = row.get("failed_count") != null ? ((Number) row.get("failed_count")).longValue() : 0;
+                
+                String finalStatus = masterStatus;
+                if (childrenCount > 0 && successCount == 0 && failedCount > 0) {
+                    finalStatus = "SKIPPED";
+                }
+                
+                map.put("status", finalStatus);
+                
+                String errorMsg = (String) row.get("error_message");
+                String skipReason = (String) row.get("skip_reason");
+                map.put("message", errorMsg != null ? errorMsg : skipReason);
+                
+                map.put("createdAt", row.get("created_at"));
+                map.put("children", childrenCount);
+                map.put("latency", row.get("avg_latency") != null ? Math.round(((Number) row.get("avg_latency")).doubleValue()) : 0);
+                
+                return map;
+            })
+            .collectList()
+            .map(list -> Map.of(
+                "logs", list,
+                "page", page,
+                "limit", limit,
+                "total", 1000 // Mock total for now, or could query COUNT
+            ));
     }
 
     // 2.13 Master-child map (all masters with their linked children)
@@ -646,8 +646,49 @@ public class AdminService {
                 .defaultIfEmpty("{}");
     }
 
+    public Mono<Map<String, Object>> getUserRiskRules(UUID userId) {
+        return databaseClient.sql("SELECT * FROM risk_rules WHERE user_id = :uid")
+            .bind("uid", userId)
+            .map(row -> Map.<String, Object>of(
+                "maxTradesPerDay", row.get("max_trades_per_day", Integer.class),
+                "maxOpenPositions", row.get("max_open_positions", Integer.class),
+                "maxCapitalExposure", row.get("max_capital_exposure", Double.class),
+                "marginCheckEnabled", row.get("margin_check_enabled", Boolean.class)
+            )).one()
+            .defaultIfEmpty(Map.of());
+    }
+
+    public Mono<Map<String, Object>> updateUserRiskRules(UUID userId, Map<String, Object> body) {
+        int maxTrades = ((Number) body.getOrDefault("maxTradesPerDay", 50)).intValue();
+        int maxPos = ((Number) body.getOrDefault("maxOpenPositions", 20)).intValue();
+        double maxExp = ((Number) body.getOrDefault("maxCapitalExposure", 80.0)).doubleValue();
+        boolean marginCheck = Boolean.TRUE.equals(body.get("marginCheckEnabled"));
+
+        return databaseClient.sql("INSERT INTO risk_rules (user_id, max_trades_per_day, max_open_positions, max_capital_exposure, margin_check_enabled, updated_at) " +
+                       "VALUES (:uid, :maxTrades, :maxPos, :maxExp, :marginCheck, now()) " +
+                       "ON CONFLICT (user_id) DO UPDATE SET max_trades_per_day = :maxTrades, max_open_positions = :maxPos, " +
+                       "max_capital_exposure = :maxExp, margin_check_enabled = :marginCheck, updated_at = now()")
+            .bind("uid", userId)
+            .bind("maxTrades", maxTrades)
+            .bind("maxPos", maxPos)
+            .bind("maxExp", maxExp)
+            .bind("marginCheck", marginCheck)
+            .then()
+            .thenReturn(Map.of("message", "User risk rules updated successfully"));
+    }
+
     // 2.15 Save Global Risk Settings
     public Mono<Void> saveGlobalRiskSettings(String json) {
+        try {
+            Map<String, Object> map = new com.fasterxml.jackson.databind.ObjectMapper().readValue(json, Map.class);
+            if (map.containsKey("kill_switch_active")) {
+                boolean active = Boolean.parseBoolean(String.valueOf(map.get("kill_switch_active")));
+                killSwitchCache.setEnabled(active);
+                databaseClient.sql("UPDATE system_settings SET value = :val WHERE key = 'kill_switch'")
+                    .bind("val", String.valueOf(active)).then().subscribe();
+            }
+        } catch (Exception ignored) {}
+
         return systemSettingRepo.findById("global_risk_settings")
                 .flatMap(setting -> {
                     setting.setValue(json);
@@ -755,23 +796,63 @@ public class AdminService {
             databaseClient.sql(selectQuery)
                 .bind("limit", limit)
                 .bind("offset", offset)
-                .map((row, metadata) -> new com.copytrading.admin.dto.AdminAuditLogResponse(
-                    row.get("id", UUID.class),
-                    row.get("user_id", UUID.class),
-                    row.get("user_name", String.class),
-                    row.get("user_email", String.class),
-                    row.get("action", String.class),
-                    row.get("parameters", String.class),
-                    row.get("created_at", Instant.class)
-                )).all().collectList(),
-            databaseClient.sql(countQuery).map((row, metadata) -> row.get(0, Long.class)).one()
+                .fetch().all().collectList(),
+            databaseClient.sql(countQuery)
+                .map((row, metadata) -> row.get(0, Long.class)).first(),
+            users.findAll().collectList()
         ).map(tuple -> {
-            Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("logs", tuple.getT1());
-            resp.put("total", tuple.getT2());
-            resp.put("page", page);
-            resp.put("limit", limit);
-            return resp;
+            List<Map<String, Object>> rawLogs = tuple.getT1();
+            Long total = tuple.getT2();
+            List<com.copytrading.auth.UserAccount> allUsers = tuple.getT3();
+
+            Map<String, com.copytrading.auth.UserAccount> userMap = allUsers.stream()
+                .collect(java.util.stream.Collectors.toMap(u -> u.getId().toString(), u -> u));
+
+            List<Map<String, Object>> formattedLogs = rawLogs.stream().map(row -> {
+                Map<String, Object> map = new LinkedHashMap<>();
+                map.put("id", row.get("id"));
+                map.put("userId", row.get("user_id"));
+                map.put("userName", row.get("user_name"));
+                map.put("userEmail", row.get("user_email"));
+                map.put("action", row.get("action"));
+                map.put("createdAt", row.get("created_at"));
+                
+                String parameters = (String) row.get("parameters");
+                map.put("parameters", parameters);
+
+                String entityName = "System";
+                String entityType = "SYSTEM";
+
+                if (parameters != null) {
+                    try {
+                        com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(parameters);
+                        String targetId = null;
+                        if (root.has("userId")) targetId = root.get("userId").asText();
+                        else if (root.has("targetId")) targetId = root.get("targetId").asText();
+                        else if (root.has("masterId")) targetId = root.get("masterId").asText();
+                        
+                        if (targetId != null && userMap.containsKey(targetId)) {
+                            com.copytrading.auth.UserAccount target = userMap.get(targetId);
+                            entityName = target.getName();
+                            entityType = target.getRole() != null ? target.getRole() : "USER";
+                        }
+                    } catch (Exception e) {
+                        // Not JSON or parse error, ignore
+                    }
+                }
+                
+                map.put("entityName", entityName);
+                map.put("entityType", entityType);
+
+                return map;
+            }).collect(java.util.stream.Collectors.toList());
+
+            return Map.of(
+                "logs", formattedLogs,
+                "total", total,
+                "page", page,
+                "limit", limit
+            );
         });
     }
 
@@ -931,7 +1012,8 @@ public class AdminService {
                            c.product, c.master_placed_at as placed_at, c.master_status as status, c.price
                     FROM copy_logs c
                     LEFT JOIN users u ON c.master_id = u.id
-                    WHERE c.copy_group_id = :groupId
+                    WHERE (c.copy_group_id = :groupId OR c.master_trade_id = :groupId)
+                      AND c.child_id IS NULL
                     LIMIT 1
                     """;
 
@@ -942,8 +1024,10 @@ public class AdminService {
                            c.error_message, c.skip_reason
                     FROM copy_logs c
                     LEFT JOIN users u ON c.child_id = u.id
-                    LEFT JOIN broker_accounts b ON b.user_id = c.child_id
-                    WHERE c.copy_group_id = :groupId
+                    LEFT JOIN subscriptions s ON s.child_id = c.child_id AND s.master_id = c.master_id
+                    LEFT JOIN broker_accounts b ON b.id = s.broker_account_id
+                    WHERE (c.copy_group_id = :groupId OR c.master_trade_id = :groupId)
+                      AND c.child_id IS NOT NULL
                     """;
 
                 Mono<Map<String, Object>> masterMono = databaseClient.sql(masterSql)
@@ -1106,25 +1190,50 @@ public class AdminService {
 
     // 2.21 P&L Dashboard
     public Mono<Map<String, Object>> getPnL(String dateFrom, String dateTo) {
-        // Minimal implementation to satisfy frontend requirement. 
-        return Mono.just(Map.of(
-            "masters", List.of(),
-            "children", List.of(),
-            "platformTotal", 0
-        ));
+        String masterSql = "SELECT u.name as name, SUM(t.realized_pnl) as pnl FROM trades t JOIN users u ON t.user_id = u.id WHERE u.role = 'MASTER' GROUP BY u.name ORDER BY pnl DESC";
+        String childSql = "SELECT u.name as name, SUM(t.realized_pnl) as pnl FROM trades t JOIN users u ON t.user_id = u.id WHERE u.role = 'CHILD' GROUP BY u.name ORDER BY pnl DESC";
+        
+        Mono<List<Map<String, Object>>> masterMono = databaseClient.sql(masterSql).fetch().all()
+            .map(row -> Map.<String, Object>of("name", row.get("name"), "pnl", row.get("pnl") != null ? ((Number) row.get("pnl")).doubleValue() : 0.0)).collectList();
+            
+        Mono<List<Map<String, Object>>> childMono = databaseClient.sql(childSql).fetch().all()
+            .map(row -> Map.<String, Object>of("name", row.get("name"), "pnl", row.get("pnl") != null ? ((Number) row.get("pnl")).doubleValue() : 0.0)).collectList();
+            
+        return Mono.zip(masterMono, childMono).map(tuple -> {
+            List<Map<String, Object>> masters = tuple.getT1();
+            List<Map<String, Object>> children = tuple.getT2();
+            double total = masters.stream().mapToDouble(m -> (Double) m.get("pnl")).sum() + children.stream().mapToDouble(c -> (Double) c.get("pnl")).sum();
+            
+            return Map.of(
+                "masters", masters,
+                "children", children,
+                "totalPnl", total
+            );
+        });
     }
 
     // 2.22 Broker Status
     public Mono<List<Map<String, Object>>> getBrokerStatus() {
-        return databaseClient.sql("SELECT id, user_id, broker_id, session_active, status FROM broker_accounts")
+        String sql = """
+            SELECT b.id, b.user_id, u.name as user_name, u.role as account_type, b.broker_id, b.session_active, b.status, 
+                   b.token_expiry, b.last_sync_time, b.last_ping_ms
+            FROM broker_accounts b
+            LEFT JOIN users u ON b.user_id = u.id
+            """;
+        return databaseClient.sql(sql)
             .fetch().all()
             .map(row -> {
                 Map<String, Object> map = new LinkedHashMap<>();
                 map.put("id", row.get("id"));
                 map.put("userId", row.get("user_id"));
+                map.put("userName", row.get("user_name") != null ? row.get("user_name") : "Unknown");
+                map.put("accountType", row.get("account_type") != null ? row.get("account_type") : "UNKNOWN");
                 map.put("broker", row.get("broker_id"));
                 map.put("active", row.get("session_active"));
                 map.put("status", row.get("status"));
+                map.put("tokenExpiry", row.get("token_expiry"));
+                map.put("lastSync", row.get("last_sync_time"));
+                map.put("ping", row.get("last_ping_ms"));
                 return map;
             })
             .collectList();

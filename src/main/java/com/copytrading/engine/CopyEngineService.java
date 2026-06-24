@@ -164,9 +164,15 @@ public class CopyEngineService {
 
         if (killSwitchCache.isEnabled()) {
             log.warn("COPY_ENGINE_BLOCKED Kill switch is active. master={} symbol={}", masterId, req.getSymbol());
-            return Mono.just(Map.<String, Object>of(
-                    "message", "Kill switch is active. Copy trading is temporarily paused.",
-                    "blocked", true));
+            return subscriptionCache.getActiveSubscriptions(masterId)
+                    .flatMap(children -> Flux.fromIterable(children)
+                            .flatMap(sub -> logAndReturn(masterId, sub.getChildId(), req, "SKIPPED", "TRADING HALTED BY USER", null, "KILL_SWITCH", null, copyGroupId, engineReceivedAt, req.getQty()))
+                            .collectList())
+                    .map(results -> Map.<String, Object>of(
+                            "message", "Kill switch is active. Copy trading is temporarily paused.",
+                            "blocked", true,
+                            "skipped", results.size()
+                    ));
         }
 
         // Duplicate signal detection.
