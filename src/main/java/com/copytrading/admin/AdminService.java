@@ -825,7 +825,7 @@ public class AdminService {
                         if (targetId != null && userMap.containsKey(targetId)) {
                             com.copytrading.auth.UserAccount target = userMap.get(targetId);
                             entityName = target.getName();
-                            entityType = target.getAccountType() != null ? target.getAccountType() : "USER";
+                            entityType = target.getRole() != null ? target.getRole() : "USER";
                         }
                     } catch (Exception e) {
                         // Not JSON or parse error, ignore
@@ -1181,8 +1181,8 @@ public class AdminService {
 
     // 2.21 P&L Dashboard
     public Mono<Map<String, Object>> getPnL(String dateFrom, String dateTo) {
-        String masterSql = "SELECT u.name as name, SUM(t.realized_pnl) as pnl FROM trades t JOIN users u ON t.user_id = u.id WHERE u.account_type = 'MASTER' GROUP BY u.name ORDER BY pnl DESC";
-        String childSql = "SELECT u.name as name, SUM(t.realized_pnl) as pnl FROM trades t JOIN users u ON t.user_id = u.id WHERE u.account_type = 'CHILD' GROUP BY u.name ORDER BY pnl DESC";
+        String masterSql = "SELECT u.name as name, SUM(t.realized_pnl) as pnl FROM trades t JOIN users u ON t.user_id = u.id WHERE u.role = 'MASTER' GROUP BY u.name ORDER BY pnl DESC";
+        String childSql = "SELECT u.name as name, SUM(t.realized_pnl) as pnl FROM trades t JOIN users u ON t.user_id = u.id WHERE u.role = 'CHILD' GROUP BY u.name ORDER BY pnl DESC";
         
         Mono<List<Map<String, Object>>> masterMono = databaseClient.sql(masterSql).fetch().all()
             .map(row -> Map.<String, Object>of("name", row.get("name"), "pnl", row.get("pnl") != null ? ((Number) row.get("pnl")).doubleValue() : 0.0)).collectList();
@@ -1206,7 +1206,7 @@ public class AdminService {
     // 2.22 Broker Status
     public Mono<List<Map<String, Object>>> getBrokerStatus() {
         String sql = """
-            SELECT b.id, b.user_id, u.name as user_name, u.account_type, b.broker_id, b.session_active, b.status, 
+            SELECT b.id, b.user_id, u.name as user_name, u.role as account_type, b.broker_id, b.session_active, b.status, 
                    b.token_expiry, b.last_sync_time, b.last_ping_ms
             FROM broker_accounts b
             LEFT JOIN users u ON b.user_id = u.id
