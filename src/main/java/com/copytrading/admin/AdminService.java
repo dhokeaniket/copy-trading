@@ -1008,12 +1008,12 @@ public class AdminService {
             .flatMap(resolvedGroupId -> {
                 String masterSql = """
                     SELECT c.master_trade_id as broker_order_id, u.name as master_user,
-                           c.symbol, c.trade_type as side, c.qty as quantity, c.order_type,
-                           c.product, c.master_placed_at as placed_at, c.master_status as status, c.price
+                           MAX(c.symbol) as symbol, MAX(c.trade_type) as side, MAX(c.qty) as quantity, MAX(c.order_type) as order_type,
+                           MAX(c.product) as product, MIN(c.master_placed_at) as placed_at, MAX(c.master_status) as status, MAX(c.price) as price
                     FROM copy_logs c
                     LEFT JOIN users u ON c.master_id = u.id
                     WHERE (c.copy_group_id = :groupId OR c.master_trade_id = :groupId)
-                      AND c.child_id IS NULL
+                    GROUP BY c.master_trade_id, u.name
                     LIMIT 1
                     """;
 
