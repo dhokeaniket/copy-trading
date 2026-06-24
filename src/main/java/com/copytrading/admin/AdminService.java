@@ -648,6 +648,16 @@ public class AdminService {
 
     // 2.15 Save Global Risk Settings
     public Mono<Void> saveGlobalRiskSettings(String json) {
+        try {
+            Map<String, Object> map = new com.fasterxml.jackson.databind.ObjectMapper().readValue(json, Map.class);
+            if (map.containsKey("kill_switch_active")) {
+                boolean active = Boolean.parseBoolean(String.valueOf(map.get("kill_switch_active")));
+                killSwitchCache.setEnabled(active);
+                databaseClient.sql("UPDATE system_settings SET value = :val WHERE key = 'kill_switch'")
+                    .bind("val", String.valueOf(active)).then().subscribe();
+            }
+        } catch (Exception ignored) {}
+
         return systemSettingRepo.findById("global_risk_settings")
                 .flatMap(setting -> {
                     setting.setValue(json);
@@ -942,7 +952,8 @@ public class AdminService {
                            c.error_message, c.skip_reason
                     FROM copy_logs c
                     LEFT JOIN users u ON c.child_id = u.id
-                    LEFT JOIN broker_accounts b ON b.user_id = c.child_id
+                    LEFT JOIN subscriptions s ON s.child_id = c.child_id AND s.master_id = c.master_id
+                    LEFT JOIN broker_accounts b ON b.id = s.broker_account_id
                     WHERE c.copy_group_id = :groupId
                     """;
 
