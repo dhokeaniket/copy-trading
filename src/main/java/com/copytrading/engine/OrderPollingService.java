@@ -155,10 +155,11 @@ public class OrderPollingService {
                         err -> log.warn("KNOWN_ORDERS_RESTORE_FAILED: {}", err.getMessage())
                 );
         // Also load today's trades from DB as known orders (belt and suspenders)
-        activeAccountRepo.findAll()
-                .flatMap(active -> tradeRepo.findByUserIdOrderByPlacedAtDesc(active.getMasterId())
+        brokerRepo.findPollableMasterAccounts()
+                .doOnNext(account -> seenBrokerAccounts.add(account.getId())) // Mark as seen so first-poll doesn't re-snapshot
+                .flatMap(account -> tradeRepo.findByUserIdOrderByPlacedAtDesc(account.getUserId())
                         .filter(t -> t.getBrokerOrderId() != null && !t.getBrokerOrderId().isBlank())
-                        .map(t -> Map.entry(active.getMasterId(), t.getBrokerOrderId())))
+                        .map(t -> Map.entry(account.getUserId(), t.getBrokerOrderId())))
                 .subscribe(
                         entry -> knownOrders.computeIfAbsent(entry.getKey(), k -> ConcurrentHashMap.newKeySet()).add(entry.getValue()),
                         err -> log.warn("DB_KNOWN_ORDERS_LOAD_FAILED: {}", err.getMessage())
@@ -253,7 +254,13 @@ public class OrderPollingService {
     /**
      * Poll a single broker account directly (used by the new multi-account polling).
      * The account's user_id IS the master_id.
+     *
+     * First-poll protection: when a broker account is seen for the first time (e.g., user just
+     * toggled isCopyEnable ON or logged in), we snapshot all its existing orders as "known" so
+     * they don't get re-copied. Only genuinely NEW orders placed AFTER this point get copied.
      */
+    private final Set<UUID> seenBrokerAccounts = ConcurrentHashMap.newKeySet();
+
     private Mono<Void> pollBrokerAccount(BrokerAccount account) {
         UUID masterId = account.getUserId();
         if (snapshotInProgressMasters.contains(masterId)) {
@@ -262,10 +269,27 @@ public class OrderPollingService {
         return brokerService.getOrders(account.getId(), masterId)
                 .map(resp -> {
                     List<?> ordersList = extractOrdersList(resp.get("orders"));
-                    if (ordersList != null && !ordersList.isEmpty()) {
-                        return processOrders(masterId, account, ordersList);
+                    if (ordersList == null || ordersList.isEmpty()) return 0;
+
+                    // First time seeing this broker account? Snapshot all orders as known — don't re-copy.
+                    if (seenBrokerAccounts.add(account.getId())) {
+                        Set<String> known = knownOrders.computeIfAbsent(masterId, k -> ConcurrentHashMap.newKeySet());
+                        int snapshotCount = 0;
+                        for (Object orderObj : ordersList) {
+                            if (orderObj instanceof Map<?, ?> order) {
+                                String orderId = OrderNormalizer.extractOrderId(toStringKeyMap(order));
+                                if (orderId != null && !orderId.isBlank()) {
+                                    known.add(orderId);
+                                    snapshotCount++;
+                                }
+                            }
+                        }
+                        log.info("POLL_FIRST_SEEN_SNAPSHOT broker={} accountId={} master={} ordersMarkedKnown={}",
+                                account.getBrokerId(), account.getId(), masterId, snapshotCount);
+                        return 0; // Don't process on first poll — just snapshot
                     }
-                    return 0;
+
+                    return processOrders(masterId, account, ordersList);
                 })
                 .onErrorResume(e -> {
                     log.debug("POLL_ORDERS_FAIL master={} broker={} error={}", masterId, account.getBrokerId(), e.getMessage());
@@ -344,12 +368,13 @@ public class OrderPollingService {
         resetInProgress = true;
         knownOrders.clear();
         processingOrders.clear();
+        seenBrokerAccounts.clear(); // Force fresh snapshot on next poll for each broker account
         pollingCache.resetAll().subscribe();
         // Reload known orders from DB so old trades don't get re-triggered
-        activeAccountRepo.findAll()
-                .flatMap(active -> tradeRepo.findByUserIdOrderByPlacedAtDesc(active.getMasterId())
+        brokerRepo.findPollableMasterAccounts()
+                .flatMap(account -> tradeRepo.findByUserIdOrderByPlacedAtDesc(account.getUserId())
                         .filter(t -> t.getBrokerOrderId() != null && !t.getBrokerOrderId().isBlank())
-                        .map(t -> Map.entry(active.getMasterId(), t.getBrokerOrderId())))
+                        .map(t -> Map.entry(account.getUserId(), t.getBrokerOrderId())))
                 .doOnNext(entry -> knownOrders.computeIfAbsent(entry.getKey(), k -> ConcurrentHashMap.newKeySet()).add(entry.getValue()))
                 .doOnError(err -> log.warn("DB_RELOAD_AFTER_RESET_FAILED: {}", err.getMessage()))
                 .doFinally(signal -> {
