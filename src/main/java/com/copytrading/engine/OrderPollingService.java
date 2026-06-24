@@ -49,6 +49,11 @@ public class OrderPollingService {
     // In-memory fallback for known orders (used alongside Redis)
     private final ConcurrentHashMap<UUID, Set<String>> knownOrders = new ConcurrentHashMap<>();
 
+    /** Expose known orders for WebSocket dedup (same order detected by WS and polling should not double-copy). */
+    public Set<String> getKnownOrders(UUID masterId) {
+        return knownOrders.computeIfAbsent(masterId, k -> ConcurrentHashMap.newKeySet());
+    }
+
     // Lock to prevent same order being processed concurrently by multiple poll cycles
     private final Set<String> processingOrders = ConcurrentHashMap.newKeySet();
 
