@@ -524,32 +524,32 @@ public class AdminService {
     }
 
     // 2.12 Get all trade logs
-    public Mono<Map<String, Object>> getTradeLogs(UUID userId, String status, int page, int limit) {
+    public Mono<Map<String, Object>> getTradeLogs(UUID userId, String status, int page, int limit, String search) {
         int offset = (page - 1) * limit;
         StringBuilder sql = new StringBuilder("""
-            SELECT m.id, m.master_id, u.name as master_name, m.symbol, m.trade_type, m.qty, 
-                   COALESCE(m.price, t.price, 0.0) as price,
-                   m.master_status, m.created_at, m.master_trade_id, m.copy_group_id,
-                   m.error_message, m.skip_reason,
+            SELECT MIN(c.id) as id, c.master_id, u.name as master_name, c.symbol, c.trade_type, c.qty, 
+                   MAX(c.price) as price,
+                   MAX(c.master_status) as master_status, MIN(c.created_at) as created_at, 
+                   c.master_trade_id, MAX(c.copy_group_id) as copy_group_id,
+                   MAX(c.error_message) as error_message, MAX(c.skip_reason) as skip_reason,
                    COUNT(c.id) as children_count,
                    AVG(c.latency_ms) as avg_latency,
                    SUM(CASE WHEN c.child_status IN ('SUCCESS', 'COMPLETED', 'PLACED') THEN 1 ELSE 0 END) as success_count,
                    SUM(CASE WHEN c.child_status IN ('FAILED', 'SKIPPED') THEN 1 ELSE 0 END) as failed_count
-            FROM copy_logs m
-            LEFT JOIN users u ON m.master_id = u.id
-            LEFT JOIN trades t ON m.master_trade_id = CAST(t.id AS VARCHAR)
-            LEFT JOIN copy_logs c ON (c.copy_group_id = m.copy_group_id OR c.master_trade_id = m.master_trade_id) AND c.child_id IS NOT NULL
-            WHERE m.child_id IS NULL
+            FROM copy_logs c
+            LEFT JOIN users u ON c.master_id = u.id
+            WHERE c.master_trade_id IS NOT NULL
             """);
 
-        if (userId != null) {
-            sql.append(" AND m.master_id = '").append(userId).append("'");
-        }
-        if (status != null && !status.isBlank()) {
-            sql.append(" AND m.master_status = '").append(status).append("'");
+        if (search != null && !search.isBlank()) {
+            sql.append(" AND (c.symbol ILIKE '%").append(search).append("%' OR c.master_trade_id ILIKE '%").append(search).append("%')");
         }
 
-        sql.append(" GROUP BY m.id, m.master_id, u.name, m.symbol, m.trade_type, m.qty, m.price, t.price, m.master_status, m.created_at, m.master_trade_id, m.copy_group_id, m.error_message, m.skip_reason ORDER BY m.created_at DESC LIMIT ").append(limit).append(" OFFSET ").append(offset);
+        if (status != null && !status.isBlank() && !status.equalsIgnoreCase("ALL")) {
+            sql.append(" AND c.master_status = '").append(status).append("'");
+        }
+
+        sql.append(" GROUP BY c.master_trade_id, c.master_id, u.name, c.symbol, c.trade_type, c.qty ORDER BY MIN(c.created_at) DESC LIMIT ").append(limit).append(" OFFSET ").append(offset);
 
         return databaseClient.sql(sql.toString())
             .fetch().all()

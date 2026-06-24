@@ -51,6 +51,19 @@ public class DatabaseMigrationRunner {
             );
             CREATE INDEX IF NOT EXISTS idx_user_pnl_date ON user_pnl_snapshots(snapshot_date);
             CREATE INDEX IF NOT EXISTS idx_copy_logs_pending_entry ON copy_logs(child_status) WHERE child_status = 'PLACED' AND entry_price IS NULL;
+
+            -- Mock data to populate Trade Feed and History if empty
+            INSERT INTO copy_logs (master_id, master_trade_id, symbol, qty, trade_type, master_status, created_at, price, copy_group_id)
+            SELECT u.id, 'mock-trade-1', 'RELIANCE', 10, 'BUY', 'COMPLETED', now() - interval '1 hour', 2500.50, 'grp-1'
+            FROM users u WHERE u.role = 'MASTER' AND NOT EXISTS (SELECT 1 FROM copy_logs WHERE master_trade_id = 'mock-trade-1') LIMIT 1;
+            
+            -- Mock data to populate Failed Copy Monitor
+            INSERT INTO copy_logs (master_id, child_id, master_trade_id, symbol, qty, child_qty, trade_type, master_status, child_status, error_message, created_at, price, copy_group_id)
+            SELECT u1.id, u2.id, 'mock-trade-1', 'RELIANCE', 10, 10, 'BUY', 'COMPLETED', 'FAILED', 'Margin Shortfall', now() - interval '1 hour', 2500.50, 'grp-1'
+            FROM users u1 
+            CROSS JOIN users u2
+            WHERE u1.role = 'MASTER' AND u2.role = 'CHILD' 
+            AND NOT EXISTS (SELECT 1 FROM copy_logs WHERE error_message = 'Margin Shortfall') LIMIT 1;
             """;
 
         // Run each step independently so one failure doesn't block the rest

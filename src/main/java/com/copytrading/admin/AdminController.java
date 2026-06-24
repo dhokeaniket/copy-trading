@@ -142,9 +142,10 @@ public class AdminController {
     public Mono<Map<String, Object>> getTradeLogs(
             @RequestParam(required = false) UUID userId,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "50") int limit) {
-        return adminService.getTradeLogs(userId, status, page, limit);
+        return adminService.getTradeLogs(userId, status, page, limit, search);
     }
 
     // 2.13 GET /admin/master-child-map
