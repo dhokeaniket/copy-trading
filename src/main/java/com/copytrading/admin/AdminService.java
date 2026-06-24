@@ -646,6 +646,37 @@ public class AdminService {
                 .defaultIfEmpty("{}");
     }
 
+    public Mono<Map<String, Object>> getUserRiskRules(UUID userId) {
+        return databaseClient.sql("SELECT * FROM risk_rules WHERE user_id = :uid")
+            .bind("uid", userId)
+            .map(row -> Map.<String, Object>of(
+                "maxTradesPerDay", row.get("max_trades_per_day", Integer.class),
+                "maxOpenPositions", row.get("max_open_positions", Integer.class),
+                "maxCapitalExposure", row.get("max_capital_exposure", Double.class),
+                "marginCheckEnabled", row.get("margin_check_enabled", Boolean.class)
+            )).one()
+            .defaultIfEmpty(Map.of());
+    }
+
+    public Mono<Map<String, Object>> updateUserRiskRules(UUID userId, Map<String, Object> body) {
+        int maxTrades = ((Number) body.getOrDefault("maxTradesPerDay", 50)).intValue();
+        int maxPos = ((Number) body.getOrDefault("maxOpenPositions", 20)).intValue();
+        double maxExp = ((Number) body.getOrDefault("maxCapitalExposure", 80.0)).doubleValue();
+        boolean marginCheck = Boolean.TRUE.equals(body.get("marginCheckEnabled"));
+
+        return databaseClient.sql("INSERT INTO risk_rules (user_id, max_trades_per_day, max_open_positions, max_capital_exposure, margin_check_enabled, updated_at) " +
+                       "VALUES (:uid, :maxTrades, :maxPos, :maxExp, :marginCheck, now()) " +
+                       "ON CONFLICT (user_id) DO UPDATE SET max_trades_per_day = :maxTrades, max_open_positions = :maxPos, " +
+                       "max_capital_exposure = :maxExp, margin_check_enabled = :marginCheck, updated_at = now()")
+            .bind("uid", userId)
+            .bind("maxTrades", maxTrades)
+            .bind("maxPos", maxPos)
+            .bind("maxExp", maxExp)
+            .bind("marginCheck", marginCheck)
+            .then()
+            .thenReturn(Map.of("message", "User risk rules updated successfully"));
+    }
+
     // 2.15 Save Global Risk Settings
     public Mono<Void> saveGlobalRiskSettings(String json) {
         try {
