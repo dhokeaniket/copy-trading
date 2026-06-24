@@ -11,8 +11,8 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "engine.polling")
 public class EnginePollingProperties {
 
-    /** Delay between poll cycles in milliseconds (default 200ms for low latency). */
-    private long intervalMs = 200;
+    /** Delay between poll cycles in milliseconds (default 1000ms). */
+    private long intervalMs = 1000;
 
     /** Wait after startup before first poll (ms). */
     private long initialDelayMs = 15_000;
