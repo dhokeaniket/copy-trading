@@ -658,6 +658,13 @@ public class CopyEngineService {
                 // instrument_token: "NSE_EQ|INE002A01018" (ISIN format from instrument master)
                 // product: I=intraday, D=delivery
                 String upProd = BrokerFieldTranslator.product(prod, "UPSTOX", isFnO);
+                // Upstox EDIS bypass: selling delivery equity requires CDSL TPIN authorization
+                // which can't be done programmatically via API. Force product=I (intraday) for
+                // equity sells to avoid EDIS rejection. Position exits same day regardless.
+                if ("SELL".equalsIgnoreCase(side) && !isFnO && "D".equals(upProd)) {
+                    upProd = "I";
+                    log.info("UPSTOX_EDIS_BYPASS symbol={} forcing product=I for SELL (EDIS not available via API)", sym);
+                }
                 // Strip NSE:/BSE: prefix and -EQ suffix before Upstox instrument lookup
                 String cleanSymForUpstox = sym;
                 if (cleanSymForUpstox.startsWith("NSE:") || cleanSymForUpstox.startsWith("BSE:")) {
