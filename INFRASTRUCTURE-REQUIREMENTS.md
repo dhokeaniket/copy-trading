@@ -30,18 +30,22 @@
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
-| Backend | Java + Spring Boot WebFlux (Reactive) | Java 17, Spring Boot 3.2+ |
-| Database | PostgreSQL (RDS) | 15.x |
+| Backend | Java + Spring Boot WebFlux (Reactive) | **Java 21**, Spring Boot 3.2.5 |
+| Database | PostgreSQL (AWS RDS) | 15.x |
 | Cache | Redis (ElastiCache) | 7.x |
 | Message Broker | Apache Kafka (MSK) or Redis Streams | Kafka 3.5+ |
 | Frontend | React / Next.js | 14+ |
 | Mobile | React Native or Flutter | (if applicable) |
 | Container | Docker + ECS Fargate | Latest |
-| Build | Gradle 8.x | 8.14 |
-| Proxy/IP Routing | Squid (multi-IP) | 5.x |
-| WebSocket | Netty (Spring WebFlux built-in) | — |
+| Build | Gradle 8.14 | 8.14 |
+| Proxy/IP Routing | Squid (multi-IP for broker IP whitelisting) | 5.x |
+| WebSocket | Netty (Spring WebFlux built-in) + Broker WS feeds | — |
 | Monitoring | Prometheus + Grafana | Latest |
-| Logging | Loki + Promtail (or CloudWatch) | — |
+| Logging | Loki + Promtail (or CloudWatch Logs) | — |
+| OTP/SMS | AWS SNS + Twilio Verify | — |
+| Auth | JWT (access + refresh tokens) + Google OAuth | — |
+| Notifications | Telegram Bot API + In-app push | — |
+| Broker APIs | Groww, Upstox, Zerodha, Fyers, Angel One, Dhan | REST + WebSocket |
 
 ---
 
@@ -399,3 +403,100 @@ A: Detailed in Section 12. Redis for cache/state, Kafka for event streaming at s
 | 🟢 P2 | Add Kafka for event decoupling | Scale to 500+ masters | 2 days |
 | 🟢 P2 | RDS read replica | Dashboard performance | 1 hour |
 | 🟢 P2 | Redis cluster mode | Handle 10K+ sessions | 1 hour |
+
+
+---
+
+## 18. PURCHASE LIST — What to Buy for Launch
+
+Everything the owner needs to purchase/set up before India launch:
+
+### AWS Services (Pay-as-you-go, no upfront)
+
+| # | Service | Spec | Region | Monthly Cost | Action |
+|---|---------|------|--------|-------------|--------|
+| 1 | **EC2 App Server** | c6i.large (2 vCPU, 4 GB) × 2 | ap-south-1 (Mumbai) | $130 | Launch via AWS Console |
+| 2 | **RDS PostgreSQL** | db.t3.medium, Multi-AZ, 100GB gp3 | ap-south-1 | $60 | Create in RDS Console |
+| 3 | **ElastiCache Redis** | cache.t3.medium, 1 node | ap-south-1 | $50 | Create in ElastiCache |
+| 4 | **Application Load Balancer** | ALB + target group | ap-south-1 | $25 | Create in EC2 → Load Balancers |
+| 5 | **ACM SSL Certificate** | *.ascentracapital.com | ap-south-1 | **FREE** | AWS Certificate Manager |
+| 6 | **Elastic IPs** | 10-15 IPs for broker whitelisting | ap-south-1 | $5/IP unused | EC2 → Elastic IPs |
+| 7 | **S3 Bucket** | Frontend hosting | ap-south-1 | ~$5 | S3 Console |
+| 8 | **CloudFront CDN** | Frontend distribution | Global | ~$10 | CloudFront Console |
+| 9 | **Route 53** | DNS hosting | Global | $0.50/zone | Already configured? |
+| 10 | **NAT Gateway** | For private subnet outbound | ap-south-1 | $35 | VPC Console |
+| 11 | **Secrets Manager** | Store broker keys, DB creds | ap-south-1 | $5 | Secrets Manager |
+| 12 | **CloudWatch Logs** | Basic log storage | ap-south-1 | ~$10 | Auto with EC2 |
+
+**Total AWS: ~$330-350/month to start**
+
+### Third-Party Services
+
+| # | Service | Purpose | Cost | Action |
+|---|---------|---------|------|--------|
+| 1 | **GitHub (Team plan)** | Code hosting + CI/CD minutes | $4/user/month | Already have |
+| 2 | **Twilio** | OTP/SMS verification | Pay-per-use (~$50/mo) | Already configured |
+| 3 | **Telegram Bot** | Trade notifications | **FREE** | Already configured |
+| 4 | **Domain** | ascentracapital.com | ~$12/year | Already have |
+| 5 | **UptimeRobot** | External monitoring | **FREE** (basic) | Sign up |
+| 6 | **Grafana Cloud** | Metrics + dashboards | **FREE** (10K metrics) | Sign up |
+
+### Broker API Accounts (Required per broker)
+
+| # | Broker | What to Get | Cost | Notes |
+|---|--------|-------------|------|-------|
+| 1 | **Groww** | Trade API key | FREE | Apply at groww.in/trade-api |
+| 2 | **Upstox** | Developer App (OAuth) | FREE | developers.upstox.com |
+| 3 | **Zerodha** | Kite Connect API | ₹2,000/month | developers.kite.trade |
+| 4 | **Angel One** | SmartAPI key | FREE | smartapi.angelone.in |
+| 5 | **Fyers** | MyAPI app | FREE | myapi.fyers.in |
+| 6 | **Dhan** | DhanHQ API | FREE | dhanhq.co |
+
+### One-Time Setup Tasks (Dev Team)
+
+| # | Task | Time | Dependency |
+|---|------|------|------------|
+| 1 | Set up Mumbai VPC + subnets + security groups | 2 hours | AWS account |
+| 2 | Create RDS + Redis in Mumbai | 1 hour | VPC ready |
+| 3 | Dockerize application | 4 hours | None |
+| 4 | Set up GitHub Actions CI/CD | 4 hours | Docker ready |
+| 5 | Deploy to Mumbai, test all brokers | 4 hours | All above |
+| 6 | Configure ALB + SSL + domain | 2 hours | ACM cert |
+| 7 | Set up Squid proxy (multi-IP) in Mumbai | 3 hours | EC2 ready |
+| 8 | Set up monitoring (Prometheus + Grafana) | 3 hours | App running |
+| 9 | Load testing (simulate 1000 users) | 4 hours | All above |
+| 10 | DNS cutover (go live) | 30 min | All above |
+
+**Total setup time: ~3-4 days**
+
+---
+
+## 19. Launch Checklist
+
+Before going live with real users:
+
+- [ ] Mumbai infrastructure deployed and tested
+- [ ] All 6 broker APIs working from Mumbai IPs
+- [ ] SSL certificate active on api.ascentracapital.com
+- [ ] CI/CD pipeline deploying correctly
+- [ ] Monitoring dashboards showing metrics
+- [ ] Telegram alerts firing on failures
+- [ ] Load test passed (500 concurrent copies)
+- [ ] Database backup configured (daily)
+- [ ] Secrets moved from env vars to Secrets Manager
+- [ ] WAF rules active (rate limiting, bot protection)
+- [ ] Admin can impersonate users for support
+- [ ] Risk rules set for all children (default 50 trades/day)
+- [ ] Kill switch tested (stops all copying instantly)
+- [ ] Sell guard working across all brokers
+- [ ] WebSocket connections stable for Upstox
+- [ ] Frontend deployed to S3 + CloudFront
+
+---
+
+## 20. Note on Java Version
+
+**Build config:** `build.gradle` specifies Java 21 (`languageVersion = JavaLanguageVersion.of(21)`)  
+**EC2 runtime:** Currently Java 17 (`amazon-corretto-17`) — Gradle auto-downloads Java 21 for compilation via toolchain.
+
+**For Mumbai production:** Install Amazon Corretto 21 on ECS/Docker image. Use `eclipse-temurin:21-jre-alpine` in Dockerfile.
