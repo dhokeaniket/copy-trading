@@ -252,7 +252,20 @@ public class AdminController {
         return adminService.forceApplyRiskToAllChildren(json);
     }
 
-    // 2.24 POST /admin/impersonate/{userId}
+    // 2.24 GET /admin/risk/rules/{userId}
+    @GetMapping("/risk/rules/{userId}")
+    public Mono<Map<String, Object>> getUserRiskRules(@PathVariable UUID userId) {
+        return adminService.getUserRiskRules(userId);
+    }
+
+    // 2.25 PUT /admin/risk/rules/{userId}
+    @PutMapping("/risk/rules/{userId}")
+    @AdminAudit(action = "UPDATE_USER_RISK_RULES")
+    public Mono<Map<String, Object>> updateUserRiskRules(@PathVariable UUID userId, @RequestBody Map<String, Object> body) {
+        return adminService.updateUserRiskRules(userId, body);
+    }
+
+    // 2.26 POST /admin/impersonate/{userId}
     @PostMapping("/impersonate/{userId}")
     @AdminAudit(action = "IMPERSONATE_USER")
     public Mono<Map<String, String>> impersonateUser(@PathVariable UUID userId) {
