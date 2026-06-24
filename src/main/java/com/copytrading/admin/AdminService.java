@@ -661,6 +661,74 @@ public class AdminService {
                 })).then();
     }
 
+    /**
+     * Apply global risk settings to all children who DON'T have custom rules set.
+     * Children with existing custom rules are untouched.
+     */
+    public Mono<Map<String, Object>> applyGlobalRiskToAllChildren(String json) {
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var node = mapper.readTree(json);
+            int maxTrades = node.has("maxTradesPerDay") ? node.get("maxTradesPerDay").asInt(50) : 50;
+            int maxPositions = node.has("maxOpenPositions") ? node.get("maxOpenPositions").asInt(20) : 20;
+            double maxExposure = node.has("maxCapitalExposure") ? node.get("maxCapitalExposure").asDouble(80) : 80;
+            boolean marginCheck = !node.has("marginCheckEnabled") || node.get("marginCheckEnabled").asBoolean(true);
+
+            // Insert for users who don't have risk_rules yet (children = users in subscriptions as child_id)
+            String sql = "INSERT INTO risk_rules (user_id, max_trades_per_day, max_open_positions, max_capital_exposure, margin_check_enabled, copy_paused, updated_at) "
+                    + "SELECT DISTINCT s.child_id, :maxTrades, :maxPos, :maxExp, :marginCheck, false, NOW() "
+                    + "FROM subscriptions s WHERE s.child_id NOT IN (SELECT user_id FROM risk_rules) "
+                    + "ON CONFLICT (user_id) DO NOTHING";
+            return databaseClient.sql(sql)
+                    .bind("maxTrades", maxTrades)
+                    .bind("maxPos", maxPositions)
+                    .bind("maxExp", maxExposure)
+                    .bind("marginCheck", marginCheck)
+                    .fetch().rowsUpdated()
+                    .map(count -> Map.<String, Object>of(
+                            "message", "Global risk applied to children without custom rules",
+                            "childrenUpdated", count,
+                            "maxTradesPerDay", maxTrades,
+                            "maxOpenPositions", maxPositions));
+        } catch (Exception e) {
+            return Mono.just(Map.of("error", "Invalid JSON: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Force-apply risk settings to ALL children — overwrites any custom rules.
+     */
+    public Mono<Map<String, Object>> forceApplyRiskToAllChildren(String json) {
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var node = mapper.readTree(json);
+            int maxTrades = node.has("maxTradesPerDay") ? node.get("maxTradesPerDay").asInt(50) : 50;
+            int maxPositions = node.has("maxOpenPositions") ? node.get("maxOpenPositions").asInt(20) : 20;
+            double maxExposure = node.has("maxCapitalExposure") ? node.get("maxCapitalExposure").asDouble(80) : 80;
+            boolean marginCheck = !node.has("marginCheckEnabled") || node.get("marginCheckEnabled").asBoolean(true);
+
+            String sql = "INSERT INTO risk_rules (user_id, max_trades_per_day, max_open_positions, max_capital_exposure, margin_check_enabled, copy_paused, updated_at) "
+                    + "SELECT DISTINCT s.child_id, :maxTrades, :maxPos, :maxExp, :marginCheck, false, NOW() "
+                    + "FROM subscriptions s "
+                    + "ON CONFLICT (user_id) DO UPDATE SET max_trades_per_day = :maxTrades, max_open_positions = :maxPos, "
+                    + "max_capital_exposure = :maxExp, margin_check_enabled = :marginCheck, updated_at = NOW()";
+            return databaseClient.sql(sql)
+                    .bind("maxTrades", maxTrades)
+                    .bind("maxPos", maxPositions)
+                    .bind("maxExp", maxExposure)
+                    .bind("marginCheck", marginCheck)
+                    .fetch().rowsUpdated()
+                    .map(count -> Map.<String, Object>of(
+                            "message", "Risk settings force-applied to ALL children",
+                            "childrenUpdated", count,
+                            "maxTradesPerDay", maxTrades,
+                            "maxOpenPositions", maxPositions,
+                            "maxCapitalExposure", maxExposure));
+        } catch (Exception e) {
+            return Mono.just(Map.of("error", "Invalid JSON: " + e.getMessage()));
+        }
+    }
+
     // 2.16 View As User (Impersonation)
     public Mono<Map<String, String>> impersonateUser(UUID userId) {
         return users.findById(userId)

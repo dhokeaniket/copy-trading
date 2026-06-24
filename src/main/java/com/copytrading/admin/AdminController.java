@@ -236,11 +236,20 @@ public class AdminController {
         return adminService.getGlobalRiskSettings();
     }
 
-    // 2.23 POST /admin/settings/risk
+    // 2.23 POST /admin/settings/risk — save global defaults AND apply to all children without custom rules
     @PostMapping("/settings/risk")
     @AdminAudit(action = "UPDATE_RISK_SETTINGS")
-    public Mono<Void> saveGlobalRiskSettings(@RequestBody String json) {
-        return adminService.saveGlobalRiskSettings(json);
+    public Mono<Map<String, Object>> saveGlobalRiskSettings(@RequestBody String json) {
+        return adminService.saveGlobalRiskSettings(json)
+                .then(adminService.applyGlobalRiskToAllChildren(json));
+    }
+
+    // 2.23b POST /admin/settings/risk/apply-all — force apply to ALL children (overwrite custom rules too)
+    @PostMapping("/settings/risk/apply-all")
+    @AdminAudit(action = "APPLY_RISK_TO_ALL")
+    @Operation(summary = "Apply risk settings to ALL children", description = "Overwrites per-user risk rules with the provided values for every child user")
+    public Mono<Map<String, Object>> applyRiskToAllChildren(@RequestBody String json) {
+        return adminService.forceApplyRiskToAllChildren(json);
     }
 
     // 2.24 POST /admin/impersonate/{userId}
