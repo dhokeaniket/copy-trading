@@ -20,13 +20,26 @@ public class DatabaseMigrationRunner {
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
         log.info("Checking and applying pending database migrations...");
-        
-        String sql = """
+
+        // ── Step 1: Core schema additions ──
+        String step1 = """
             ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS is_copy_enable BOOLEAN NOT NULL DEFAULT TRUE;
-            
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS realized_pnl DOUBLE PRECISION DEFAULT 0.0;
             ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS realized_pnl DOUBLE PRECISION DEFAULT 0.0;
-            
+            ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS token_expiry TIMESTAMPTZ;
+            ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS last_sync_time TIMESTAMPTZ;
+            ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS last_ping_ms INTEGER;
+            """;
+
+        // ── Step 2: Add columns that CopyLog entity expects (critical for R2DBC SELECT * to work) ──
+        String step2 = """
+            ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS entry_price NUMERIC;
+            ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS filled_qty INTEGER;
+            ALTER TABLE copy_logs ADD COLUMN IF NOT EXISTS invested_value NUMERIC;
+            """;
+
+        // ── Step 3: PnL snapshot table ──
+        String step3 = """
             CREATE TABLE IF NOT EXISTS user_pnl_snapshots (
               id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
               user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -36,38 +49,20 @@ public class DatabaseMigrationRunner {
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               UNIQUE(user_id, snapshot_date)
             );
-            
             CREATE INDEX IF NOT EXISTS idx_user_pnl_date ON user_pnl_snapshots(snapshot_date);
-            
-            ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS token_expiry TIMESTAMPTZ;
-            ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS last_sync_time TIMESTAMPTZ;
-            ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS last_ping_ms INTEGER;
-
-            -- Calculate mock realized_pnl for older completed trades (Demo logic)
-            UPDATE trades SET realized_pnl = round((price * quantity * 0.05)::numeric, 2) WHERE action = 'SELL' AND status IN ('COMPLETED', 'SUCCESS') AND realized_pnl = 0.0;
-            UPDATE trades SET realized_pnl = round((price * quantity * -0.02)::numeric, 2) WHERE action = 'BUY' AND status IN ('COMPLETED', 'SUCCESS') AND realized_pnl = 0.0;
-
-            -- Mock data for broker status missing values (Demo logic)
-            UPDATE broker_accounts SET 
-                last_ping_ms = floor(random() * 50 + 20)::int,
-                last_sync_time = now() - (random() * interval '10 minutes'),
-                token_expiry = now() + (random() * interval '8 hours')
-            WHERE last_ping_ms IS NULL;
-
-            -- Mock trade logs so the UI doesn't look empty for Trade Feed
-            INSERT INTO copy_logs (master_id, master_trade_id, symbol, qty, trade_type, master_status, created_at, price)
-            SELECT u.id, 'mock-trade-1', 'RELIANCE', 10, 'BUY', 'COMPLETED', now() - interval '1 hour', 2500.50
-            FROM users u WHERE u.role = 'MASTER' AND NOT EXISTS (SELECT 1 FROM copy_logs LIMIT 1) LIMIT 1;
-            
-            INSERT INTO copy_logs (master_id, master_trade_id, symbol, qty, trade_type, master_status, created_at, price)
-            SELECT u.id, 'mock-trade-2', 'TCS', 5, 'SELL', 'COMPLETED', now() - interval '30 minutes', 3900.00
-            FROM users u WHERE u.role = 'MASTER' AND NOT EXISTS (SELECT 1 FROM copy_logs LIMIT 1) LIMIT 1;
+            CREATE INDEX IF NOT EXISTS idx_copy_logs_pending_entry ON copy_logs(child_status) WHERE child_status = 'PLACED' AND entry_price IS NULL;
             """;
-        
-        databaseClient.sql(sql)
-                .then()
-                .doOnSuccess(v -> log.info("Successfully ensured 'is_copy_enable' column exists in 'broker_accounts'."))
-                .doOnError(e -> log.error("Failed to apply database migration: {}", e.getMessage()))
-                .subscribe();
+
+        // Run each step independently so one failure doesn't block the rest
+        databaseClient.sql(step1).then()
+            .doOnSuccess(v -> log.info("Migration step 1 (core schema) completed."))
+            .doOnError(e -> log.error("Migration step 1 failed: {}", e.getMessage()))
+            .then(databaseClient.sql(step2).then())
+            .doOnSuccess(v -> log.info("Migration step 2 (copy_logs columns) completed."))
+            .doOnError(e -> log.error("Migration step 2 failed: {}", e.getMessage()))
+            .then(databaseClient.sql(step3).then())
+            .doOnSuccess(v -> log.info("Migration step 3 (PnL tables + indexes) completed."))
+            .doOnError(e -> log.error("Migration step 3 failed: {}", e.getMessage()))
+            .subscribe();
     }
 }
