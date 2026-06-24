@@ -172,7 +172,7 @@ public class AdminService {
     }
 
     public Mono<Map<String, Object>> getUserDetailsAdmin(UUID userId) {
-        String sql = "SELECT u.id, u.name, u.email, u.role, u.status, u.created_at, COUNT(b.id) as brokers " +
+        String sql = "SELECT u.id, u.name, u.email, u.phone, u.role, u.status, u.created_at, COUNT(b.id) as brokers " +
                      "FROM users u LEFT JOIN broker_accounts b ON u.id = b.user_id " +
                      "WHERE u.id = '" + userId + "' GROUP BY u.id";
         return databaseClient.sql(sql)
