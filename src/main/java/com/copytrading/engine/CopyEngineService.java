@@ -612,13 +612,13 @@ public class CopyEngineService {
                         fyersSym = ("BSE".equals(exch) ? "BSE:" : "NSE:") + sym;
                     }
                 } else {
-                    // Strip any existing -EQ suffix and NSE:/BSE: prefix before adding Fyers format (NSE:SYMBOL-EQ)
+                    // Strip any existing exchange suffix and NSE:/BSE: prefix before adding Fyers format (NSE:SYMBOL-EQ)
                     String cleanSym = sym;
                     if (cleanSym.startsWith("NSE:") || cleanSym.startsWith("BSE:")) {
                         cleanSym = cleanSym.substring(4);
                     }
-                    if (cleanSym.toUpperCase().endsWith("-EQ")) {
-                        cleanSym = cleanSym.substring(0, cleanSym.length() - 3);
+                    if (cleanSym.matches(".*-(EQ|BE|BL|SM|IL)$")) {
+                        cleanSym = cleanSym.substring(0, cleanSym.lastIndexOf('-'));
                     }
                     fyersSym = ("BSE".equals(exch) ? "BSE:" : "NSE:") + cleanSym + "-EQ";
                 }
@@ -665,13 +665,13 @@ public class CopyEngineService {
                     upProd = "I";
                     log.info("UPSTOX_EDIS_BYPASS symbol={} forcing product=I for SELL (EDIS not available via API)", sym);
                 }
-                // Strip NSE:/BSE: prefix and -EQ suffix before Upstox instrument lookup
+                // Strip NSE:/BSE: prefix and -EQ/-BE/-BL/-SM suffix before Upstox instrument lookup
                 String cleanSymForUpstox = sym;
                 if (cleanSymForUpstox.startsWith("NSE:") || cleanSymForUpstox.startsWith("BSE:")) {
                     cleanSymForUpstox = cleanSymForUpstox.substring(4);
                 }
-                if (!isFnO && cleanSymForUpstox.toUpperCase().endsWith("-EQ")) {
-                    cleanSymForUpstox = cleanSymForUpstox.substring(0, cleanSymForUpstox.length() - 3);
+                if (!isFnO && cleanSymForUpstox.matches(".*-(EQ|BE|BL|SM|IL)$")) {
+                    cleanSymForUpstox = cleanSymForUpstox.substring(0, cleanSymForUpstox.lastIndexOf('-'));
                 }
                 String upSym = instruments.getUpstoxInstrumentKey(cleanSymForUpstox, isFnO);
                 if (upSym == null) {
@@ -719,13 +719,13 @@ public class CopyEngineService {
                 String dhanProd = BrokerFieldTranslator.product(prod, "DHAN", isFnO);
                 // Derive expiry date from master symbol for precise weekly/monthly lookup
                 String expiryDate = symbolMapper.extractExpiryDate(symbol, masterBrokerId);
-                // Strip NSE:/BSE: prefix and -EQ suffix for Dhan lookup
+                // Strip NSE:/BSE: prefix and exchange suffix for Dhan lookup
                 String cleanSymForDhan = sym;
                 if (cleanSymForDhan.startsWith("NSE:") || cleanSymForDhan.startsWith("BSE:")) {
                     cleanSymForDhan = cleanSymForDhan.substring(4);
                 }
-                if (!isFnO && cleanSymForDhan.toUpperCase().endsWith("-EQ")) {
-                    cleanSymForDhan = cleanSymForDhan.substring(0, cleanSymForDhan.length() - 3);
+                if (!isFnO && cleanSymForDhan.matches(".*-(EQ|BE|BL|SM|IL)$")) {
+                    cleanSymForDhan = cleanSymForDhan.substring(0, cleanSymForDhan.lastIndexOf('-'));
                 }
                 String secId = instruments.getDhanSecurityId(cleanSymForDhan, isFnO, expiryDate);
                 if (secId == null && !cleanSymForDhan.equalsIgnoreCase(symbol)) {
@@ -805,13 +805,13 @@ public class CopyEngineService {
                             "Angel One SmartAPI apiKey missing on child account — user must PUT apiKey from their Angel SmartAPI app."));
                 }
                 String angelProd = BrokerFieldTranslator.product(prod, "ANGELONE", isFnO);
-                // Strip any existing NSE:/BSE: prefix and -EQ suffix before adding Angel One format (SYMBOL-EQ)
+                // Strip any existing NSE:/BSE: prefix and exchange suffix before adding Angel One format (SYMBOL-EQ)
                 String cleanSymForAngel = sym;
                 if (cleanSymForAngel.startsWith("NSE:") || cleanSymForAngel.startsWith("BSE:")) {
                     cleanSymForAngel = cleanSymForAngel.substring(4);
                 }
-                if (cleanSymForAngel.toUpperCase().endsWith("-EQ")) {
-                    cleanSymForAngel = cleanSymForAngel.substring(0, cleanSymForAngel.length() - 3);
+                if (cleanSymForAngel.matches(".*-(EQ|BE|BL|SM|IL)$")) {
+                    cleanSymForAngel = cleanSymForAngel.substring(0, cleanSymForAngel.lastIndexOf('-'));
                 }
                 String angelSym = isFnO ? sym : cleanSymForAngel + "-EQ";
                 String angelToken = instruments.getAngelToken(angelSym, isFnO);
