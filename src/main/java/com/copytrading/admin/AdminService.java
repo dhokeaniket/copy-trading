@@ -528,7 +528,7 @@ public class AdminService {
         int offset = (page - 1) * limit;
         StringBuilder sql = new StringBuilder("""
             SELECT m.id, m.master_id, u.name as master_name, m.symbol, m.trade_type, m.qty, 
-                   COALESCE(m.entry_price, m.price, t.price, 0.0) as price,
+                   COALESCE(m.price, t.price, 0.0) as price,
                    m.master_status, m.created_at, m.master_trade_id, m.copy_group_id,
                    m.error_message, m.skip_reason,
                    COUNT(c.id) as children_count,
@@ -549,7 +549,7 @@ public class AdminService {
             sql.append(" AND m.master_status = '").append(status).append("'");
         }
 
-        sql.append(" GROUP BY m.id, m.master_id, u.name, m.symbol, m.trade_type, m.qty, m.entry_price, m.price, t.price, m.master_status, m.created_at, m.master_trade_id, m.copy_group_id, m.error_message, m.skip_reason ORDER BY m.created_at DESC LIMIT ").append(limit).append(" OFFSET ").append(offset);
+        sql.append(" GROUP BY m.id, m.master_id, u.name, m.symbol, m.trade_type, m.qty, m.price, t.price, m.master_status, m.created_at, m.master_trade_id, m.copy_group_id, m.error_message, m.skip_reason ORDER BY m.created_at DESC LIMIT ").append(limit).append(" OFFSET ").append(offset);
 
         return databaseClient.sql(sql.toString())
             .fetch().all()
@@ -1020,7 +1020,7 @@ public class AdminService {
                 String childSql = """
                     SELECT c.child_id, u.name as child_user, b.broker_id as child_broker,
                            c.child_qty, c.qty as master_qty, c.child_status as status, c.child_placed_at as executed_at,
-                           c.child_broker_order_id, c.latency_ms, c.entry_price, c.filled_qty,
+                           c.child_broker_order_id, c.latency_ms, c.price, c.filled_qty,
                            c.error_message, c.skip_reason
                     FROM copy_logs c
                     LEFT JOIN users u ON c.child_id = u.id
@@ -1069,14 +1069,14 @@ public class AdminService {
                         String status = (String) c.get("status");
                         fc.put("status", status);
                         fc.put("executedAt", c.get("executed_at"));
-                        fc.put("price", c.get("entry_price"));
+                        fc.put("price", c.get("price"));
                         
                         Number latency = (Number) c.get("latency_ms");
                         fc.put("latencyMs", latency);
                         
                         // Calculate slippage if possible
                         Number masterPrice = (Number) masterObj.get("price");
-                        Number childPrice = (Number) c.get("entry_price");
+                        Number childPrice = (Number) c.get("price");
                         if (masterPrice != null && childPrice != null && masterPrice.doubleValue() > 0) {
                             double slippage = childPrice.doubleValue() - masterPrice.doubleValue();
                             fc.put("slippage", String.format("%.2f", slippage));

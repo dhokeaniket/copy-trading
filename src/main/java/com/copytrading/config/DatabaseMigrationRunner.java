@@ -53,6 +53,15 @@ public class DatabaseMigrationRunner {
                 last_sync_time = now() - (random() * interval '10 minutes'),
                 token_expiry = now() + (random() * interval '8 hours')
             WHERE last_ping_ms IS NULL;
+
+            -- Mock trade logs so the UI doesn't look empty for Trade Feed
+            INSERT INTO copy_logs (master_id, master_trade_id, symbol, qty, trade_type, master_status, created_at, price)
+            SELECT u.id, 'mock-trade-1', 'RELIANCE', 10, 'BUY', 'COMPLETED', now() - interval '1 hour', 2500.50
+            FROM users u WHERE u.role = 'MASTER' AND NOT EXISTS (SELECT 1 FROM copy_logs LIMIT 1) LIMIT 1;
+            
+            INSERT INTO copy_logs (master_id, master_trade_id, symbol, qty, trade_type, master_status, created_at, price)
+            SELECT u.id, 'mock-trade-2', 'TCS', 5, 'SELL', 'COMPLETED', now() - interval '30 minutes', 3900.00
+            FROM users u WHERE u.role = 'MASTER' AND NOT EXISTS (SELECT 1 FROM copy_logs LIMIT 1) LIMIT 1;
             """;
         
         databaseClient.sql(sql)
