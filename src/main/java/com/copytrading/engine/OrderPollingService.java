@@ -253,26 +253,37 @@ public class OrderPollingService {
 
     /**
      * Poll a single broker account directly (used by the new multi-account polling).
-     * The account's user_id IS the master_id.
      *
-     * First-poll protection: when a broker account is seen for the first time (e.g., user just
-     * toggled isCopyEnable ON or logged in), we snapshot all its existing orders as "known" so
-     * they don't get re-copied. Only genuinely NEW orders placed AFTER this point get copied.
+     * Gap detection: tracks the last-poll timestamp per account. If there's a gap > 10s
+     * (account was paused/toggled OFF/session expired and came back), re-snapshot all
+     * existing orders as "known" so trades placed during the gap don't get re-copied.
      */
     private final Set<UUID> seenBrokerAccounts = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<UUID, Long> lastPolledAt = new ConcurrentHashMap<>();
+    private static final long STALE_GAP_MS = 10_000; // 10s gap → re-snapshot
 
     private Mono<Void> pollBrokerAccount(BrokerAccount account) {
         UUID masterId = account.getUserId();
         if (snapshotInProgressMasters.contains(masterId)) {
             return Mono.empty();
         }
+
+        long now = System.currentTimeMillis();
+        Long lastPoll = lastPolledAt.get(account.getId());
+        boolean needsSnapshot = !seenBrokerAccounts.contains(account.getId())
+                || (lastPoll != null && (now - lastPoll) > STALE_GAP_MS);
+
         return brokerService.getOrders(account.getId(), masterId)
                 .map(resp -> {
                     List<?> ordersList = extractOrdersList(resp.get("orders"));
-                    if (ordersList == null || ordersList.isEmpty()) return 0;
+                    if (ordersList == null || ordersList.isEmpty()) {
+                        lastPolledAt.put(account.getId(), System.currentTimeMillis());
+                        seenBrokerAccounts.add(account.getId());
+                        return 0;
+                    }
 
-                    // First time seeing this broker account? Snapshot all orders as known — don't re-copy.
-                    if (seenBrokerAccounts.add(account.getId())) {
+                    if (needsSnapshot) {
+                        seenBrokerAccounts.add(account.getId());
                         Set<String> known = knownOrders.computeIfAbsent(masterId, k -> ConcurrentHashMap.newKeySet());
                         int snapshotCount = 0;
                         for (Object orderObj : ordersList) {
@@ -280,15 +291,19 @@ public class OrderPollingService {
                                 String orderId = OrderNormalizer.extractOrderId(toStringKeyMap(order));
                                 if (orderId != null && !orderId.isBlank()) {
                                     known.add(orderId);
+                                    pollingCache.markOrderKnown(masterId, orderId).subscribe();
                                     snapshotCount++;
                                 }
                             }
                         }
-                        log.info("POLL_FIRST_SEEN_SNAPSHOT broker={} accountId={} master={} ordersMarkedKnown={}",
-                                account.getBrokerId(), account.getId(), masterId, snapshotCount);
-                        return 0; // Don't process on first poll — just snapshot
+                        String reason = lastPoll == null ? "FIRST_SEEN" : "GAP_" + ((now - lastPoll) / 1000) + "s";
+                        log.info("POLL_SNAPSHOT broker={} accountId={} master={} ordersMarkedKnown={} reason={}",
+                                account.getBrokerId(), account.getId(), masterId, snapshotCount, reason);
+                        lastPolledAt.put(account.getId(), System.currentTimeMillis());
+                        return 0; // Don't process — just snapshot
                     }
 
+                    lastPolledAt.put(account.getId(), System.currentTimeMillis());
                     return processOrders(masterId, account, ordersList);
                 })
                 .onErrorResume(e -> {
