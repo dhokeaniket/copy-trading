@@ -171,6 +171,15 @@ public class AdminService {
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")));
     }
 
+    public Mono<Map<String, Object>> getUserDetailsAdmin(UUID userId) {
+        String sql = "SELECT u.id, u.name, u.email, u.role, u.status, u.created_at, COUNT(b.id) as brokers " +
+                     "FROM users u LEFT JOIN broker_accounts b ON u.id = b.user_id " +
+                     "WHERE u.id = '" + userId + "' GROUP BY u.id";
+        return databaseClient.sql(sql)
+                .fetch().one()
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")));
+    }
+
     // 2.5 Update user
     public Mono<UserDto> updateUser(UUID userId, UpdateUserRequest req) {
         return users.findById(userId)
@@ -540,7 +549,7 @@ public class AdminService {
             sql.append(" AND m.master_status = '").append(status).append("'");
         }
 
-        sql.append(" GROUP BY m.id, u.name, t.price ORDER BY m.created_at DESC LIMIT ").append(limit).append(" OFFSET ").append(offset);
+        sql.append(" GROUP BY m.id, m.master_id, u.name, m.symbol, m.trade_type, m.qty, m.entry_price, m.price, t.price, m.master_status, m.created_at, m.master_trade_id, m.copy_group_id, m.error_message, m.skip_reason ORDER BY m.created_at DESC LIMIT ").append(limit).append(" OFFSET ").append(offset);
 
         return databaseClient.sql(sql.toString())
             .fetch().all()

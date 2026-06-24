@@ -74,8 +74,8 @@ public class AdminController {
 
     // 2.4 GET /admin/users/:userId
     @GetMapping("/users/{userId}")
-    public Mono<UserDto> getUser(@PathVariable UUID userId) {
-        return adminService.getUserById(userId);
+    public Mono<Map<String, Object>> getUser(@PathVariable UUID userId) {
+        return adminService.getUserDetailsAdmin(userId);
     }
 
     // 2.5 PUT /admin/users/:userId/status

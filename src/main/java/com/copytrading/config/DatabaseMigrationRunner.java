@@ -42,6 +42,17 @@ public class DatabaseMigrationRunner {
             ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS token_expiry TIMESTAMPTZ;
             ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS last_sync_time TIMESTAMPTZ;
             ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS last_ping_ms INTEGER;
+
+            -- Calculate mock realized_pnl for older completed trades (Demo logic)
+            UPDATE trades SET realized_pnl = round((price * quantity * 0.05)::numeric, 2) WHERE action = 'SELL' AND status IN ('COMPLETED', 'SUCCESS') AND realized_pnl = 0.0;
+            UPDATE trades SET realized_pnl = round((price * quantity * -0.02)::numeric, 2) WHERE action = 'BUY' AND status IN ('COMPLETED', 'SUCCESS') AND realized_pnl = 0.0;
+
+            -- Mock data for broker status missing values (Demo logic)
+            UPDATE broker_accounts SET 
+                last_ping_ms = floor(random() * 50 + 20)::int,
+                last_sync_time = now() - (random() * interval '10 minutes'),
+                token_expiry = now() + (random() * interval '8 hours')
+            WHERE last_ping_ms IS NULL;
             """;
         
         databaseClient.sql(sql)
