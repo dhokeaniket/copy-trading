@@ -1220,7 +1220,7 @@ public class AdminService {
     public Mono<Map<String, Object>> getPnL(String dateFrom, String dateTo) {
         // We'll just fetch all copy logs and apply netting logic like getAnalytics
         return copyLogRepo.findAll().collectList().flatMap(logs -> {
-            return users.findAll().collectMap(com.copytrading.user.User::getId, com.copytrading.user.User::getName).map(userNames -> {
+            return users.findAll().collectMap(com.copytrading.auth.UserAccount::getId, com.copytrading.auth.UserAccount::getName).map(userNames -> {
                 Map<String, List<com.copytrading.logs.CopyLog>> bySymbol = logs.stream()
                         .filter(l -> "SUCCESS".equalsIgnoreCase(l.getChildStatus()) && l.getSymbol() != null)
                         .collect(java.util.stream.Collectors.groupingBy(l -> l.getSymbol().toUpperCase()));
@@ -1280,14 +1280,14 @@ public class AdminService {
                 }
 
                 List<Map<String, Object>> masters = masterPnlMap.entrySet().stream()
-                        .map(e -> Map.<String, Object>of("name", userNames.getOrDefault(e.getKey(), "Unknown"), "pnl", Math.round(e.getValue() * 100.0) / 100.0))
-                        .sorted((a, b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")))
-                        .toList();
+                        .map(e -> (Map<String, Object>) Map.<String, Object>of("name", userNames.getOrDefault(e.getKey(), "Unknown"), "pnl", Math.round(e.getValue() * 100.0) / 100.0))
+                        .sorted((Map<String, Object> a, Map<String, Object> b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")))
+                        .collect(java.util.stream.Collectors.toList());
 
                 List<Map<String, Object>> children = childPnlMap.entrySet().stream()
-                        .map(e -> Map.<String, Object>of("name", userNames.getOrDefault(e.getKey(), "Unknown"), "pnl", Math.round(e.getValue() * 100.0) / 100.0))
-                        .sorted((a, b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")))
-                        .toList();
+                        .map(e -> (Map<String, Object>) Map.<String, Object>of("name", userNames.getOrDefault(e.getKey(), "Unknown"), "pnl", Math.round(e.getValue() * 100.0) / 100.0))
+                        .sorted((Map<String, Object> a, Map<String, Object> b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")))
+                        .collect(java.util.stream.Collectors.toList());
 
                 double total = masters.stream().mapToDouble(m -> (Double) m.get("pnl")).sum() + children.stream().mapToDouble(c -> (Double) c.get("pnl")).sum();
                 

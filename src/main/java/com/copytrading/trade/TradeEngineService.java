@@ -81,8 +81,16 @@ public class TradeEngineService {
 
         return trades.save(t).flatMap(savedTrade -> {
             // 2. Place order on broker
-            return brokerService.placeOrder(brokerAccountId, userId,
-                            Map.of("symbol", instrument, "qty", qty, "type", txnType, "product", product, "orderType", orderType, "price", price, "exchange", exchange))
+            Map<String, Object> orderBody = new java.util.HashMap<>();
+            orderBody.put("symbol", instrument);
+            orderBody.put("qty", qty);
+            orderBody.put("type", txnType);
+            orderBody.put("product", product);
+            orderBody.put("orderType", orderType);
+            orderBody.put("price", price);
+            orderBody.put("exchange", exchange);
+
+            return brokerService.closePosition(brokerAccountId, userId, orderBody)
                     .flatMap(brokerResp -> {
                         String brokerOrderId = brokerResp.getOrDefault("response", "").toString();
                         savedTrade.setBrokerOrderId(brokerOrderId.length() > 100 ? brokerOrderId.substring(0, 100) : brokerOrderId);
@@ -140,7 +148,6 @@ public class TradeEngineService {
                     })
                     .onErrorResume(e -> {
                         savedTrade.setStatus("FAILED");
-                        savedTrade.setErrorMessage(e.getMessage() != null && e.getMessage().length() > 255 ? e.getMessage().substring(0, 255) : e.getMessage());
                         return trades.save(savedTrade).flatMap(failed -> {
                             hub.publish("{\"event\":\"TRADE_FAILED\",\"instrument\":\"" + instrument + "\",\"error\":\"" + e.getMessage() + "\"}");
                             return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Trade failed: " + e.getMessage()));
