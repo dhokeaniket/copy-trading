@@ -186,6 +186,7 @@ public class AdminController {
 
     // 2.18 POST /admin/force-square-off
     @PostMapping("/force-square-off")
+    @AdminAudit(action = "FORCE_SQUARE_OFF")
     public Mono<List<Map<String, Object>>> forceSquareOff(@RequestBody Map<String, Object> body) {
         String targetId = (String) body.get("targetId");
         String scope = (String) body.getOrDefault("scope", "user");

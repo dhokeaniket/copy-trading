@@ -930,15 +930,13 @@ public class AdminService {
         return Mono.just(List.of());
     }
 
-    private Mono<List<Map<String, Object>>> getActiveBrokerPositions(UUID userId) {
-        return masterActiveRepo.findById(userId)
+    private Mono<List<Map<String, Object>>> getActiveBrokerPositions(UUID userId) {        return masterActiveRepo.findById(userId)
             .flatMap(aa -> brokerService.getPositions(aa.getBrokerAccountId(), userId))
-            .switchIfEmpty(Mono.defer(() -> 
-                brokerAccountRepo.findByUserId(userId)
-                    .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
-                    .next()
-                    .flatMap(a -> brokerService.getPositions(a.getId(), userId))
-            ))
+            .switchIfEmpty(Mono.defer(() -> brokerAccountRepo.findByUserId(userId)
+                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                .next()
+                .switchIfEmpty(Mono.error(new RuntimeException("No active broker account found for user")))
+                .flatMap(a -> brokerService.getPositions(a.getId(), userId))))
             .map(resp -> {
                 Object positions = resp.get("positions");
                 if (positions instanceof List) {
@@ -1012,13 +1010,33 @@ public class AdminService {
                                 .flatMap(a -> brokerService.closePosition(a.getId(), ownerId, closeBody))
                         ))
                         .switchIfEmpty(Mono.error(new RuntimeException("No active broker session found for user")))
-                        .map(r -> {
-                            boolean hasError = r.containsKey("error") || "error".equalsIgnoreCase(String.valueOf(r.get("status")));
-                            if (hasError) {
-                                throw new RuntimeException(String.valueOf(r.getOrDefault("error", r.get("message"))));
-                            }
-                            return Map.<String, Object>of("symbol", symbol, "status", "success", "response", r);
-                        })
+                        .flatMap(r -> {
+                                  boolean hasError = r.containsKey("error") || (r.containsKey("response") && r.get("response").toString().toLowerCase().contains("error"));
+                                  if (hasError) {
+                                      return Mono.error(new RuntimeException(r.containsKey("error") ? (String) r.get("error") : "Broker rejected order"));
+                                  }
+                                  
+                                  // Log to trade_logs
+                                  String logSql = """
+                                      INSERT INTO trades (user_id, broker_account_id, instrument, exchange, segment, order_type, transaction_type, quantity, price, product, status, placed_at, message)
+                                      VALUES (:userId, :brokerId, :symbol, :exchange, 'EQUITY', 'MARKET', :type, :qty, 0, :product, 'COMPLETED', now(), 'Force Squared Off by Admin')
+                                      """;
+                                      
+                                  return masterActiveRepo.findById(ownerId).map(com.copytrading.master.MasterActiveAccount::getBrokerAccountId)
+                                      .switchIfEmpty(brokerAccountRepo.findByUserId(ownerId).next().map(com.copytrading.broker.BrokerAccount::getId))
+                                      .flatMap(brokerId -> databaseClient.sql(logSql)
+                                          .bind("userId", ownerId)
+                                          .bind("brokerId", brokerId)
+                                          .bind("symbol", symbol)
+                                          .bind("exchange", exchange)
+                                          .bind("type", type)
+                                          .bind("qty", absQty)
+                                          .bind("product", product)
+                                          .fetch().rowsUpdated()
+                                      )
+                                      .thenReturn(Map.<String, Object>of("symbol", symbol, "status", "success", "response", r))
+                                      .onErrorResume(e -> Mono.just(Map.<String, Object>of("symbol", symbol, "status", "success", "response", r, "warning", "Failed to log trade: " + e.getMessage())));
+                              })
                         .onErrorResume(e -> {
                             log.error("Force square-off failed for user {} symbol {}: {}", ownerId, symbol, e.getMessage());
                             return Mono.just(Map.<String, Object>of("symbol", symbol, "status", "failed", "reason", e.getMessage()));
@@ -1201,7 +1219,8 @@ public class AdminService {
         String query = """
             SELECT c.id, c.symbol, c.child_status as status, 
                    COALESCE(c.error_message, c.skip_reason) as reason, c.created_at as timestamp,
-                   u1.name as masterName, u2.name as childName, b.broker_id as broker
+                   u1.name as masterName, u2.name as childName, b.broker_id as broker,
+                   c.copy_group_id, c.master_trade_id
             FROM copy_logs c
             LEFT JOIN users u1 ON c.master_id = u1.id
             LEFT JOIN users u2 ON c.child_id = u2.id
@@ -1221,8 +1240,21 @@ public class AdminService {
                 .fetch().all().collectList(),
             databaseClient.sql(countQuery).map((row, metadata) -> row.get(0, Long.class)).one()
         ).map(tuple -> {
+            List<Map<String, Object>> logs = tuple.getT1().stream().map(row -> {
+                Map<String, Object> map = new LinkedHashMap<>(row);
+                String copyGroupId = (String) row.get("copy_group_id");
+                String masterTradeId = (String) row.get("master_trade_id");
+                
+                String displayRef = masterTradeId != null ? masterTradeId : (copyGroupId != null ? copyGroupId : map.get("id").toString());
+                String traceRef = copyGroupId != null ? copyGroupId : displayRef;
+                
+                map.put("reference", displayRef);
+                map.put("traceId", traceRef);
+                return map;
+            }).collect(java.util.stream.Collectors.toList());
+
             Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("copies", tuple.getT1());
+            resp.put("copies", logs);
             resp.put("total", tuple.getT2());
             resp.put("page", page);
             resp.put("limit", limit);
@@ -1398,4 +1430,3 @@ public class AdminService {
             .collectList();
     }
 }
-
