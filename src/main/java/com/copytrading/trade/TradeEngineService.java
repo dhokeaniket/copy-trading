@@ -63,83 +63,90 @@ public class TradeEngineService {
         String product = (String) body.getOrDefault("product", "MIS");
         String validity = (String) body.getOrDefault("validity", "DAY");
 
-        // Place order on broker
-        return brokerService.closePosition(brokerAccountId, userId,
-                        Map.of("symbol", instrument, "qty", qty, "type", txnType, "product", product))
-                .flatMap(brokerResp -> {
-                    String brokerOrderId = brokerResp.getOrDefault("response", "").toString();
+        // 1. Save pending trade record
+        Trade t = new Trade();
+        t.setUserId(userId);
+        t.setBrokerAccountId(brokerAccountId);
+        t.setInstrument(instrument);
+        t.setExchange(exchange);
+        t.setSegment(segment);
+        t.setOrderType(orderType);
+        t.setTransactionType(txnType);
+        t.setQuantity(qty);
+        t.setPrice(price);
+        t.setProduct(product);
+        t.setValidity(validity);
+        t.setStatus("PENDING");
+        t.setPlacedAt(Instant.now());
 
-                    // Save trade record
-                    Trade t = new Trade();
-                    t.setUserId(userId);
-                    t.setBrokerAccountId(brokerAccountId);
-                    t.setBrokerOrderId(brokerOrderId.length() > 100 ? brokerOrderId.substring(0, 100) : brokerOrderId);
-                    t.setInstrument(instrument);
-                    t.setExchange(exchange);
-                    t.setSegment(segment);
-                    t.setOrderType(orderType);
-                    t.setTransactionType(txnType);
-                    t.setQuantity(qty);
-                    t.setPrice(price);
-                    t.setProduct(product);
-                    t.setValidity(validity);
-                    t.setStatus("EXECUTED");
-                    t.setPlacedAt(Instant.now());
-                    t.setExecutedAt(Instant.now());
+        return trades.save(t).flatMap(savedTrade -> {
+            // 2. Place order on broker
+            return brokerService.placeOrder(brokerAccountId, userId,
+                            Map.of("symbol", instrument, "qty", qty, "type", txnType, "product", product, "orderType", orderType, "price", price, "exchange", exchange))
+                    .flatMap(brokerResp -> {
+                        String brokerOrderId = brokerResp.getOrDefault("response", "").toString();
+                        savedTrade.setBrokerOrderId(brokerOrderId.length() > 100 ? brokerOrderId.substring(0, 100) : brokerOrderId);
+                        savedTrade.setStatus("EXECUTED");
+                        savedTrade.setExecutedAt(Instant.now());
 
-                    return trades.save(t).flatMap(saved -> {
-                        // Publish WebSocket event
-                        hub.publish("{\"event\":\"TRADE_EXECUTED\",\"tradeId\":\"" + saved.getId() +
-                                "\",\"instrument\":\"" + instrument + "\",\"status\":\"EXECUTED\"}");
+                        return trades.save(savedTrade).flatMap(saved -> {
+                            // Publish WebSocket event
+                            hub.publish("{\"event\":\"TRADE_EXECUTED\",\"tradeId\":\"" + saved.getId() +
+                                    "\",\"instrument\":\"" + instrument + "\",\"status\":\"EXECUTED\"}");
 
-                        // If MASTER, auto-replicate to children only while engine auto-copy is on
-                        if ("MASTER".equals(role)) {
-                            if (!orderPollingService.isPollingEnabled()) {
-                                log.info("TRADE_EXECUTE_COPY_SKIPPED user={} — engine auto-copy paused (polling off)", userId);
-                                Map<String, Object> r = new LinkedHashMap<>();
-                                r.put("tradeId", saved.getId());
-                                r.put("brokerOrderId", saved.getBrokerOrderId());
-                                r.put("status", "EXECUTED");
-                                r.put("replicationsTriggered", 0);
-                                r.put("replicationDetails", Map.of());
-                                r.put("message", "Copy trading paused — trade not replicated to followers");
-                                return Mono.just(r);
+                            // If MASTER, auto-replicate to children only while engine auto-copy is on
+                            if ("MASTER".equals(role)) {
+                                if (!orderPollingService.isPollingEnabled()) {
+                                    log.info("TRADE_EXECUTE_COPY_SKIPPED user={} — engine auto-copy paused (polling off)", userId);
+                                    Map<String, Object> r = new LinkedHashMap<>();
+                                    r.put("tradeId", saved.getId());
+                                    r.put("brokerOrderId", saved.getBrokerOrderId());
+                                    r.put("status", "EXECUTED");
+                                    r.put("replicationsTriggered", 0);
+                                    r.put("replicationDetails", Map.of());
+                                    r.put("message", "Copy trading paused — trade not replicated to followers");
+                                    return Mono.just(r);
+                                }
+                                CopyTradeRequest req = new CopyTradeRequest();
+                                req.setSymbol(instrument);
+                                req.setQty(qty);
+                                req.setSide(txnType);
+                                req.setProduct(product);
+                                req.setOrderType(orderType);
+                                req.setPrice(price);
+                                req.setExchange(exchange);
+                                return brokerRepo.findById(brokerAccountId)
+                                        .doOnNext(a -> req.setMasterBrokerId(a.getBrokerId()))
+                                        .then(copyEngine.copyTrade(userId, req))
+                                        .map(copyResult -> {
+                                            int replCount = (int) copyResult.getOrDefault("childrenTotal", 0);
+                                            saved.setReplicationsTriggered(replCount);
+                                            Map<String, Object> r = new LinkedHashMap<>();
+                                            r.put("tradeId", saved.getId());
+                                            r.put("brokerOrderId", saved.getBrokerOrderId());
+                                            r.put("status", "EXECUTED");
+                                            r.put("replicationsTriggered", replCount);
+                                            r.put("replicationDetails", copyResult.get("results"));
+                                            return r;
+                                        });
                             }
-                            CopyTradeRequest req = new CopyTradeRequest();
-                            req.setSymbol(instrument);
-                            req.setQty(qty);
-                            req.setSide(txnType);
-                            req.setProduct(product);
-                            req.setOrderType(orderType);
-                            req.setPrice(price);
-                            req.setExchange(exchange);
-                            return brokerRepo.findById(brokerAccountId)
-                                    .doOnNext(a -> req.setMasterBrokerId(a.getBrokerId()))
-                                    .then(copyEngine.copyTrade(userId, req))
-                                    .map(copyResult -> {
-                                int replCount = (int) copyResult.getOrDefault("childrenTotal", 0);
-                                saved.setReplicationsTriggered(replCount);
-                                Map<String, Object> r = new LinkedHashMap<>();
-                                r.put("tradeId", saved.getId());
-                                r.put("brokerOrderId", saved.getBrokerOrderId());
-                                r.put("status", "EXECUTED");
-                                r.put("replicationsTriggered", replCount);
-                                r.put("replicationDetails", copyResult.get("results"));
-                                return r;
-                            });
-                        }
-                        Map<String, Object> r = new LinkedHashMap<>();
-                        r.put("tradeId", saved.getId());
-                        r.put("brokerOrderId", saved.getBrokerOrderId());
-                        r.put("status", "EXECUTED");
-                        r.put("replicationsTriggered", 0);
-                        return Mono.just(r);
+                            Map<String, Object> r = new LinkedHashMap<>();
+                            r.put("tradeId", saved.getId());
+                            r.put("brokerOrderId", saved.getBrokerOrderId());
+                            r.put("status", "EXECUTED");
+                            r.put("replicationsTriggered", 0);
+                            return Mono.just(r);
+                        });
+                    })
+                    .onErrorResume(e -> {
+                        savedTrade.setStatus("FAILED");
+                        savedTrade.setErrorMessage(e.getMessage() != null && e.getMessage().length() > 255 ? e.getMessage().substring(0, 255) : e.getMessage());
+                        return trades.save(savedTrade).flatMap(failed -> {
+                            hub.publish("{\"event\":\"TRADE_FAILED\",\"instrument\":\"" + instrument + "\",\"error\":\"" + e.getMessage() + "\"}");
+                            return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Trade failed: " + e.getMessage()));
+                        });
                     });
-                })
-                .onErrorResume(e -> {
-                    hub.publish("{\"event\":\"TRADE_FAILED\",\"instrument\":\"" + instrument + "\",\"error\":\"" + e.getMessage() + "\"}");
-                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Trade failed: " + e.getMessage()));
-                });
+        });
     }
 
     /** 6.2 GET /trades — list user's trades */

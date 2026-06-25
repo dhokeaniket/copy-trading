@@ -853,7 +853,10 @@ public class BrokerAccountService {
         a.setAccessToken(token);
         a.setSessionActive(true);
         a.setStatus("ACTIVE");
-        a.setSessionExpires(Instant.now().plusSeconds(86400));
+        Instant expiry = Instant.now().plusSeconds(86400);
+        a.setSessionExpires(expiry);
+        a.setTokenExpiry(expiry);
+        a.setLastSyncTime(Instant.now());
         // Only encrypt the new access token — apiSecret/proxyPass are already encrypted in DB
         credentials.encryptAccessTokenOnly(a);
         return repo.save(a).flatMap(s -> {

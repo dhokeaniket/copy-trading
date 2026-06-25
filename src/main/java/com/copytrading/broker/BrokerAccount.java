@@ -67,6 +67,15 @@ public class BrokerAccount {
     @Column("is_copy_enable")
     private Boolean isCopyEnable;
 
+    @Column("token_expiry")
+    private Instant tokenExpiry;
+
+    @Column("last_sync_time")
+    private Instant lastSyncTime;
+
+    @Column("last_ping_ms")
+    private Long lastPingMs;
+
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
     public UUID getUserId() { return userId; }
@@ -105,6 +114,12 @@ public class BrokerAccount {
     public void setProxyPass(String proxyPass) { this.proxyPass = proxyPass; }
     public String getTotpSecret() { return totpSecret; }
     public void setTotpSecret(String totpSecret) { this.totpSecret = totpSecret; }
+    public Instant getTokenExpiry() { return tokenExpiry; }
+    public void setTokenExpiry(Instant tokenExpiry) { this.tokenExpiry = tokenExpiry; }
+    public Instant getLastSyncTime() { return lastSyncTime; }
+    public void setLastSyncTime(Instant lastSyncTime) { this.lastSyncTime = lastSyncTime; }
+    public Long getLastPingMs() { return lastPingMs; }
+    public void setLastPingMs(Long lastPingMs) { this.lastPingMs = lastPingMs; }
 
     /** Returns true if this account has a per-user proxy configured. */
     public boolean hasProxy() {

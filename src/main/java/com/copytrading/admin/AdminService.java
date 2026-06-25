@@ -526,45 +526,54 @@ public class AdminService {
     // 2.12 Get all trade logs
     public Mono<Map<String, Object>> getTradeLogs(UUID userId, String status, int page, int limit, String search) {
         int offset = (page - 1) * limit;
+        
+        StringBuilder whereClause = new StringBuilder(" WHERE u.role = 'MASTER' ");
+        if (search != null && !search.isBlank()) {
+            whereClause.append(" AND (t.instrument ILIKE '%").append(search).append("%' OR t.broker_order_id ILIKE '%").append(search).append("%')");
+        }
+        if (status != null && !status.isBlank() && !status.equalsIgnoreCase("ALL")) {
+            whereClause.append(" AND t.status = '").append(status).append("'");
+        }
+
+        String countSql = "SELECT COUNT(*) FROM trades t JOIN users u ON t.user_id = u.id" + whereClause.toString();
+
         StringBuilder sql = new StringBuilder("""
-            SELECT MIN(c.id) as id, c.master_id, u.name as master_name, c.symbol, c.trade_type, c.qty, 
-                   MAX(c.price) as price,
-                   MAX(c.master_status) as master_status, MIN(c.created_at) as created_at, 
-                   c.master_trade_id, MAX(c.copy_group_id) as copy_group_id,
+            SELECT t.id, t.user_id as master_id, u.name as master_name, b.broker_id as broker,
+                   t.instrument as symbol, t.transaction_type as trade_type, t.quantity as qty, 
+                   t.price as price, t.status as master_status, t.placed_at as created_at, 
+                   t.broker_order_id as master_trade_id, MAX(c.copy_group_id) as copy_group_id,
                    MAX(c.error_message) as error_message, MAX(c.skip_reason) as skip_reason,
                    COUNT(c.id) as children_count,
                    AVG(c.latency_ms) as avg_latency,
                    SUM(CASE WHEN c.child_status IN ('SUCCESS', 'COMPLETED', 'PLACED') THEN 1 ELSE 0 END) as success_count,
                    SUM(CASE WHEN c.child_status IN ('FAILED', 'SKIPPED') THEN 1 ELSE 0 END) as failed_count
-            FROM copy_logs c
-            LEFT JOIN users u ON c.master_id = u.id
-            WHERE c.master_trade_id IS NOT NULL
+            FROM trades t
+            JOIN users u ON t.user_id = u.id
+            JOIN broker_accounts b ON t.broker_account_id = b.id
+            LEFT JOIN copy_logs c ON t.broker_order_id = c.master_trade_id AND c.master_trade_id IS NOT NULL
             """);
 
-        if (search != null && !search.isBlank()) {
-            sql.append(" AND (c.symbol ILIKE '%").append(search).append("%' OR c.master_trade_id ILIKE '%").append(search).append("%')");
-        }
+        sql.append(whereClause.toString());
+        sql.append(" GROUP BY t.id, t.user_id, u.name, b.broker_id, t.instrument, t.transaction_type, t.quantity, t.price, t.status, t.placed_at, t.broker_order_id ");
+        sql.append(" ORDER BY t.placed_at DESC LIMIT ").append(limit).append(" OFFSET ").append(offset);
 
-        if (status != null && !status.isBlank() && !status.equalsIgnoreCase("ALL")) {
-            sql.append(" AND c.master_status = '").append(status).append("'");
-        }
+        Mono<Long> totalMono = databaseClient.sql(countSql)
+                .map(row -> row.get(0, Long.class)).first().defaultIfEmpty(0L);
 
-        sql.append(" GROUP BY c.master_trade_id, c.master_id, u.name, c.symbol, c.trade_type, c.qty ORDER BY MIN(c.created_at) DESC LIMIT ").append(limit).append(" OFFSET ").append(offset);
-
-        return databaseClient.sql(sql.toString())
+        Mono<List<Map<String, Object>>> logsMono = databaseClient.sql(sql.toString())
             .fetch().all()
             .map(row -> {
                 Map<String, Object> map = new LinkedHashMap<>();
                 map.put("id", row.get("id") != null ? row.get("id").toString() : UUID.randomUUID().toString());
                 
-                // If trace endpoint uses copy_group_id, we should provide it so frontend can link it
                 String traceId = (String) row.get("copy_group_id");
                 if (traceId == null) traceId = (String) row.get("master_trade_id");
                 if (traceId == null) traceId = map.get("id").toString();
-                map.put("reference", traceId); // reference is mapped to traceId in some places, or frontend uses id
+                map.put("reference", traceId);
                 
                 map.put("masterId", row.get("master_id"));
                 map.put("masterName", row.get("master_name") != null ? row.get("master_name") : "System");
+                map.put("broker", row.get("broker"));
                 map.put("type", "REPLICATED");
                 map.put("action", row.get("trade_type") != null ? row.get("trade_type") : "BUY");
                 map.put("symbol", row.get("symbol"));
@@ -577,8 +586,10 @@ public class AdminService {
                 long failedCount = row.get("failed_count") != null ? ((Number) row.get("failed_count")).longValue() : 0;
                 
                 String finalStatus = masterStatus;
-                if (childrenCount > 0 && successCount == 0 && failedCount > 0) {
-                    finalStatus = "SKIPPED";
+                if ("PENDING".equals(masterStatus) || "EXECUTED".equals(masterStatus) || "PLACED".equals(masterStatus) || "SUCCESS".equals(masterStatus)) {
+                    if (childrenCount > 0 && successCount == 0 && failedCount > 0) {
+                        finalStatus = "SKIPPED";
+                    }
                 }
                 
                 map.put("status", finalStatus);
@@ -593,12 +604,14 @@ public class AdminService {
                 
                 return map;
             })
-            .collectList()
-            .map(list -> Map.of(
-                "logs", list,
+            .collectList();
+
+        return Mono.zip(logsMono, totalMono)
+            .map(tuple -> Map.of(
+                "logs", tuple.getT1(),
                 "page", page,
                 "limit", limit,
-                "total", 1000 // Mock total for now, or could query COUNT
+                "total", tuple.getT2()
             ));
     }
 
@@ -937,7 +950,10 @@ public class AdminService {
                 }
                 return List.<Map<String, Object>>of();
             })
-            .onErrorReturn(List.of());
+            .onErrorResume(e -> {
+                log.error("Failed to fetch positions for user {}: {}", userId, e.getMessage());
+                return Mono.error(e);
+            });
     }
 
     // 2.18 Force Square-Off
@@ -984,8 +1000,18 @@ public class AdminService {
                                 .next()
                                 .flatMap(a -> brokerService.closePosition(a.getId(), ownerId, closeBody))
                         ))
-                        .map(r -> Map.<String, Object>of("symbol", symbol, "status", "success", "response", r))
-                        .onErrorResume(e -> Mono.just(Map.<String, Object>of("symbol", symbol, "status", "failed", "reason", e.getMessage())));
+                        .switchIfEmpty(Mono.error(new RuntimeException("No active broker session found for user")))
+                        .map(r -> {
+                            boolean hasError = r.containsKey("error") || "error".equalsIgnoreCase(String.valueOf(r.get("status")));
+                            if (hasError) {
+                                throw new RuntimeException(String.valueOf(r.getOrDefault("error", r.get("message"))));
+                            }
+                            return Map.<String, Object>of("symbol", symbol, "status", "success", "response", r);
+                        })
+                        .onErrorResume(e -> {
+                            log.error("Force square-off failed for user {} symbol {}: {}", ownerId, symbol, e.getMessage());
+                            return Mono.just(Map.<String, Object>of("symbol", symbol, "status", "failed", "reason", e.getMessage()));
+                        });
                 })
                 .collectList();
         });
@@ -1007,13 +1033,15 @@ public class AdminService {
             .defaultIfEmpty(traceId) // fallback to whatever was passed
             .flatMap(resolvedGroupId -> {
                 String masterSql = """
-                    SELECT c.master_trade_id as broker_order_id, u.name as master_user,
+                    SELECT c.master_trade_id as broker_order_id, u.name as master_user, b.broker_id as master_broker,
                            MAX(c.symbol) as symbol, MAX(c.trade_type) as side, MAX(c.qty) as quantity, MAX(c.order_type) as order_type,
                            MAX(c.product) as product, MIN(c.master_placed_at) as placed_at, MAX(c.master_status) as status, MAX(c.price) as price
                     FROM copy_logs c
                     LEFT JOIN users u ON c.master_id = u.id
+                    LEFT JOIN master_active_accounts ma ON c.master_id = ma.user_id
+                    LEFT JOIN broker_accounts b ON ma.broker_account_id = b.id
                     WHERE (c.copy_group_id = :groupId OR c.master_trade_id = :groupId)
-                    GROUP BY c.master_trade_id, u.name
+                    GROUP BY c.master_trade_id, u.name, b.broker_id
                     LIMIT 1
                     """;
 
@@ -1190,25 +1218,100 @@ public class AdminService {
 
     // 2.21 P&L Dashboard
     public Mono<Map<String, Object>> getPnL(String dateFrom, String dateTo) {
-        String masterSql = "SELECT u.name as name, SUM(t.realized_pnl) as pnl FROM trades t JOIN users u ON t.user_id = u.id WHERE u.role = 'MASTER' GROUP BY u.name ORDER BY pnl DESC";
-        String childSql = "SELECT u.name as name, SUM(t.realized_pnl) as pnl FROM trades t JOIN users u ON t.user_id = u.id WHERE u.role = 'CHILD' GROUP BY u.name ORDER BY pnl DESC";
-        
-        Mono<List<Map<String, Object>>> masterMono = databaseClient.sql(masterSql).fetch().all()
-            .map(row -> Map.<String, Object>of("name", row.get("name"), "pnl", row.get("pnl") != null ? ((Number) row.get("pnl")).doubleValue() : 0.0)).collectList();
-            
-        Mono<List<Map<String, Object>>> childMono = databaseClient.sql(childSql).fetch().all()
-            .map(row -> Map.<String, Object>of("name", row.get("name"), "pnl", row.get("pnl") != null ? ((Number) row.get("pnl")).doubleValue() : 0.0)).collectList();
-            
-        return Mono.zip(masterMono, childMono).map(tuple -> {
-            List<Map<String, Object>> masters = tuple.getT1();
-            List<Map<String, Object>> children = tuple.getT2();
-            double total = masters.stream().mapToDouble(m -> (Double) m.get("pnl")).sum() + children.stream().mapToDouble(c -> (Double) c.get("pnl")).sum();
-            
-            return Map.of(
-                "masters", masters,
-                "children", children,
-                "totalPnl", total
-            );
+        // We'll just fetch all copy logs and apply netting logic like getAnalytics
+        return copyLogRepo.findAll().collectList().flatMap(logs -> {
+            return users.findAll().collectMap(com.copytrading.user.User::getId, com.copytrading.user.User::getName).map(userNames -> {
+                Map<String, List<com.copytrading.logs.CopyLog>> bySymbol = logs.stream()
+                        .filter(l -> "SUCCESS".equalsIgnoreCase(l.getChildStatus()) && l.getSymbol() != null)
+                        .collect(java.util.stream.Collectors.groupingBy(l -> l.getSymbol().toUpperCase()));
+
+                Map<UUID, Double> masterPnlMap = new java.util.HashMap<>();
+                Map<UUID, Double> childPnlMap = new java.util.HashMap<>();
+
+                for (Map.Entry<String, List<com.copytrading.logs.CopyLog>> entry : bySymbol.entrySet()) {
+                    double lastPriceInLog = 0.0;
+                    
+                    Map<UUID, Double> mBuy = new java.util.HashMap<>();
+                    Map<UUID, Double> mSell = new java.util.HashMap<>();
+                    Map<UUID, Integer> mQty = new java.util.HashMap<>();
+                    
+                    Map<UUID, Double> cBuy = new java.util.HashMap<>();
+                    Map<UUID, Double> cSell = new java.util.HashMap<>();
+                    Map<UUID, Integer> cQty = new java.util.HashMap<>();
+
+                    for (com.copytrading.logs.CopyLog l : entry.getValue()) {
+                        double price = l.getPrice() != null ? l.getPrice() : 0.0;
+                        if (price > 0) lastPriceInLog = price;
+
+                        boolean isBuy = "BUY".equalsIgnoreCase(l.getTradeType());
+                        boolean isSell = "SELL".equalsIgnoreCase(l.getTradeType());
+
+                        if (l.getMasterId() != null) {
+                            int mQ = l.getQty() != null ? l.getQty() : 0;
+                            if (isBuy) {
+                                mBuy.merge(l.getMasterId(), price * mQ, Double::sum);
+                                mQty.merge(l.getMasterId(), mQ, Integer::sum);
+                            } else if (isSell) {
+                                mSell.merge(l.getMasterId(), price * mQ, Double::sum);
+                                mQty.merge(l.getMasterId(), -mQ, Integer::sum);
+                            }
+                        }
+
+                        if (l.getChildId() != null) {
+                            int cQ = l.getChildQty() != null ? l.getChildQty() : (l.getQty() != null ? l.getQty() : 0);
+                            if (isBuy) {
+                                cBuy.merge(l.getChildId(), price * cQ, Double::sum);
+                                cQty.merge(l.getChildId(), cQ, Integer::sum);
+                            } else if (isSell) {
+                                cSell.merge(l.getChildId(), price * cQ, Double::sum);
+                                cQty.merge(l.getChildId(), -cQ, Integer::sum);
+                            }
+                        }
+                    }
+
+                    for (UUID uid : mQty.keySet()) {
+                        double pnl = mSell.getOrDefault(uid, 0.0) - mBuy.getOrDefault(uid, 0.0) + (mQty.get(uid) * lastPriceInLog);
+                        masterPnlMap.merge(uid, pnl, Double::sum);
+                    }
+                    for (UUID uid : cQty.keySet()) {
+                        double pnl = cSell.getOrDefault(uid, 0.0) - cBuy.getOrDefault(uid, 0.0) + (cQty.get(uid) * lastPriceInLog);
+                        childPnlMap.merge(uid, pnl, Double::sum);
+                    }
+                }
+
+                List<Map<String, Object>> masters = masterPnlMap.entrySet().stream()
+                        .map(e -> Map.<String, Object>of("name", userNames.getOrDefault(e.getKey(), "Unknown"), "pnl", Math.round(e.getValue() * 100.0) / 100.0))
+                        .sorted((a, b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")))
+                        .toList();
+
+                List<Map<String, Object>> children = childPnlMap.entrySet().stream()
+                        .map(e -> Map.<String, Object>of("name", userNames.getOrDefault(e.getKey(), "Unknown"), "pnl", Math.round(e.getValue() * 100.0) / 100.0))
+                        .sorted((a, b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")))
+                        .toList();
+
+                double total = masters.stream().mapToDouble(m -> (Double) m.get("pnl")).sum() + children.stream().mapToDouble(c -> (Double) c.get("pnl")).sum();
+                
+                List<Map<String, Object>> allUsers = new java.util.ArrayList<>();
+                allUsers.addAll(masters);
+                allUsers.addAll(children);
+                allUsers.sort((a, b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")));
+                
+                int limit = Math.min(5, allUsers.size());
+                List<Map<String, Object>> topGainers = allUsers.subList(0, limit);
+                
+                java.util.Collections.reverse(allUsers);
+                List<Map<String, Object>> topLosers = allUsers.subList(0, limit);
+
+                return Map.<String, Object>of(
+                    "masters", masters,
+                    "children", children,
+                    "perMaster", masters,
+                    "perChild", children,
+                    "topGainers", topGainers,
+                    "topLosers", topLosers,
+                    "totalPnl", Math.round(total * 100.0) / 100.0
+                );
+            });
         });
     }
 

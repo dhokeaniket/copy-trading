@@ -102,7 +102,10 @@ CREATE TABLE IF NOT EXISTS broker_accounts (
   proxy_user      VARCHAR(255),
   proxy_pass      TEXT,
   linked_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  is_copy_enable  BOOLEAN NOT NULL DEFAULT TRUE
+  is_copy_enable  BOOLEAN NOT NULL DEFAULT TRUE,
+  token_expiry    TIMESTAMPTZ,
+  last_sync_time  TIMESTAMPTZ,
+  last_ping_ms    BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_broker_accounts_user ON broker_accounts(user_id);
