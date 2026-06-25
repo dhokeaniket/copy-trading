@@ -1052,7 +1052,7 @@ public class AdminService {
                            MAX(c.product) as product, MIN(c.master_placed_at) as placed_at, MAX(c.master_status) as status, MAX(c.price) as price
                     FROM copy_logs c
                     LEFT JOIN users u ON c.master_id = u.id
-                    LEFT JOIN master_active_accounts ma ON c.master_id = ma.user_id
+                    LEFT JOIN master_active_accounts ma ON c.master_id = ma.master_id
                     LEFT JOIN broker_accounts b ON ma.broker_account_id = b.id
                     WHERE (c.copy_group_id = :groupId OR c.master_trade_id = :groupId)
                     GROUP BY c.master_trade_id, u.name, b.broker_id
@@ -1336,12 +1336,25 @@ public class AdminService {
                 List<Map<String, Object>> allUsers = new java.util.ArrayList<>();
                 allUsers.addAll(masters);
                 allUsers.addAll(children);
-                allUsers.sort((a, b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")));
                 
-                int limit = Math.min(5, allUsers.size());
-                List<Map<String, Object>> topGainers = new java.util.ArrayList<>(allUsers.subList(0, limit));
+                Map<String, Map<String, Object>> aggregatedUsers = new java.util.HashMap<>();
+                for (Map<String, Object> user : allUsers) {
+                    String name = (String) user.get("name");
+                    if (aggregatedUsers.containsKey(name)) {
+                        Map<String, Object> existing = aggregatedUsers.get(name);
+                        existing.put("pnl", Math.round(((Double) existing.get("pnl") + (Double) user.get("pnl")) * 100.0) / 100.0);
+                    } else {
+                        aggregatedUsers.put(name, new LinkedHashMap<>(user));
+                    }
+                }
                 
-                List<Map<String, Object>> allUsersReversed = new java.util.ArrayList<>(allUsers);
+                List<Map<String, Object>> uniqueUsersList = new java.util.ArrayList<>(aggregatedUsers.values());
+                uniqueUsersList.sort((a, b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")));
+                
+                int limit = Math.min(5, uniqueUsersList.size());
+                List<Map<String, Object>> topGainers = new java.util.ArrayList<>(uniqueUsersList.subList(0, limit));
+                
+                List<Map<String, Object>> allUsersReversed = new java.util.ArrayList<>(uniqueUsersList);
                 java.util.Collections.reverse(allUsersReversed);
                 List<Map<String, Object>> topLosers = new java.util.ArrayList<>(allUsersReversed.subList(0, limit));
 
