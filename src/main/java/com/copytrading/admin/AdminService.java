@@ -1365,30 +1365,15 @@ public class AdminService {
 
                 double total = masters.stream().mapToDouble(m -> (Double) m.get("pnl")).sum() + children.stream().mapToDouble(c -> (Double) c.get("pnl")).sum();
                 
-                List<Map<String, Object>> allUsers = new java.util.ArrayList<>();
-                allUsers.addAll(masters);
-                allUsers.addAll(children);
+                List<Map<String, Object>> sortedMasters = new java.util.ArrayList<>(masters);
+                sortedMasters.sort((a, b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")));
                 
-                Map<String, Map<String, Object>> aggregatedUsers = new java.util.HashMap<>();
-                for (Map<String, Object> user : allUsers) {
-                    String name = (String) user.get("name");
-                    if (aggregatedUsers.containsKey(name)) {
-                        Map<String, Object> existing = aggregatedUsers.get(name);
-                        existing.put("pnl", Math.round(((Double) existing.get("pnl") + (Double) user.get("pnl")) * 100.0) / 100.0);
-                    } else {
-                        aggregatedUsers.put(name, new LinkedHashMap<>(user));
-                    }
-                }
+                int limit = Math.min(5, sortedMasters.size());
+                List<Map<String, Object>> topGainers = new java.util.ArrayList<>(sortedMasters.subList(0, limit));
                 
-                List<Map<String, Object>> uniqueUsersList = new java.util.ArrayList<>(aggregatedUsers.values());
-                uniqueUsersList.sort((a, b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")));
-                
-                int limit = Math.min(5, uniqueUsersList.size());
-                List<Map<String, Object>> topGainers = new java.util.ArrayList<>(uniqueUsersList.subList(0, limit));
-                
-                List<Map<String, Object>> allUsersReversed = new java.util.ArrayList<>(uniqueUsersList);
-                java.util.Collections.reverse(allUsersReversed);
-                List<Map<String, Object>> topLosers = new java.util.ArrayList<>(allUsersReversed.subList(0, limit));
+                List<Map<String, Object>> mastersReversed = new java.util.ArrayList<>(sortedMasters);
+                java.util.Collections.reverse(mastersReversed);
+                List<Map<String, Object>> topLosers = new java.util.ArrayList<>(mastersReversed.subList(0, limit));
 
                 return Map.<String, Object>of(
                     "masters", masters,
