@@ -944,9 +944,20 @@ public class AdminService {
                 if (positions instanceof List) {
                     @SuppressWarnings("unchecked")
                     List<Map<String, Object>> posList = (List<Map<String, Object>>) positions;
-                    // Add user ID so the UI knows whose position it is
-                    posList.forEach(p -> p.put("_ownerId", userId.toString()));
-                    return posList;
+                    List<Map<String, Object>> filteredList = new ArrayList<>();
+                    for (Map<String, Object> p : posList) {
+                        Object qtyObj = p.getOrDefault("quantity", p.getOrDefault("netQuantity", p.getOrDefault("netQty", p.get("qty"))));
+                        int qty = 0;
+                        if (qtyObj instanceof Number) qty = ((Number) qtyObj).intValue();
+                        else if (qtyObj instanceof String) {
+                            try { qty = (int) Double.parseDouble((String) qtyObj); } catch (Exception ignored) {}
+                        }
+                        if (qty != 0) {
+                            p.put("_ownerId", userId.toString());
+                            filteredList.add(p);
+                        }
+                    }
+                    return filteredList;
                 }
                 return List.<Map<String, Object>>of();
             })
@@ -1029,7 +1040,10 @@ public class AdminService {
             LIMIT 1
             """;
 
-        return databaseClient.sql(traceBaseSql).bind("traceId", traceId).map(row -> row.get("copy_group_id", String.class)).first()
+        return databaseClient.sql(traceBaseSql).bind("traceId", traceId).map(row -> {
+            String val = row.get("copy_group_id", String.class);
+            return val != null ? val : traceId;
+        }).first()
             .defaultIfEmpty(traceId) // fallback to whatever was passed
             .flatMap(resolvedGroupId -> {
                 String masterSql = """
@@ -1228,6 +1242,11 @@ public class AdminService {
                 Map<UUID, Double> masterPnlMap = new java.util.HashMap<>();
                 Map<UUID, Double> childPnlMap = new java.util.HashMap<>();
 
+                Map<UUID, Integer> mTotalTrades = new java.util.HashMap<>();
+                Map<UUID, java.util.Set<UUID>> mChildrenSet = new java.util.HashMap<>();
+                Map<UUID, Integer> cTotalTrades = new java.util.HashMap<>();
+                Map<UUID, UUID> cMasterMap = new java.util.HashMap<>();
+
                 for (Map.Entry<String, List<com.copytrading.logs.CopyLog>> entry : bySymbol.entrySet()) {
                     double lastPriceInLog = 0.0;
                     
@@ -1247,6 +1266,12 @@ public class AdminService {
                         boolean isSell = "SELL".equalsIgnoreCase(l.getTradeType());
 
                         if (l.getMasterId() != null) {
+                            mTotalTrades.merge(l.getMasterId(), 1, Integer::sum);
+                            if (l.getChildId() != null) {
+                                mChildrenSet.computeIfAbsent(l.getMasterId(), k -> new java.util.HashSet<>()).add(l.getChildId());
+                                cMasterMap.put(l.getChildId(), l.getMasterId());
+                            }
+
                             int mQ = l.getQty() != null ? l.getQty() : 0;
                             if (isBuy) {
                                 mBuy.merge(l.getMasterId(), price * mQ, Double::sum);
@@ -1258,6 +1283,8 @@ public class AdminService {
                         }
 
                         if (l.getChildId() != null) {
+                            cTotalTrades.merge(l.getChildId(), 1, Integer::sum);
+
                             int cQ = l.getChildQty() != null ? l.getChildQty() : (l.getQty() != null ? l.getQty() : 0);
                             if (isBuy) {
                                 cBuy.merge(l.getChildId(), price * cQ, Double::sum);
@@ -1280,12 +1307,27 @@ public class AdminService {
                 }
 
                 List<Map<String, Object>> masters = masterPnlMap.entrySet().stream()
-                        .map(e -> (Map<String, Object>) Map.<String, Object>of("name", userNames.getOrDefault(e.getKey(), "Unknown"), "pnl", Math.round(e.getValue() * 100.0) / 100.0))
+                        .map(e -> {
+                            Map<String, Object> map = new LinkedHashMap<>();
+                            map.put("name", userNames.getOrDefault(e.getKey(), "Unknown"));
+                            map.put("pnl", Math.round(e.getValue() * 100.0) / 100.0);
+                            map.put("totalTrades", mTotalTrades.getOrDefault(e.getKey(), 0));
+                            map.put("children", mChildrenSet.containsKey(e.getKey()) ? mChildrenSet.get(e.getKey()).size() : 0);
+                            return map;
+                        })
                         .sorted((Map<String, Object> a, Map<String, Object> b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")))
                         .collect(java.util.stream.Collectors.toList());
 
                 List<Map<String, Object>> children = childPnlMap.entrySet().stream()
-                        .map(e -> (Map<String, Object>) Map.<String, Object>of("name", userNames.getOrDefault(e.getKey(), "Unknown"), "pnl", Math.round(e.getValue() * 100.0) / 100.0))
+                        .map(e -> {
+                            Map<String, Object> map = new LinkedHashMap<>();
+                            map.put("name", userNames.getOrDefault(e.getKey(), "Unknown"));
+                            map.put("pnl", Math.round(e.getValue() * 100.0) / 100.0);
+                            map.put("executed", cTotalTrades.getOrDefault(e.getKey(), 0));
+                            UUID mId = cMasterMap.get(e.getKey());
+                            map.put("master", mId != null ? userNames.getOrDefault(mId, "Unknown") : "Unknown");
+                            return map;
+                        })
                         .sorted((Map<String, Object> a, Map<String, Object> b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")))
                         .collect(java.util.stream.Collectors.toList());
 
@@ -1297,10 +1339,11 @@ public class AdminService {
                 allUsers.sort((a, b) -> Double.compare((Double) b.get("pnl"), (Double) a.get("pnl")));
                 
                 int limit = Math.min(5, allUsers.size());
-                List<Map<String, Object>> topGainers = allUsers.subList(0, limit);
+                List<Map<String, Object>> topGainers = new java.util.ArrayList<>(allUsers.subList(0, limit));
                 
-                java.util.Collections.reverse(allUsers);
-                List<Map<String, Object>> topLosers = allUsers.subList(0, limit);
+                List<Map<String, Object>> allUsersReversed = new java.util.ArrayList<>(allUsers);
+                java.util.Collections.reverse(allUsersReversed);
+                List<Map<String, Object>> topLosers = new java.util.ArrayList<>(allUsersReversed.subList(0, limit));
 
                 return Map.<String, Object>of(
                     "masters", masters,
