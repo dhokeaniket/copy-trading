@@ -316,7 +316,12 @@ public class CopyEngineService {
         // Generate unique order key: SHA256(INSTRUMENT+QTY+YYYYMMDD+HHmm)
         String orderKey = generateOrderKey(req.getSymbol(), req.getQty());
 
-        return riskService.checkRiskLimits(childId, brokerAccountId)
+        // Skip risk checks for SELL orders so we don't trap users in positions
+        Mono<String> riskCheckMono = "SELL".equalsIgnoreCase(req.getSide())
+                ? Mono.just("")
+                : riskService.checkRiskLimits(childId, brokerAccountId);
+
+        return riskCheckMono
                 .flatMap(riskResult -> {
                     if (!riskResult.isEmpty()) {
                         log.info("COPY_SKIP child={} reason=RISK_LIMIT symbol={} market={} detail={}",
