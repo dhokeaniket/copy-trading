@@ -366,6 +366,7 @@ public class ChildService {
         return subs.findByMasterIdAndChildId(masterId, childId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Subscription not found")))
                 .flatMap(s -> { s.setScalingFactor(factor); return subs.save(s); })
+                .doOnNext(s -> subscriptionCache.invalidate(masterId))
                 .map(s -> Map.<String, Object>of("scalingFactor", s.getScalingFactor()));
     }
 
@@ -374,6 +375,7 @@ public class ChildService {
         return subs.findByMasterIdAndChildId(masterId, childId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Subscription not found")))
                 .flatMap(s -> { s.setCopyingStatus("PAUSED"); return subs.save(s); })
+                .doOnNext(s -> subscriptionCache.invalidate(masterId))
                 .thenReturn(Map.of("message", "Copying paused"));
     }
 
@@ -382,6 +384,7 @@ public class ChildService {
         return subs.findByMasterIdAndChildId(masterId, childId)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Subscription not found")))
                 .flatMap(s -> { s.setCopyingStatus("ACTIVE"); return subs.save(s); })
+                .doOnNext(s -> subscriptionCache.invalidate(masterId))
                 .thenReturn(Map.of("message", "Copying resumed"));
     }
 

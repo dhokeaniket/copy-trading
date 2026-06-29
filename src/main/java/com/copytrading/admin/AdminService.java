@@ -918,7 +918,12 @@ public class AdminService {
         } else if ("master-group".equals(scope)) {
             return getActiveBrokerPositions(id).flatMap(masterPos ->
                 subscriptionRepo.findByMasterIdAndCopyingStatus(id, "ACTIVE")
-                    .flatMap(sub -> getActiveBrokerPositions(sub.getChildId()))
+                    .flatMap(sub -> getActiveBrokerPositions(sub.getChildId())
+                        .onErrorResume(e -> {
+                            log.warn("Skipping child {} for square-off preview due to error: {}", sub.getChildId(), e.getMessage());
+                            return Mono.just(List.<Map<String, Object>>of());
+                        })
+                    )
                     .collectList()
                     .map(childPosList -> {
                         List<Map<String, Object>> all = new ArrayList<>(masterPos);
@@ -938,6 +943,9 @@ public class AdminService {
                 .switchIfEmpty(Mono.error(new RuntimeException("No active broker account found for user")))
                 .flatMap(a -> brokerService.getPositions(a.getId(), userId))))
             .map(resp -> {
+                if (resp.containsKey("error")) {
+                    throw new RuntimeException("Broker Error: " + resp.get("error"));
+                }
                 Object positions = resp.get("positions");
                 if (positions instanceof List) {
                     @SuppressWarnings("unchecked")

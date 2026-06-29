@@ -24,14 +24,17 @@ public class CopyEngineController {
     private final OrderPollingService pollingService;
     private final EngineHistoryService historyService;
     private final EnginePollingProperties pollingProperties;
+    private final com.copytrading.config.KillSwitchCache killSwitchCache;
 
     public CopyEngineController(CopyEngineService copyEngine, OrderPollingService pollingService,
                                 EngineHistoryService historyService,
-                                EnginePollingProperties pollingProperties) {
+                                EnginePollingProperties pollingProperties,
+                                com.copytrading.config.KillSwitchCache killSwitchCache) {
         this.copyEngine = copyEngine;
         this.pollingService = pollingService;
         this.historyService = historyService;
         this.pollingProperties = pollingProperties;
+        this.killSwitchCache = killSwitchCache;
     }
 
     /**
@@ -65,6 +68,8 @@ public class CopyEngineController {
             status.put("isPolling", enabled); // FE compat
             status.put("pollingIntervalMs", pollingProperties.getIntervalMs());
             status.put("pollingIntervalSeconds", pollingProperties.getIntervalSeconds());
+            status.put("kill_switch_active", killSwitchCache.isEnabled());
+            status.put("kill_switch_reason", "Platform trading has been temporarily halted by administrators.");
             return status;
         });
     }
