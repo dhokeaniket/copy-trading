@@ -1,6 +1,6 @@
 package com.copytrading.system;
 
-import com.copytrading.engine.CopyEngineService;
+import com.copytrading.config.KillSwitchCache;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
@@ -11,10 +11,10 @@ import java.util.Map;
 @RestController
 public class HealthController {
   
-  private final CopyEngineService copyEngineService;
+  private final KillSwitchCache killSwitchCache;
 
-  public HealthController(CopyEngineService copyEngineService) {
-      this.copyEngineService = copyEngineService;
+  public HealthController(KillSwitchCache killSwitchCache) {
+      this.killSwitchCache = killSwitchCache;
   }
 
   @GetMapping("/")
@@ -29,7 +29,7 @@ public class HealthController {
   public Mono<Map<String, Object>> health() {
     return Mono.just(Map.of(
         "status", "UP",
-        "killSwitchActive", copyEngineService.isGlobalKillSwitchActive(),
+        "killSwitchActive", killSwitchCache.isEnabled(),
         "time", Instant.now().toString()
     ));
   }
