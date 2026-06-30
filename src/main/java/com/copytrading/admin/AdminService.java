@@ -596,7 +596,9 @@ public class AdminService {
                 
                 String errorMsg = (String) row.get("error_message");
                 String skipReason = (String) row.get("skip_reason");
-                map.put("message", errorMsg != null ? errorMsg : skipReason);
+                String errorMessage = errorMsg != null ? errorMsg : skipReason;
+                map.put("message", errorMessage);
+                map.put("error", errorMessage);
                 
                 map.put("createdAt", row.get("created_at"));
                 map.put("children", childrenCount);
@@ -1026,8 +1028,8 @@ public class AdminService {
                                   
                                   // Log to trade_logs
                                   String logSql = """
-                                      INSERT INTO trades (user_id, broker_account_id, instrument, exchange, segment, order_type, transaction_type, quantity, price, product, status, placed_at, message)
-                                      VALUES (:userId, :brokerId, :symbol, :exchange, 'EQUITY', 'MARKET', :type, :qty, 0, :product, 'COMPLETED', now(), 'Force Squared Off by Admin')
+                                      INSERT INTO trades (user_id, broker_account_id, instrument, exchange, segment, order_type, transaction_type, quantity, price, product, status, placed_at)
+                                      VALUES (:userId, :brokerId, :symbol, :exchange, 'EQUITY', 'MARKET', :type, :qty, 0, :product, 'COMPLETED', now())
                                       """;
                                       
                                   return masterActiveRepo.findById(ownerId).map(com.copytrading.master.MasterActiveAccount::getBrokerAccountId)

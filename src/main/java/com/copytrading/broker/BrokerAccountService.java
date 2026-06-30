@@ -1317,7 +1317,10 @@ public class BrokerAccountService {
 
     // --- Close Position (place market order to close) ---
     public Mono<Map<String, Object>> closePosition(UUID accountId, UUID userId, Map<String, Object> body) {
-        return getActiveAccount(accountId, userId).flatMap(a -> {
+        return getAccountOwned(accountId, userId).flatMap(a -> {
+            if (sessionToken(a) == null) {
+                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "No active broker session. Login first."));
+            }
             String symbol = bodyField(body, "symbol");
             if (symbol == null || symbol.isBlank()) {
                 return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "symbol is required"));

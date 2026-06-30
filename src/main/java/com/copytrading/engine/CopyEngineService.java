@@ -327,7 +327,7 @@ public class CopyEngineService {
                         log.info("COPY_SKIP child={} reason=RISK_LIMIT symbol={} market={} detail={}",
                                 childId, req.getSymbol(), marketLabel(req.getSymbol()), riskResult);
                         return logAndReturn(masterId, childId, req, "SKIPPED",
-                                "Risk limit: " + riskResult, null, "RISK_LIMIT", null, copyGroupId, engineReceivedAt, scaledQty);
+                                "Risk limit: " + riskResult, null, riskResult, null, copyGroupId, engineReceivedAt, scaledQty);
                     }
 
                     if ("SELL".equalsIgnoreCase(req.getSide())) {

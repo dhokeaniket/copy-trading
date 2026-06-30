@@ -71,16 +71,14 @@ public class RiskService {
                                 if (todayTrades >= rule.getMaxTradesPerDay()) {
                                     log.info("RISK_BLOCKED child={} reason=MAX_TRADES_PER_DAY limit={} current={}",
                                             childId, rule.getMaxTradesPerDay(), todayTrades);
-                                    return Mono.just("MAX_TRADES_PER_DAY: Limit " + rule.getMaxTradesPerDay()
-                                            + " reached (" + todayTrades + " today)");
+                                    return Mono.just("Maximum trades per day Limit Reached (" + todayTrades + " today)");
                                 }
                                 return countOpenBrokerPositions(childId, brokerAccountId)
                                         .flatMap(openPositions -> {
                                             if (openPositions >= rule.getMaxOpenPositions()) {
                                                 log.info("RISK_BLOCKED child={} reason=MAX_OPEN_POSITIONS limit={} current={}",
                                                         childId, rule.getMaxOpenPositions(), openPositions);
-                                                return Mono.just("MAX_OPEN_POSITIONS: Limit " + rule.getMaxOpenPositions()
-                                                        + " reached (" + openPositions + " open)");
+                                                return Mono.just("Maximum open positions Limit Reached (" + openPositions + " open)");
                                             }
                                             return checkMarginUtilization(childId, brokerAccountId, rule);
                                         });
