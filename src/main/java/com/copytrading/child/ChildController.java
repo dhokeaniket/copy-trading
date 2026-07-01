@@ -145,8 +145,9 @@ public class ChildController {
 
     @Operation(summary = "Get live positions", description = "Fetch real open positions from child's active broker with live P&L")
     @GetMapping("/positions")
-    public Mono<Map<String, Object>> getPositions(@AuthenticationPrincipal String userId) {
-        return positionsService.getChildPositions(UUID.fromString(userId));
+    public Mono<Map<String, Object>> getPositions(@AuthenticationPrincipal String userId,
+                                                  @RequestParam(required = false) UUID accountId) {
+        return positionsService.getChildPositions(UUID.fromString(userId), accountId);
     }
 
     @GetMapping("/open-book")

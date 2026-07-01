@@ -89,10 +89,13 @@ public class PositionsService {
      * Get positions for a child user using their first active broker account.
      * Falls back to trades table if broker session unavailable.
      */
-    public Mono<Map<String, Object>> getChildPositions(UUID childId) {
-        return brokerRepo.findByUserId(childId)
+    public Mono<Map<String, Object>> getChildPositions(UUID childId, UUID accountId) {
+        Mono<BrokerAccount> accountMono = accountId != null
+                ? brokerRepo.findById(accountId)
+                : brokerRepo.findByUserId(childId).filter(a -> a.getAccessToken() != null).next();
+
+        return accountMono
                 .filter(a -> a.getAccessToken() != null)
-                .next()
                 .flatMap(this::fetchAndNormalizePositions)
                 .switchIfEmpty(Mono.defer(() -> fallbackFromTrades(childId)))
                 .defaultIfEmpty(noAccountResponse());

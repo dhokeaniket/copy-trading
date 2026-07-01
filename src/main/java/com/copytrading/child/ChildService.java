@@ -521,7 +521,7 @@ public class ChildService {
     public Mono<Map<String, Object>> getAnalytics(UUID childId) {
         return Mono.zip(
                 copyLogs.findByChildId(childId).collectList(),
-                positionsService.getChildPositions(childId).onErrorReturn(Map.of("totalPnl", 0, "positions", List.of())),
+                positionsService.getChildPositions(childId, null).onErrorReturn(Map.of("totalPnl", 0, "positions", List.of())),
                 subs.findByChildIdAndCopyingStatusNot(childId, "INACTIVE").count()
         ).map(t -> {
             var copyLogList = t.getT1();

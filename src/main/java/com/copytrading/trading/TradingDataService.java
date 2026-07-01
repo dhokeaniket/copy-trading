@@ -102,7 +102,7 @@ public class TradingDataService {
     public Mono<Map<String, Object>> getOpenOptions(UUID userId, boolean master) {
         Mono<Map<String, Object>> positionsMono = master
                 ? positionsService.getMasterPositions(userId)
-                : positionsService.getChildPositions(userId);
+                : positionsService.getChildPositions(userId, null);
         return positionsMono.map(pos -> {
             @SuppressWarnings("unchecked")
             List<Object> raw = (List<Object>) pos.getOrDefault("positions", List.of());
