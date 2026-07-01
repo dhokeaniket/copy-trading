@@ -946,13 +946,28 @@ public class AdminService {
         return Mono.just(List.of());
     }
 
-    private Mono<List<Map<String, Object>>> getActiveBrokerPositions(UUID userId) {        return masterActiveRepo.findById(userId)
-            .flatMap(aa -> brokerService.getPositions(aa.getBrokerAccountId(), userId))
+    private Mono<List<Map<String, Object>>> getActiveBrokerPositions(UUID userId) {
+        return masterActiveRepo.findById(userId)
+            .flatMap(aa -> fetchAndFilterPositions(aa.getBrokerAccountId(), userId))
             .switchIfEmpty(Mono.defer(() -> brokerAccountRepo.findByUserId(userId)
                 .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
-                .next()
                 .switchIfEmpty(Mono.error(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "No active broker account found for user")))
-                .flatMap(a -> brokerService.getPositions(a.getId(), userId))))
+                .flatMap(a -> fetchAndFilterPositions(a.getId(), userId))
+                .collectList()
+                .map(lists -> {
+                    List<Map<String, Object>> combined = new ArrayList<>();
+                    lists.forEach(combined::addAll);
+                    return combined;
+                })
+            ))
+            .onErrorResume(e -> {
+                log.error("Failed to fetch positions for user {}: {}", userId, e.getMessage());
+                return Mono.error(e);
+            });
+    }
+
+    private Mono<List<Map<String, Object>>> fetchAndFilterPositions(UUID brokerAccountId, UUID userId) {
+        return brokerService.getPositions(brokerAccountId, userId)
             .map(resp -> {
                 if (resp.containsKey("error")) {
                     throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "Broker Error: " + resp.get("error"));
@@ -977,10 +992,6 @@ public class AdminService {
                     return filteredList;
                 }
                 return List.<Map<String, Object>>of();
-            })
-            .onErrorResume(e -> {
-                log.error("Failed to fetch positions for user {}: {}", userId, e.getMessage());
-                return Mono.error(e);
             });
     }
 
