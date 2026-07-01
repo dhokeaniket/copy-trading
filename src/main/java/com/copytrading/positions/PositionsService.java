@@ -286,7 +286,7 @@ public class PositionsService {
 
     private PositionDto mapGrowwPosition(Map<String, Object> p) {
         String symbol = getString(p, "tradingSymbol", getString(p, "symbol", "UNKNOWN"));
-        int qty = getInt(p, "netQty", getInt(p, "quantity", 0));
+        int qty = getAnyQty(p);
         double avgPrice = getDouble(p, "averagePrice", getDouble(p, "buyAvgPrice", 0));
         double ltp = getDouble(p, "ltp", getDouble(p, "lastPrice", 0));
         double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealisedPnl", getDouble(p, "realizedPnl", Double.NaN)));
@@ -301,7 +301,7 @@ public class PositionsService {
 
     private PositionDto mapZerodhaPosition(Map<String, Object> p) {
         String symbol = getString(p, "tradingsymbol", "UNKNOWN");
-        int qty = getInt(p, "quantity", 0);
+        int qty = getAnyQty(p);
         double avgPrice = getDouble(p, "average_price", 0);
         double ltp = getDouble(p, "last_price", 0);
         double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised", Double.NaN));
@@ -317,7 +317,7 @@ public class PositionsService {
     private PositionDto mapFyersPosition(Map<String, Object> p) {
         String symbol = getString(p, "symbol", "UNKNOWN");
         if (symbol.contains(":")) symbol = symbol.substring(symbol.indexOf(":") + 1);
-        int qty = getInt(p, "netQty", getInt(p, "qty", 0));
+        int qty = getAnyQty(p);
         double avgPrice = getDouble(p, "avgPrice", getDouble(p, "buyAvg", 0));
         double ltp = getDouble(p, "ltp", 0);
         double brokerPnl = getDouble(p, "pl", getDouble(p, "unrealized_profit", Double.NaN));
@@ -335,7 +335,7 @@ public class PositionsService {
                 getString(p, "symbol", "UNKNOWN")));
         // Upstox v2: quantity = net qty (positive=long, negative=short)
         // Also try buy_quantity - sell_quantity for net calculation
-        int qty = getInt(p, "quantity", 0);
+        int qty = getAnyQty(p);
         if (qty == 0) {
             int buyQty = getInt(p, "buy_quantity", getInt(p, "day_buy_quantity", 0));
             int sellQty = getInt(p, "sell_quantity", getInt(p, "day_sell_quantity", 0));
@@ -368,7 +368,7 @@ public class PositionsService {
     private PositionDto mapDhanPosition(Map<String, Object> p) {
         String symbol = getString(p, "tradingSymbol", getString(p, "trading_symbol",
                 getString(p, "symbol", getString(p, "securityId", "UNKNOWN"))));
-        int qty = getInt(p, "netQty", getInt(p, "net_qty", getInt(p, "quantity", getInt(p, "netQuantity", 0))));
+        int qty = getAnyQty(p);
         double avgPrice = getDouble(p, "averagePrice", getDouble(p, "costPrice", 0));
         double ltp = getDouble(p, "ltp", getDouble(p, "currentPrice", 0));
         double brokerPnl = getDouble(p, "unrealizedProfit", getDouble(p, "realizedProfit",
@@ -384,7 +384,7 @@ public class PositionsService {
 
     private PositionDto mapAngelOnePosition(Map<String, Object> p) {
         String symbol = getString(p, "tradingsymbol", getString(p, "symbolname", "UNKNOWN"));
-        int qty = getInt(p, "netqty", getInt(p, "quantity", 0));
+        int qty = getAnyQty(p);
         double avgPrice = getDouble(p, "averageprice", getDouble(p, "buyavgprice", 0));
         double ltp = getDouble(p, "ltp", 0);
         double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised", Double.NaN));
@@ -398,6 +398,15 @@ public class PositionsService {
     }
 
     // --- Utility methods ---
+
+    private static int getAnyQty(Map<String, Object> map) {
+        return getInt(map, "quantity",
+               getInt(map, "netQuantity",
+               getInt(map, "netQty",
+               getInt(map, "net_qty",
+               getInt(map, "qty",
+               getInt(map, "netqty", 0))))));
+    }
 
     private static String getString(Map<String, Object> map, String key, String defaultVal) {
         Object v = map.get(key);

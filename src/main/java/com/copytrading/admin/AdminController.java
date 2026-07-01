@@ -143,9 +143,11 @@ public class AdminController {
             @RequestParam(required = false) UUID userId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String search,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "50") int limit) {
-        return adminService.getTradeLogs(userId, status, page, limit, search);
+        return adminService.getTradeLogs(userId, status, page, limit, search, dateFrom, dateTo);
     }
 
     // 2.13 GET /admin/master-child-map

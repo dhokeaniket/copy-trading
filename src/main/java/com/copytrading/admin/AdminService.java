@@ -523,16 +523,25 @@ public class AdminService {
         });
     }
 
-    // 2.12 Get all trade logs
-    public Mono<Map<String, Object>> getTradeLogs(UUID userId, String status, int page, int limit, String search) {
+    // 2.12 GET /admin/trade-logs
+    public Mono<Map<String, Object>> getTradeLogs(UUID userId, String status, int page, int limit, String search, String dateFrom, String dateTo) {
         int offset = (page - 1) * limit;
         
         StringBuilder whereClause = new StringBuilder(" WHERE u.role = 'MASTER' ");
+        if (userId != null) {
+            whereClause.append(" AND t.user_id = '").append(userId.toString()).append("'");
+        }
         if (search != null && !search.isBlank()) {
             whereClause.append(" AND (t.instrument ILIKE '%").append(search).append("%' OR t.broker_order_id ILIKE '%").append(search).append("%')");
         }
         if (status != null && !status.isBlank() && !status.equalsIgnoreCase("ALL")) {
             whereClause.append(" AND t.status = '").append(status).append("'");
+        }
+        if (dateFrom != null && !dateFrom.isBlank()) {
+            whereClause.append(" AND t.placed_at >= '").append(dateFrom).append("'::timestamp");
+        }
+        if (dateTo != null && !dateTo.isBlank()) {
+            whereClause.append(" AND t.placed_at <= '").append(dateTo).append("'::timestamp");
         }
 
         String countSql = "SELECT COUNT(*) FROM trades t JOIN users u ON t.user_id = u.id" + whereClause.toString();
@@ -942,11 +951,11 @@ public class AdminService {
             .switchIfEmpty(Mono.defer(() -> brokerAccountRepo.findByUserId(userId)
                 .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
                 .next()
-                .switchIfEmpty(Mono.error(new RuntimeException("No active broker account found for user")))
+                .switchIfEmpty(Mono.error(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "No active broker account found for user")))
                 .flatMap(a -> brokerService.getPositions(a.getId(), userId))))
             .map(resp -> {
                 if (resp.containsKey("error")) {
-                    throw new RuntimeException("Broker Error: " + resp.get("error"));
+                    throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "Broker Error: " + resp.get("error"));
                 }
                 Object positions = resp.get("positions");
                 if (positions instanceof List) {
@@ -1275,10 +1284,30 @@ public class AdminService {
     // 2.21 P&L Dashboard
     public Mono<Map<String, Object>> getPnL(String dateFrom, String dateTo) {
         // We'll just fetch all copy logs and apply netting logic like getAnalytics
-        return copyLogRepo.findAll().collectList().flatMap(logs -> {
+        return copyLogRepo.findAll()
+            .filter(l -> {
+                if (dateFrom != null && !dateFrom.isBlank()) {
+                    try {
+                        java.time.Instant from = java.time.Instant.parse(dateFrom);
+                        if (l.getCreatedAt() != null && l.getCreatedAt().isBefore(from)) return false;
+                    } catch(Exception ignored) {}
+                }
+                if (dateTo != null && !dateTo.isBlank()) {
+                    try {
+                        java.time.Instant to = java.time.Instant.parse(dateTo);
+                        if (l.getCreatedAt() != null && l.getCreatedAt().isAfter(to)) return false;
+                    } catch(Exception ignored) {}
+                }
+                return true;
+            })
+            .collectList().flatMap(logs -> {
             return users.findAll().collectMap(com.copytrading.auth.UserAccount::getId, com.copytrading.auth.UserAccount::getName).map(userNames -> {
                 Map<String, List<com.copytrading.logs.CopyLog>> bySymbol = logs.stream()
-                        .filter(l -> "SUCCESS".equalsIgnoreCase(l.getChildStatus()) && l.getSymbol() != null)
+                        .filter(l -> {
+                            String s = l.getChildStatus();
+                            return ("SUCCESS".equalsIgnoreCase(s) || "PLACED".equalsIgnoreCase(s) || "COMPLETED".equalsIgnoreCase(s)) 
+                                && l.getSymbol() != null;
+                        })
                         .collect(java.util.stream.Collectors.groupingBy(l -> l.getSymbol().toUpperCase()));
 
                 Map<UUID, Double> masterPnlMap = new java.util.HashMap<>();
@@ -1415,8 +1444,18 @@ public class AdminService {
                 map.put("userName", row.get("user_name") != null ? row.get("user_name") : "Unknown");
                 map.put("accountType", row.get("account_type") != null ? row.get("account_type") : "UNKNOWN");
                 map.put("broker", row.get("broker_id"));
-                map.put("active", row.get("session_active"));
-                map.put("status", row.get("status"));
+                
+                Boolean isActive = (Boolean) row.get("session_active");
+                String statusStr = (String) row.get("status");
+                if (Boolean.TRUE.equals(isActive) && !"ACTIVE".equalsIgnoreCase(statusStr)) {
+                    statusStr = "ACTIVE";
+                } else if (Boolean.FALSE.equals(isActive) && "ACTIVE".equalsIgnoreCase(statusStr)) {
+                    statusStr = "INACTIVE";
+                }
+                
+                map.put("active", isActive);
+                map.put("status", statusStr);
+                
                 map.put("tokenExpiry", row.get("token_expiry"));
                 map.put("lastSync", row.get("last_sync_time"));
                 map.put("ping", row.get("last_ping_ms"));
