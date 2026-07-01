@@ -1128,9 +1128,7 @@ public class BrokerAccountService {
                                 List<Object> positionsList = new java.util.ArrayList<>();
                                 if (dataObj instanceof Map data) {
                                     Object net = data.get("net");
-                                    Object day = data.get("day");
                                     if (net instanceof List) positionsList.addAll((List<?>) net);
-                                    if (day instanceof List) positionsList.addAll((List<?>) day);
                                 } else if (dataObj instanceof List) {
                                     positionsList.addAll((List<?>) dataObj);
                                 }

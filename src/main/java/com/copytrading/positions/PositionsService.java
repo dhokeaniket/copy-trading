@@ -305,12 +305,16 @@ public class PositionsService {
     private PositionDto mapZerodhaPosition(Map<String, Object> p) {
         String symbol = getString(p, "tradingsymbol", "UNKNOWN");
         int qty = getAnyQty(p);
+        String product = getString(p, "product", "CNC");
+        if (qty < 0 && (product.equalsIgnoreCase("CNC") || product.equalsIgnoreCase("DELIVERY") || product.equalsIgnoreCase("MARGIN"))) {
+            return null; // Ignore sold holdings
+        }
+        
         double avgPrice = getDouble(p, "average_price", 0);
         double ltp = getDouble(p, "last_price", 0);
         double brokerPnl = getDouble(p, "pnl", getDouble(p, "unrealised", Double.NaN));
         String side = qty >= 0 ? "BUY" : "SELL";
         String exchange = getString(p, "exchange", "NSE");
-        String product = getString(p, "product", "CNC");
         if (!Double.isNaN(brokerPnl)) {
             return new PositionDto(symbol, Math.abs(qty), avgPrice, ltp, side, exchange, product, brokerPnl);
         }
@@ -465,6 +469,8 @@ public class PositionsService {
                         double avgPrice = p[0] > 0 ? p[0] : p[1];
                         double ltp = p[1] > 0 ? p[1] : avgPrice; // use sell price as last known or same as buy
                         String side = qty > 0 ? "BUY" : "SELL";
+                        
+                        // Fallback assumes MIS for simplified trade history mapping
                         PositionDto dto = new PositionDto(e.getKey(), Math.abs(qty), avgPrice, ltp, side, "NSE", "MIS");
                         totalPnl += dto.getPnl();
                         positions.add(dto);

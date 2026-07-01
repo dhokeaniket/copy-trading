@@ -985,7 +985,12 @@ public class AdminService {
                             try { qty = (int) Double.parseDouble((String) qtyObj); } catch (Exception ignored) {}
                         }
                         if (qty != 0) {
+                            String product = (String) p.getOrDefault("product", p.getOrDefault("productType", "MIS"));
+                            if (qty < 0 && (product.equalsIgnoreCase("CNC") || product.equalsIgnoreCase("DELIVERY") || product.equalsIgnoreCase("MARGIN"))) {
+                                continue;
+                            }
                             p.put("_ownerId", userId.toString());
+                            p.put("_brokerAccountId", brokerAccountId.toString());
                             filteredList.add(p);
                         }
                     }
@@ -1005,6 +1010,8 @@ public class AdminService {
                 .flatMap(p -> {
                     UUID ownerId = UUID.fromString((String) p.get("_ownerId"));
                     
+                    String brokerIdStr = (String) p.get("_brokerAccountId");
+                      
                     // Extract common fields (Zerodha/Groww/Upstox/etc)
                     String symbol = (String) p.getOrDefault("tradingsymbol", p.getOrDefault("symbol", p.get("contractDisplayName")));
                     Object qtyObj = p.getOrDefault("quantity", p.getOrDefault("netQuantity", p.get("netQty")));
@@ -1031,15 +1038,22 @@ public class AdminService {
                         "exchange", exchange
                     );
                     
-                    return masterActiveRepo.findById(ownerId)
-                        .flatMap(aa -> brokerService.closePosition(aa.getBrokerAccountId(), ownerId, closeBody))
-                        .switchIfEmpty(Mono.defer(() -> 
-                            brokerAccountRepo.findByUserId(ownerId)
-                                .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
-                                .next()
-                                .flatMap(a -> brokerService.closePosition(a.getId(), ownerId, closeBody))
-                        ))
-                        .switchIfEmpty(Mono.error(new RuntimeException("No active broker session found for user")))
+                    Mono<Map<String, Object>> closeMono;
+                    if (brokerIdStr != null && !brokerIdStr.isBlank()) {
+                        closeMono = brokerService.closePosition(UUID.fromString(brokerIdStr), ownerId, closeBody);
+                    } else {
+                        closeMono = masterActiveRepo.findById(ownerId)
+                            .flatMap(aa -> brokerService.closePosition(aa.getBrokerAccountId(), ownerId, closeBody))
+                            .switchIfEmpty(Mono.defer(() -> 
+                                brokerAccountRepo.findByUserId(ownerId)
+                                    .filter(a -> a.isSessionActive() && a.getAccessToken() != null)
+                                    .next()
+                                    .flatMap(a -> brokerService.closePosition(a.getId(), ownerId, closeBody))
+                            ))
+                            .switchIfEmpty(Mono.error(new RuntimeException("No active broker session found for user")));
+                    }
+                    
+                    return closeMono
                         .flatMap(r -> {
                                   boolean hasError = r.containsKey("error") || (r.containsKey("response") && r.get("response").toString().toLowerCase().contains("error"));
                                   if (hasError) {
